@@ -1,4 +1,4 @@
-// MineServe Mobile 累计独立用户统计 Worker
+// Minexa 累计独立用户统计 Worker
 // 接口：
 //   GET  /            返回完整前端统计页（服务端内联最新数据）
 //   GET  /stats       -> { total: N }   累计独立用户数
@@ -19,7 +19,7 @@ const PAGE_TEMPLATE = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>MineServe Mobile · 使用统计</title>
+<title>Minexa · 使用统计</title>
 <style>
   * { box-sizing: border-box; }
   body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
@@ -52,7 +52,7 @@ const PAGE_TEMPLATE = `<!DOCTYPE html>
     <h1>累计使用人数</h1>
     <div class="sub">累计独立用户统计 · 数据实时同步</div>
     <div class="num"><b id="total">__TOTAL__</b></div>
-    <div class="label"><span class="pulse"></span>位用户正在使用 MineServe Mobile 运行服务器</div>
+    <div class="label"><span class="pulse"></span>位用户正在使用 Minexa 运行服务器</div>
     <div class="meta">更新于 __UPDATED__ · 数据由 Cloudflare Workers 统计</div>
     <div style="margin-top:16px;">
       <button onclick="resetData()"

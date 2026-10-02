@@ -32,11 +32,11 @@ object McpSkillDoc {
         val tokenValue = token.ifBlank { "尚未生成：请先在 App 的 MCP 页面开启服务" }
         val body = """
             |---
-            |name: mineserve-mobile
-            |description: 用 MCP 驱动 MineServe Mobile —— 手机上的 Minecraft 服务端 App。当用户要求在这台手机上「开服 / 装服务端核心 / 装插件模组 / 启停服务端 / 查看控制台与崩溃日志 / 改服务器配置 / 备份还原世界 / 排查启动失败」，或给出 MineServe 的 MCP 端点（形如 http://192.168.x.x:8931/mcp 加 Bearer 令牌）时使用。能力覆盖环境依赖安装、核心下载与切换、启停与就绪等待、控制台指令、服务器目录读写、插件/模组管理、快照与世界备份、日志与崩溃诊断。
+            |name: minexa-mobile
+            |description: 用 MCP 驱动 Minexa —— 手机上的 Minecraft 服务端 App。当用户要求在这台手机上「开服 / 装服务端核心 / 装插件模组 / 启停服务端 / 查看控制台与崩溃日志 / 改服务器配置 / 备份还原世界 / 排查启动失败」，或给出 Minexa 的 MCP 端点（形如 http://192.168.x.x:8931/mcp 加 Bearer 令牌）时使用。能力覆盖环境依赖安装、核心下载与切换、启停与就绪等待、控制台指令、服务器目录读写、插件/模组管理、快照与世界备份、日志与崩溃诊断。
             |---
             |
-            |# MineServe Mobile · AI 操作手册
+            |# Minexa · AI 操作手册
             |
             |手机上的 Minecraft 服务端 App（Java 系 Vanilla / Spigot / Paper / Forge / NeoForge / Fabric，
             |基岩系 PowerNukkitX）。应用内置一个 MCP 服务端，下面所有能力都通过它调用 ——
@@ -127,7 +127,7 @@ object McpSkillDoc {
             |
             |---
             |
-            |本文件由 MineServe Mobile 导出，工具清单按当前版本的 `tools/list` 生成。
+            |本文件由 Minexa 导出，工具清单按当前版本的 `tools/list` 生成。
         """.trimMargin()
         val toolList = tools.joinToString("\n") { tool ->
             "- `${tool.name}` — ${tool.description.lineSequence().first().trim()}"

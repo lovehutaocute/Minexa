@@ -103,6 +103,14 @@ fun CrashReportDialog(
     }
     AlertDialog(onDismissRequest = onDismiss, title = { Text(title) }, text = {
         Column(Modifier.fillMaxWidth().heightIn(max = 460.dp)) {
+            // 固定提示：请求帮助时应发送完整日志而非摘要，放在内容区顶部保证任何模式下都可见。
+            Text(
+                stringResource(R.string.crash_share_hint),
+                color = Coral,
+                fontSize = 11.sp,
+                lineHeight = 15.sp
+            )
+            Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(selected = mode == CrashViewMode.Summary, onClick = { mode = CrashViewMode.Summary }, label = { Text(stringResource(R.string.crash_summary)) })
                 FilterChip(selected = mode == CrashViewMode.RawReport, onClick = { mode = CrashViewMode.RawReport }, label = { Text(stringResource(R.string.crash_raw)) })
@@ -125,13 +133,23 @@ fun CrashReportDialog(
                 Spacer(Modifier.width(4.dp))
             }
             IconButton(onClick = { copy(context, displayedText) }) { Icon(Icons.Outlined.ContentCopy, stringResource(R.string.crash_copy), tint = Indigo) }
+            // 分享的**始终是完整日志**：摘要只对当前分析有效，别人拿到摘要无法排查。
+            // 完整文本 = 崩溃报告全文 + 本次运行完整日志（有则拼接）。
             val shareTitle = stringResource(R.string.crash_share)
+            val fullText = buildString {
+                appendLine(content)
+                if (runLog.isNotBlank()) {
+                    appendLine()
+                    appendLine("--- ${stringResource(R.string.crash_run_log_title)} ---")
+                    append(runLog)
+                }
+            }
             IconButton(onClick = {
                 context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
                     type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, displayedText)
+                    putExtra(Intent.EXTRA_TEXT, fullText)
                 }, shareTitle))
-            }) { Icon(Icons.Outlined.IosShare, stringResource(R.string.crash_export), tint = Indigo) }
+            }) { Icon(Icons.Outlined.IosShare, stringResource(R.string.crash_share_full), tint = Indigo) }
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.s620)) }
         }
     })

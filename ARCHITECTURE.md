@@ -1,8 +1,8 @@
-# MineServe Mobile 技术架构
+# Minexa 技术架构
 
 ## 范围
 
-MineServe Mobile 在无 Root 的 Android 设备上运行 Minecraft 服务端进程。它不是内核容器，也不会修改 Android 系统权限：运行时、Java 包、世界和服务端进程均归应用沙盒所有。
+Minexa 在无 Root 的 Android 设备上运行 Minecraft 服务端进程。它不是内核容器，也不会修改 Android 系统权限：运行时、Java 包、世界和服务端进程均归应用沙盒所有。
 
 ## 运行时与进程链路
 

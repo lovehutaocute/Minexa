@@ -91,5 +91,5 @@ internal object StatusOverlay {
         info = null
         runCatching { (context.getSystemService(Context.WINDOW_SERVICE) as WindowManager).removeView(target) }
     }
-    private const val TAG = "MineServeOverlay"
+    private const val TAG = "MinexaOverlay"
 }

@@ -1,8 +1,8 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name" formatted="false">MineServe Mobile</string>
+    <string name="app_name" formatted="false">Minexa</string>
     <string name="notif_channel_id" formatted="false">mc_server_runtime</string>
-    <string name="notif_channel_name" formatted="false">MC Service Runtime</string>
+    <string name="notif_channel_name" formatted="false">Minexa Service Runtime</string>
     <string name="notif_channel_desc" formatted="false">Displays Minecraft server running status. Disabling this notification will cause the service to be killed by the system</string>
     <string name="notif_title_running" formatted="false">MC Service Running</string>
     <string name="notif_text_running" formatted="false">Tap to view real-time status</string>
@@ -351,7 +351,7 @@
     <string name="s573" formatted="false">Add local storage</string>
     <string name="s574" formatted="false">Find the \"Add local storage\" option in the side panel and tap it.</string>
     <string name="s575" formatted="false">Select this app</string>
-    <string name="s576" formatted="false">In the popup list, find and check \"MineServeMobile\", then tap OK.</string>
+    <string name="s576" formatted="false">In the popup list, find and check \"Minexa\", then tap OK.</string>
     <string name="s577" formatted="false">Start managing files</string>
     <string name="s578" formatted="false">Return to MT Manager\'s main screen. This app\'s entry will appear in the side panel — tap it to browse files.</string>
     <string name="s579" formatted="false">Find server files</string>
@@ -858,7 +858,7 @@
     <string name="hero_online">Online</string>
     <string name="hero_memory">Memory</string>
     <string name="hero_uptime">Uptime</string>
-    <string name="hero_cpu">Server CPU</string>
+    <string name="hero_cpu">CPU usage</string>
     <string name="hero_refresh">Refresh status</string>
     <string name="widget_refresh_cd">Refresh status</string>
     <string name="hero_online_mode_warning">Online authentication is enabled; offline players cannot join.</string>
@@ -1226,4 +1226,48 @@
     <string name="dash_force_stop_confirm_ok">Force stop</string>
     <string name="dash_force_stop_done">Server force-stopped</string>
     <string name="dash_stop_timeout_hint">The server is still shutting down. Tap "Force stop" to end it now (risk of losing unsaved data).</string>
+
+    <!-- Network mapping page revamp (layout borrowed from EdgeCube's port mapping page) -->
+    <string name="net_section_status">Connection &amp; Tunnel Status</string>
+    <string name="net_section_method">Tunnel Method</string>
+    <string name="net_section_config">Tunnel Settings</string>
+    <string name="net_section_log">Tunnel Log</string>
+    <string name="net_status_running">Running</string>
+    <string name="net_status_starting">Starting</string>
+    <string name="net_status_failed">Failed</string>
+    <string name="net_status_stopped">Stopped</string>
+    <string name="net_status_idle">Not started</string>
+    <string name="net_stats_connections">Forwarded connections: %1$d</string>
+    <string name="net_stats_speed">Live rate ↑ %1$s ↓ %2$s</string>
+    <string name="net_stats_traffic">Total traffic ↑ %1$s ↓ %2$s</string>
+    <string name="net_stats_no_traffic">This method does not report connection or traffic stats</string>
+    <string name="net_log_connection">Connection Log</string>
+    <string name="net_log_connection_hint">This method does not report a separate connection log; see the tunnel log above for runtime output</string>
+    <string name="net_log_expand">Show full log</string>
+    <!-- STUN config -->
+    <string name="stun_target_port">Target port</string>
+    <string name="stun_follow_local_port">Follow server port (%1$d)</string>
+    <string name="stun_target_port_hint">e.g. 25565</string>
+    <string name="stun_keepalive">Keep-alive interval (seconds)</string>
+    <string name="stun_keepalive_hint">Periodically probes the STUN server to hold the NAT mapping open and detect public address changes. Below 5 seconds is not recommended.</string>
+    <string name="stun_max_conn">Max concurrent connections</string>
+    <string name="stun_show_conn_log">Log connections (each inbound connect/disconnect)</string>
+    <string name="stun_proxy_protocol">Enable PROXY protocol v2 (let the server see real player IPs)</string>
+    <string name="stun_proxy_protocol_warn">The server must have PROXY protocol support enabled itself, or players will be unable to join. Only enable once you have confirmed the server is configured for it.</string>
+    <string name="stun_servers">Custom STUN servers</string>
+    <string name="stun_servers_hint">One per line, e.g. stun.example.com or stun.example.com:3478</string>
+    <string name="stun_servers_note">Leave empty to use the built-in list (all verified to support TCP 3478). Note: STUN servers that only support UDP will not work here.</string>
+    <string name="net_log_empty">No tunnel log yet. Tap "Start tunnel" and runtime output will show up here</string>
+    <!-- STUN direct connection -->
+    <string name="stun_guide_title">STUN Direct Connection Guide</string>
+    <string name="stun_guide_1_t">Check your NAT type first</string>
+    <string name="stun_guide_1_d">This method punches through NAT and only works on a full-cone NAT (NAT1). Most home broadband qualifies; mobile data, corporate/campus networks and CGNAT usually do not. If probing keeps failing, switch to frp or a hosted platform.</string>
+    <string name="stun_guide_2_t">Keep the server running</string>
+    <string name="stun_guide_2_d">Start the MC server from the Overview page first, then come back and tap "Start tunnel". The tunnel only forwards public traffic to your local port - with no server running, nobody answers.</string>
+    <string name="stun_guide_3_t">Send the address to players</string>
+    <string name="stun_guide_3_d">Once probing succeeds, the public direct address appears above. Tap the copy button and send it to your friends. The address is assigned by your ISP, so it changes after reconnecting or switching networks.</string>
+    <string name="stun_guide_4_t">Tune if needed</string>
+    <string name="stun_guide_4_d">If players show up as 127.0.0.1, you can enable "PROXY protocol" - but the server must already support it, or players will be unable to connect. The concurrency cap and keep-alive interval rarely need changing.</string>
+    <string name="net_method_hint">All four methods carry MC\'s TCP traffic. Self-hosted ones (frp / bore) depend on the server you pick for bandwidth and stability; hosted platforms (SakuraFrp / ME Frp) need no server but are rate-limited by the platform</string>
+    <string name="net_tunnel_server_stopped">The server is not running. Start it from the Overview page before tapping "Start tunnel", or players will reach the public address but never get in</string>
 </resources>

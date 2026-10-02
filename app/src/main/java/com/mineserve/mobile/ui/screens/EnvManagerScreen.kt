@@ -1,8 +1,12 @@
 package com.mineserve.mobile.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -14,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -50,6 +55,7 @@ import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.StepStatus
 import com.mineserve.mobile.ui.BackBar
+import com.mineserve.mobile.ui.HintNote
 import com.mineserve.mobile.ui.JavaRuntimeGroupList
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
@@ -58,6 +64,7 @@ import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
@@ -403,6 +410,153 @@ private fun DependenciesModule(vm: McViewModel, requestConfirm: (String, () -> U
             },
             onInstall = { vm.installDependencies() }
         )
+
+        Spacer(Modifier.height(16.dp))
+        FrpcEngineSection(vm = vm)
+    }
+}
+
+// ── frpc 引擎（frp 系隧道共用）────────────────────────────────
+
+/**
+ * frpc 引擎的下载/导入/卸载入口。
+ *
+ * 放在依赖管理页而不是隧道页：引擎是 frp 系隧道能启动的前提，本质上是一份依赖，
+ * 与 JDK、wget 同级。归在这里，"缺什么装什么"只有一个地方要看。
+ *
+ * 引擎不随 APK 内置 —— EdgeCube 的官方 Release 只发布普通 ELF 可执行文件，
+ * 导出不了 `RunFrpc`，必须用它分发的那份 c-shared 构建，所以走联网下载。
+ */
+@Composable
+private fun FrpcEngineSection(vm: McViewModel) {
+    val engine by vm.frpcEngine.collectAsState()
+    val message by vm.frpcEngineMessage.collectAsState()
+    val download by vm.frpcDownload.collectAsState()
+
+    // 进入页面刷新一次：引擎可能是在别处（重装应用后恢复）导入的。
+    LaunchedEffect(Unit) { vm.refreshFrpcEngine() }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let(vm::importFrpcEngine) }
+
+    var confirmUninstall by remember { mutableStateOf(false) }
+
+    if (confirmUninstall) {
+        AlertDialog(
+            onDismissRequest = { confirmUninstall = false },
+            title = { Text(stringResource(R.string.frpc_engine_uninstall)) },
+            text = { Text(stringResource(R.string.frpc_engine_uninstall_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmUninstall = false
+                    vm.uninstallFrpcEngine()
+                }) { Text(stringResource(R.string.env_uninstall), color = Coral) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUninstall = false }) {
+                    Text(stringResource(R.string.env_cancel))
+                }
+            }
+        )
+    }
+
+    McCard(title = stringResource(R.string.frpc_engine_title)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (engine.installed) Mint else Coral)
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                stringResource(
+                    if (engine.installed) R.string.frpc_engine_installed
+                    else R.string.frpc_engine_missing
+                ),
+                fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+            )
+            engine.version?.let { version ->
+                Spacer(Modifier.size(6.dp))
+                Text("v$version", color = Muted, fontSize = 11.sp)
+            }
+            engine.sizeBytes.takeIf { it > 0 }?.let { size ->
+                Spacer(Modifier.size(6.dp))
+                Text("${size / 1024 / 1024}MB", color = Muted, fontSize = 11.sp)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.frpc_engine_hint), color = Muted, fontSize = 11.sp)
+
+        engine.sha256?.let { sha ->
+            Spacer(Modifier.height(4.dp))
+            Text("SHA-256: ${sha.take(16)}…", color = Muted, fontSize = 10.sp)
+        }
+
+        Spacer(Modifier.height(10.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (vm.frpcOnlineAvailable) {
+                val downloading = download is McViewModel.DownloadState.Downloading
+                Button(onClick = { vm.downloadFrpcEngine() }, enabled = !downloading) {
+                    if (downloading) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(14.dp),
+                            strokeWidth = 2.dp,
+                            color = androidx.compose.ui.graphics.Color.White
+                        )
+                        Spacer(Modifier.size(6.dp))
+                        Text(
+                            (download as? McViewModel.DownloadState.Downloading)
+                                ?.fraction?.takeIf { it >= 0f }
+                                ?.let { "${(it * 100).toInt()}%" }
+                                ?: stringResource(R.string.frpc_engine_downloading),
+                            fontSize = 12.sp
+                        )
+                    } else {
+                        Text(
+                            stringResource(
+                                if (engine.installed) R.string.frpc_engine_reinstall
+                                else R.string.frpc_engine_download
+                            ),
+                            fontSize = 12.sp
+                        )
+                    }
+                }
+            }
+            // OpenDocument 而不是 GetContent：.so 没有注册的 MIME 类型，
+            // GetContent 会因类型过滤而选不中文件，只能靠 */* 放开。
+            OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+                Text(
+                    stringResource(
+                        if (engine.installed) R.string.frpc_engine_replace
+                        else R.string.frpc_engine_import
+                    ),
+                    fontSize = 12.sp
+                )
+            }
+        }
+
+        if (engine.installed) {
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = { confirmUninstall = true }) {
+                Text(stringResource(R.string.frpc_engine_uninstall), fontSize = 12.sp, color = Coral)
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        Text(stringResource(R.string.frpc_engine_where), color = Muted, fontSize = 10.sp)
+
+        message?.let { text ->
+            Spacer(Modifier.height(8.dp))
+            HintNote(text)
+            LaunchedEffect(text) {
+                // 提示看过了就清掉，避免切页回来又弹一次。
+                delay(4000)
+                vm.clearFrpcEngineMessage()
+            }
+        }
     }
 }
 

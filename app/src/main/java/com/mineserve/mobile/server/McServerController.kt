@@ -377,8 +377,6 @@ class McServerController(
                         "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--allow-unauthenticated", "-y",
                         "wget", "fontconfig", "ttf-dejavu"
                     )
-                    InstallStep.Frp -> termux.execOnce("/system/bin/sh", "-c",
-                        "which frpc >/dev/null 2>&1 || (apt-cache show frp >/dev/null 2>&1 && apt-get -o DPkg::Lock::Timeout=60 install --allow-unauthenticated -y frp)")
                     InstallStep.Rclone -> if (termux.prepareAptPackages("rclone")) termux.execOnce("apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--allow-unauthenticated", "-y", "rclone") else 1
                     InstallStep.Proot -> if (termux.prepareAptPackages("proot")) termux.execOnce("apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--allow-unauthenticated", "-y", "proot") else 1
                 }
@@ -882,7 +880,7 @@ class McServerController(
         try {
             conn.connectTimeout = 15_000
             conn.readTimeout = 15_000
-            conn.setRequestProperty("User-Agent", "MineServeMobile/1.0 (Android)")
+            conn.setRequestProperty("User-Agent", "Minexa/1.0 (Android)")
             val code = conn.responseCode
             if (code !in 200..299) throw RuntimeException("HTTP $code")
             return conn.inputStream.bufferedReader().use { it.readText() }
@@ -1393,7 +1391,7 @@ class McServerController(
             try {
                 conn.connectTimeout = 15_000 + attempt * 10_000
                 conn.readTimeout = 30_000 + attempt * 10_000
-                conn.setRequestProperty("User-Agent", "MineServeMobile/1.0 (https://github.com/MineServe-Mobile)")
+                conn.setRequestProperty("User-Agent", "Minexa/1.0")
                 conn.setRequestProperty("Accept", "application/json")
                 conn.instanceFollowRedirects = true
 
@@ -1895,7 +1893,7 @@ class McServerController(
          * 历史逻辑是 `code == 0 && uptime < 5000` 才算异常。这条规则有个副作用：
          * 服务端**确实正常退出**（exit=0）但运行不足 5 秒时，会被判成崩溃，
          * 于是生成崩溃报告 + 弹通知 + 自动重启。实测日志里出现过
-         * `Done (0.251s)!` 后 2 秒被 `Stopping the server`，MineServe 报
+         * `Done (0.251s)!` 后 2 秒被 `Stopping the server`，Minexa 报
          * `[crash] 检测到异常退出(exit=0)` —— 服务端其实是被正常停掉的。
          *
          * 第二版判定：只有「**启动窗口内**就退出」才按异常处理

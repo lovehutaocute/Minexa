@@ -61,7 +61,7 @@
     <string name="more_widgets">Home screen widgets</string>
     <string name="more_widgets_desc">Widget guide and action settings</string>
     <string name="widget_settings_title">Home screen widgets</string>
-    <string name="widget_settings_intro">Put MineServe server status and common actions on your home screen. Widgets refresh automatically when the app receives new state.</string>
+    <string name="widget_settings_intro">Put Minexa server status and common actions on your home screen. Widgets refresh automatically when the app receives new state.</string>
     <string name="widget_settings_types_title">Widget types</string>
     <string name="widget_overview_title">Status overview</string>
     <string name="widget_overview_size">4×1</string>
@@ -69,13 +69,13 @@
     <string name="widget_console_size">4×2</string>
     <string name="widget_mod_plugin_size">4×3</string>
     <string name="widget_settings_add_title">Add to home screen</string>
-    <string name="widget_settings_add_steps">1. Long-press an empty area of the home screen and choose Widgets.\n2. Find MineServe, then drag the widget type you want onto the home screen.\n3. Resize it if your launcher offers that option.</string>
+    <string name="widget_settings_add_steps">1. Long-press an empty area of the home screen and choose Widgets.\n2. Find Minexa, then drag the widget type you want onto the home screen.\n3. Resize it if your launcher offers that option.</string>
     <string name="widget_settings_scope_hint">Widgets use the server core and Java version selected in the app. All widget instances share those selections.</string>
     <string name="widget_settings_behavior_title">Widget behavior</string>
     <string name="widget_settings_actions">Allow widget action buttons</string>
     <string name="widget_settings_actions_hint">When off, status and metrics remain visible, while start, stop, save, backup, and picker buttons open the app instead of acting directly.</string>
     <string name="widget_settings_refresh">Refresh widgets now</string>
-    <string name="widget_settings_refresh_done">A refresh was requested for all MineServe home-screen widgets.</string>
+    <string name="widget_settings_refresh_done">A refresh was requested for all Minexa home-screen widgets.</string>
 
 
     <string name="diag_back_title">Runtime Diagnostics</string>
@@ -225,7 +225,7 @@
     <string name="msg_pardoned">Unbanned %1$s</string>
     <string name="msg_xp_given">Gave %1$s %2$s experience</string>
 
-    <string name="startup_report_title">MineServeMobile Startup Failure Report</string>
+    <string name="startup_report_title">Minexa Startup Failure Report</string>
     <string name="startup_report_time">Time: %1$s</string>
     <string name="startup_report_exception">Exception: %1$s: %2$s</string>
     <string name="startup_report_no_detail">No details provided</string>
@@ -236,7 +236,7 @@
     <string name="diag_check_port_none">No server selected, cannot check</string>
     <string name="st_mirror_hint">Termux runtime download source (about 50 MB), affects initialization speed</string>
     <string name="st_threads_count">%1$d threads</string>
-    <string name="st_feedback_subject">MineServeMobile Feedback</string>
+    <string name="st_feedback_subject">Minexa Feedback</string>
     <string name="crash_title">Crash Reports</string>
     <string name="crash_empty">No crash reports</string>
     <string name="crash_finding">%1$s: %2$s</string>
@@ -247,6 +247,8 @@
     <string name="crash_raw">Raw report</string>
     <string name="crash_copy">Copy</string>
     <string name="crash_share">Share</string>
+    <string name="crash_share_full">Share full log</string>
+    <string name="crash_share_hint">If you need help from others, please do not send them this report\'s summary. Send the full log instead so the problem can be diagnosed accurately.</string>
     <string name="player_history_summary">%1$d player(s), %2$s total online time</string>
     <string name="player_search">Search players</string>
     <string name="player_export_csv">Export CSV</string>

@@ -1,7 +1,7 @@
 <resources>
-    <string name="app_name">MineServe Mobile</string>
+    <string name="app_name">Minexa</string>
     <string name="notif_channel_id">mc_server_runtime</string>
-    <string name="notif_channel_name">MineServe 服务运行时</string>
+    <string name="notif_channel_name">Minexa 服务运行时</string>
     <string name="notif_channel_desc">显示 Minecraft 服务器运行状态，关闭通知会导致服务被系统杀死</string>
     <string name="notif_title_running">MC 服务运行中</string>
     <string name="notif_text_running">点击查看实时状态</string>
@@ -352,7 +352,7 @@
     <string name="s573">添加本地存储</string>
     <string name="s574">在侧拉栏中找到「添加本地存储」选项并点击。</string>
     <string name="s575">选择本应用</string>
-    <string name="s576">在弹出的列表中，找到并勾选「MineServeMobile」，点击确定。</string>
+    <string name="s576">在弹出的列表中，找到并勾选「Minexa」，点击确定。</string>
     <string name="s577">开始管理文件</string>
     <string name="s578">返回 MT 管理器主界面，在侧拉栏中会出现本应用的条目，点击即可浏览文件。</string>
     <string name="s579">找到服务器文件</string>
@@ -861,7 +861,7 @@
     <string name="hero_online">在线</string>
     <string name="hero_memory">内存</string>
     <string name="hero_uptime">运行时长</string>
-    <string name="hero_cpu">服务端CPU</string>
+    <string name="hero_cpu">CPU 使用率</string>
     <string name="hero_refresh">刷新状态</string>
     <string name="widget_refresh_cd">刷新状态</string>
     <string name="hero_online_mode_warning">正版验证未关闭，离线玩家无法进入</string>
@@ -975,7 +975,7 @@
     <string name="more_widgets">桌面组件</string>
     <string name="more_widgets_desc">查看组件说明与操作设置</string>
     <string name="widget_settings_title">桌面组件</string>
-    <string name="widget_settings_intro">把 MineServe 的服务器状态和常用操作放到桌面，打开应用后组件会自动刷新。</string>
+    <string name="widget_settings_intro">把 Minexa 的服务器状态和常用操作放到桌面，打开应用后组件会自动刷新。</string>
     <string name="widget_settings_types_title">组件类型</string>
     <string name="widget_overview_title">状态总览</string>
     <string name="widget_overview_size">4×1</string>
@@ -983,13 +983,13 @@
     <string name="widget_console_size">4×2</string>
     <string name="widget_mod_plugin_size">4×3</string>
     <string name="widget_settings_add_title">添加到桌面</string>
-    <string name="widget_settings_add_steps">1. 长按桌面空白处，选择“组件”或“小部件”。\n2. 找到 MineServe，选择需要的组件类型并拖到桌面。\n3. 按桌面启动器提示调整组件大小。</string>
+    <string name="widget_settings_add_steps">1. 长按桌面空白处，选择“组件”或“小部件”。\n2. 找到 Minexa，选择需要的组件类型并拖到桌面。\n3. 按桌面启动器提示调整组件大小。</string>
     <string name="widget_settings_scope_hint">当前组件使用应用内选中的服务器核心和 Java 版本；所有组件实例共享这套选择。</string>
     <string name="widget_settings_behavior_title">组件行为</string>
     <string name="widget_settings_actions">允许组件操作按钮</string>
     <string name="widget_settings_actions_hint">关闭后仍显示状态和指标，启动、停止、保存、备份及切换按钮会打开应用而不直接执行操作。</string>
     <string name="widget_settings_refresh">立即刷新组件</string>
-    <string name="widget_settings_refresh_done">已请求刷新所有 MineServe 桌面组件。</string>
+    <string name="widget_settings_refresh_done">已请求刷新所有 Minexa 桌面组件。</string>
     <!-- 备份页 -->
     <!-- 诊断页 -->
     <string name="diag_back_title">运行诊断</string>
@@ -1145,7 +1145,7 @@
     <string name="msg_banned_temp">已限时封禁 %1$s（%2$s）</string>
     <string name="msg_pardoned">已解除 %1$s 的封禁</string>
     <string name="msg_xp_given">已给予 %1$s %2$s 经验</string>
-    <string name="startup_report_title">MineServeMobile 启动失败报告</string>
+    <string name="startup_report_title">Minexa 启动失败报告</string>
     <string name="startup_report_time">时间: %1$s</string>
     <string name="startup_report_exception">异常: %1$s: %2$s</string>
     <string name="startup_report_no_detail">未提供详情</string>
@@ -1158,7 +1158,7 @@
 
     <string name="st_mirror_hint">Termux 运行环境下载源（约 50MB），影响初始化速度</string>
     <string name="st_threads_count">%1$d 线程</string>
-    <string name="st_feedback_subject">MineServeMobile 意见反馈</string>
+    <string name="st_feedback_subject">Minexa 意见反馈</string>
     <string name="crash_title">崩溃报告</string>
     <string name="crash_empty">暂无崩溃报告</string>
     <string name="crash_finding">%1$s: %2$s</string>
@@ -1172,6 +1172,8 @@
     <string name="crash_run_log_empty">本次运行没有可用日志。</string>
     <string name="crash_copy">复制</string>
     <string name="crash_share">分享</string>
+    <string name="crash_share_full">分享完整日志</string>
+    <string name="crash_share_hint">如果需要请求别人帮助，请不要把此报告的总结发给对方，请直接将完整日志发给对方，以便准确排查问题。</string>
     <string name="player_history_summary">%1$d 名玩家，累计在线 %2$s</string>
     <string name="player_search">搜索玩家</string>
     <string name="player_export_csv">导出 CSV</string>
@@ -1593,4 +1595,62 @@
     <string name="dash_force_stop_confirm_ok">确认强制停止</string>
     <string name="dash_force_stop_done">已强制停止服务端</string>
     <string name="dash_stop_timeout_hint">服务端仍在关停中，可点「强制停止」立即结束（有丢失未保存数据的风险）</string>
+
+    <!-- ── 网络映射页重排（参考 EdgeCube 网络映射页的信息组织） ──
+         状态胶囊、连接与流量统计、日志条数、前提提示条。 -->
+    <string name="net_section_status">连接与穿透状态</string>
+    <string name="net_section_method">穿透方式</string>
+    <string name="net_section_config">穿透配置</string>
+    <string name="net_section_log">穿透日志</string>
+    <string name="net_status_running">运行中</string>
+    <string name="net_status_starting">启动中</string>
+    <string name="net_status_failed">失败</string>
+    <string name="net_status_stopped">已停止</string>
+    <string name="net_status_idle">未启动</string>
+    <string name="net_stats_connections">转发连接：%1$d</string>
+    <string name="net_stats_speed">实时速率 ↑ %1$s ↓ %2$s</string>
+    <string name="net_stats_traffic">累计流量 ↑ %1$s ↓ %2$s</string>
+    <string name="net_stats_no_traffic">当前方式不上报连接数与流量统计</string>
+    <string name="net_log_connection">连接日志</string>
+    <string name="net_log_connection_hint">本方式暂不单独上报连接日志，可在上方隧道日志中查看运行输出</string>
+    <string name="net_log_expand">展开全部日志</string>
+    <!-- STUN 配置区 -->
+    <string name="stun_target_port">目标端口</string>
+    <string name="stun_follow_local_port">跟随服务端端口（%1$d）</string>
+    <string name="stun_target_port_hint">例如 25565</string>
+    <string name="stun_keepalive">保活间隔（秒）</string>
+    <string name="stun_keepalive_hint">定期向 STUN 服务器发探测包以维持 NAT 映射，同时检测公网地址变化。不建议低于 5 秒。</string>
+    <string name="stun_max_conn">并发连接上限</string>
+    <string name="stun_show_conn_log">记录连接日志（每条入站连接建立/断开）</string>
+    <string name="stun_proxy_protocol">启用 PROXY protocol v2（让服务端看到玩家真实 IP）</string>
+    <string name="stun_proxy_protocol_warn">服务端必须自行开启 PROXY protocol 支持，否则玩家将无法进入游戏。仅在确认服务端已配置时启用。</string>
+    <string name="stun_servers">自定义 STUN 服务器</string>
+    <string name="stun_servers_hint">每行一条，如 stun.example.com 或 stun.example.com:3478</string>
+    <string name="stun_servers_note">留空使用内置列表（均已验证支持 TCP 3478）。注意：仅支持 UDP 的 STUN 服务器对本功能无效。</string>
+    <string name="net_log_empty">暂无隧道日志，点「启动穿透」后这里会出现运行输出</string>
+    <!-- STUN 直连 -->
+    <string name="stun_guide_title">STUN 直连使用指南</string>
+    <string name="stun_guide_1_t">先看网络类型</string>
+    <string name="stun_guide_1_d">本方式靠 NAT 打洞，只在「全锥形 NAT（NAT1）」下成立。多数家庭宽带是这种；手机流量、公司/校园网、CGNAT 通常不行，启动后若反复探测失败请改用 frp 或平台隧道。</string>
+    <string name="stun_guide_2_t">保持服务器运行</string>
+    <string name="stun_guide_2_d">先在概览页启动 MC 服务端，再回本页点「启动穿透」。隧道只是把公网流量转到本机端口，服务端没开就没人接。</string>
+    <string name="stun_guide_3_t">把地址发给玩家</string>
+    <string name="stun_guide_3_d">探测成功后上方会显示公网直连地址，点复制按钮发给朋友即可。该地址由运营商分配，重连或换网后会变。</string>
+    <string name="stun_guide_4_t">按需调优</string>
+    <string name="stun_guide_4_d">玩家进服显示 127.0.0.1 时，可开「PROXY protocol」——但服务端必须先开对应支持，否则玩家会连不进来。并发上限与保活间隔一般不用改。</string>
+    <string name="net_method_hint">四种方式都支持 MC 的 TCP 协议；自建方式（frp / bore）带宽与稳定性取决于你选的服务器，托管平台（SakuraFrp / ME Frp）免自建但受平台限速</string>
+    <string name="frpc_engine_title">frpc 引擎</string>
+    <string name="frpc_engine_hint">frp 系隧道（frp / SakuraFrp / ME Frp）共用一份内置引擎，运行时不依赖 Termux 或任何外部环境。首次使用需导入一次 libfrpc.so（arm64 版），导入后长期有效。</string>
+    <string name="frpc_engine_installed">已安装</string>
+    <string name="frpc_engine_missing">未安装</string>
+    <string name="frpc_engine_import">导入引擎</string>
+    <string name="frpc_engine_download">下载引擎</string>
+    <string name="frpc_engine_reinstall">重新下载</string>
+    <string name="frpc_engine_downloading">下载中…</string>
+    <string name="frpc_engine_replace">更换引擎</string>
+    <string name="frpc_engine_uninstall">卸载</string>
+    <string name="frpc_engine_uninstall_confirm">卸载后 frp 系隧道将无法启动，需要重新导入引擎。确定卸载？</string>
+    <string name="frpc_engine_where">引擎可从 frp 官方仓库获取：用 Go 编译 `cmd/frpclib` 为 c-shared 动态库（`-buildmode=c-shared`），产物即为 libfrpc.so。</string>
+    <string name="net_tunnel_server_stopped">服务端未运行：请先在概览页启动服务端，再点「启动穿透」，否则玩家连上公网地址也进不去</string>
+    <string name="net_public_url_unknown">无法显示公网地址，请前往 FRP 平台查看公网地址。</string>
 </resources>

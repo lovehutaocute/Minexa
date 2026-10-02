@@ -410,7 +410,7 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
                 conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 15_000
                     readTimeout = 60_000
-                    setRequestProperty("User-Agent", "MineServeMobile/1.1")
+                    setRequestProperty("User-Agent", "Minexa/1.1")
                 }
                 conn.connect()
                 if (conn.responseCode !in 200..299) throw IOException("HTTP ${conn.responseCode}")

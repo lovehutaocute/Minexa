@@ -10,7 +10,7 @@
 
 </div>
 
-MineServe Mobile is a native Android app for Minecraft Java Edition servers, with Bedrock Edition support through PowerNukkitX, PocketMine-MP, and Allay. It includes multi-server management, plugins and mods, Modrinth integration, tunneling, backups, crash reports, keep-alive tools, MCP remote control, and no-root data access.
+Minexa is a native Android app for Minecraft Java Edition servers, with Bedrock Edition support through PowerNukkitX, PocketMine-MP, and Allay. It includes multi-server management, plugins and mods, Modrinth integration, tunneling, backups, crash reports, keep-alive tools, MCP remote control, and no-root data access.
 
 ## ✨ Features
 

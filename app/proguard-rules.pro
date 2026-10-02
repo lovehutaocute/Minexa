@@ -1,4 +1,4 @@
-# ===== MineServe Mobile R8 规则 =====
+# ===== Minexa R8 规则 =====
 # 包名已由 com.mcserver.manager 迁移为 com.mineserve.mobile
 
 # 保留 Termux bridge 接口（反射调用 native helper）

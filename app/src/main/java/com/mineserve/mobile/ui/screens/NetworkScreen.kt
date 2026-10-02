@@ -32,8 +32,13 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.DataUsage
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Lan
+import androidx.compose.material.icons.outlined.Link
+import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.PlayArrow
@@ -42,6 +47,7 @@ import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -66,6 +72,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -85,6 +93,11 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.DebouncedTextField
+import com.mineserve.mobile.ui.AddressCopyRow
+import com.mineserve.mobile.ui.HintNote
+import com.mineserve.mobile.ui.StatLine
+import com.mineserve.mobile.ui.StatusPill
+import com.mineserve.mobile.ui.WarnNote
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.FieldBg
@@ -95,6 +108,7 @@ import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
 import com.mineserve.mobile.ui.theme.TrackBg
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -136,7 +150,11 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
         }
         HeaderBlock(eyebrow = stringResource(R.string.eyebrow_network), title = stringResource(R.string.s585), statusBarPadding = !showBackBar)
 
-        // ── 服务器连接信息（局域网） ──────────────────────────
+        // ── 分区 1：连接与穿透状态 ────────────────────────────
+        // 借鉴 EdgeCube 网络映射页：先给状态，再给地址，最后才是配置。
+        // 关闭服务器后在概览页误触穿透，会连到已停掉的本地端口——这条提示就是拦这个。
+
+        // 服务器连接信息（局域网）
         McCard(title = stringResource(R.string.s586)) {
             // 运行状态指示灯
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -159,27 +177,11 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
             // 本地回环地址（本机直连，同设备测试用）
             Text(stringResource(R.string.s588), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(FieldBg)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    "127.0.0.1:${config.localPort}",
-                    fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = {
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MC Server", "127.0.0.1:${config.localPort}"))
-                }) {
-                    Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.s388), tint = Indigo)
-                }
-            }
+            AddressCopyRow(
+                label = stringResource(R.string.s588),
+                value = "127.0.0.1:${config.localPort}",
+                onCopy = { copyToClipboard(context, "MC Server", "127.0.0.1:${config.localPort}") }
+            )
             Spacer(Modifier.height(6.dp))
             Text(
                 stringResource(R.string.s589),
@@ -188,91 +190,55 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
 
             Spacer(Modifier.height(12.dp))
 
-            // 局域网 IP（其他设备连接用）
+            // 局域网 IP（其他设备连接用）+ 端口，合并为一条可复制地址
             Text(stringResource(R.string.s590), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
+            val lanAddress = if (lanIp == "--") "--:${config.localPort}" else "$lanIp:${config.localPort}"
+            AddressCopyRow(
+                label = stringResource(R.string.s592),
+                value = lanAddress,
+                onCopy = { vm.copyServerAddress(context) },
+                icon = Icons.Outlined.Lan,
+                accent = Mint,
+                containerColor = MintSoft
+            )
+            Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(lanIp, fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.weight(1f))
-                IconButton(onClick = { vm.refreshLanIp() }) {
-                    Icon(Icons.Outlined.Refresh, contentDescription = stringResource(R.string.s591))
-                }
-            }
-            Spacer(Modifier.height(12.dp))
-
-            Text(stringResource(R.string.s592), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            Text("${config.localPort}", fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(12.dp))
-
-            Text(stringResource(R.string.s593), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(FieldBg)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
                 Text(
-                    if (lanIp == "--") "--:${config.localPort}" else "$lanIp:${config.localPort}",
-                    fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
-                    fontFamily = FontFamily.Monospace,
+                    stringResource(R.string.s594),
+                    color = Muted, fontSize = 11.sp,
                     modifier = Modifier.weight(1f)
                 )
-                IconButton(onClick = { vm.copyServerAddress(context) }) {
-                    Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.s388), tint = Indigo)
+                IconButton(onClick = { vm.refreshLanIp() }, modifier = Modifier.size(28.dp)) {
+                    Icon(
+                        Icons.Outlined.Refresh,
+                        contentDescription = stringResource(R.string.s591),
+                        tint = Muted,
+                        modifier = Modifier.size(16.dp)
+                    )
                 }
             }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                stringResource(R.string.s594),
-                color = Muted, fontSize = 11.sp
-            )
         }
 
-        // ── 内网穿透状态卡片 ──────────────────────────────────
+        // 穿透状态与统计
         TunnelStatusCard(
             tunnelState = tunnelState,
+            serverRunning = serverState.isRunning,
             onStart = { vm.startTunnel() },
             onStop = { vm.stopTunnel() },
             onCopyUrl = { vm.copyTunnelUrl(context) }
         )
 
-        // ── 隧道日志预览 ──────────────────────────────────────
-        TunnelLogPreview(consoleLines)
+        // 隧道日志预览 + 连接日志
+        TunnelLogPreview(consoleLines, tunnelState)
 
-        // ── 本地端口配置 ──────────────────────────────────────
-        McCard(title = stringResource(R.string.s595)) {
-            Text(stringResource(R.string.s596), color = Muted, fontSize = 11.sp)
-            Spacer(Modifier.height(8.dp))
-            DebouncedTextField(
-                value = config.localPort.toString(),
-                onValueChange = { v ->
-                    // 端口标准与 FtpScreen / McpScreen 一致：1024–65535，超界自动收敛并提示
-                    v.toIntOrNull()?.let { raw ->
-                        val port = raw.coerceIn(1024, 65535)
-                        if (port != raw) {
-                            android.widget.Toast.makeText(
-                                context,
-                                context.getString(R.string.net_local_port_range_hint),
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                        vm.setLocalPort(port)
-                    }
-                },
-                sanitize = { it.filter(Char::isDigit) },
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
-
-        // ── 内网穿透配置 ──────────────────────────────────────
+        // ── 分区 2：穿透方式 + 分区 3：穿透配置 ───────────────
+        // 方式选择与方式配置合并在同一张卡：选中哪一项、要填什么，视线不用来回跳。
         McCard(title = stringResource(R.string.s597)) {
-            // 穿透类型选择器
-            Text(stringResource(R.string.s598), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+            Text(
+                stringResource(R.string.net_section_method),
+                color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+            )
             Spacer(Modifier.height(8.dp))
 
             TunnelType.values().forEach { type ->
@@ -300,9 +266,18 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
                 }
             }
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(10.dp))
+            HintNote(stringResource(R.string.net_method_hint))
+
+            Spacer(Modifier.height(14.dp))
 
             // 根据穿透类型显示不同配置
+            Text(
+                stringResource(R.string.net_section_config),
+                color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(8.dp))
+
             if (config.tunnelType == TunnelType.Frp) {
                 Column {
                     Text(stringResource(R.string.s599), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
@@ -350,6 +325,10 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
                 MeFrpConfigSection(vm = vm, config = config)
             }
 
+            if (config.tunnelType == TunnelType.Stun) {
+                StunConfigSection(vm = vm, config = config)
+            }
+
         }
 
         // ── 免费 FRP 平台 ──────────────────────────────────────
@@ -363,26 +342,32 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
     }
 }
 
-// ── 隧道状态卡片 ──────────────────────────────────────────────
+
+/** 复制文本到剪贴板（含说明标签，用于系统剪贴板隐私提示）。 */
+private fun copyToClipboard(context: Context, label: String, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(label, text))
+}
 
 @Composable
 private fun TunnelStatusCard(
     tunnelState: TunnelState,
+    serverRunning: Boolean,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onCopyUrl: () -> Unit
 ) {
-    McCard(title = stringResource(R.string.s605)) {
-        // 状态指示灯 + 状态文本
+    McCard(title = stringResource(R.string.net_section_status)) {
+        // 状态胶囊（借鉴 EdgeCube：状态用胶囊而不是纯文本，语义色一眼可辨）
+        val unknownError = stringResource(R.string.s7)
+        val (dotColor, statusText, statusColor) = when (tunnelState.status) {
+            TunnelStatus.Running -> Triple(Mint, stringResource(R.string.net_status_running), Mint)
+            TunnelStatus.Starting -> Triple(Coral, stringResource(R.string.net_status_starting), Coral)
+            TunnelStatus.Failed -> Triple(Coral, stringResource(R.string.net_status_failed), Coral)
+            TunnelStatus.Stopped -> Triple(Muted, stringResource(R.string.net_status_stopped), Muted)
+            TunnelStatus.Idle -> Triple(Muted, stringResource(R.string.net_status_idle), Muted)
+        }
         Row(verticalAlignment = Alignment.CenterVertically) {
-            val unknownError = stringResource(R.string.s7)
-            val (dotColor, statusText, statusColor) = when (tunnelState.status) {
-                TunnelStatus.Running -> Triple(Color(0xFF4CAF50), stringResource(R.string.s606), Color(0xFF2E7D32))
-                TunnelStatus.Starting -> Triple(Color(0xFFFFA726), stringResource(R.string.s379), Color(0xFFEF6C00))
-                TunnelStatus.Failed -> Triple(Color(0xFFEF5350), stringResource(R.string.s607, tunnelState.errorMessage.ifBlank { unknownError }), Coral)
-                TunnelStatus.Stopped -> Triple(Muted, stringResource(R.string.s608), Muted)
-                TunnelStatus.Idle -> Triple(Muted, stringResource(R.string.s609), Muted)
-            }
             if (tunnelState.status == TunnelStatus.Starting) {
                 CircularProgressIndicator(
                     modifier = Modifier.size(14.dp),
@@ -398,7 +383,7 @@ private fun TunnelStatusCard(
                 )
             }
             Spacer(Modifier.size(8.dp))
-            Text(statusText, fontSize = 13.sp, color = statusColor, fontWeight = FontWeight.SemiBold)
+            StatusPill(statusText, statusColor)
             if (tunnelState.activeType != null) {
                 Spacer(Modifier.size(6.dp))
                 Text("·", color = Muted, fontSize = 11.sp)
@@ -407,41 +392,75 @@ private fun TunnelStatusCard(
             }
         }
 
+        // 启动前先提示服务器没开——否则穿透会连到已停掉的本地端口
+        if (!serverRunning && tunnelState.status != TunnelStatus.Running) {
+            Spacer(Modifier.height(10.dp))
+            WarnNote(stringResource(R.string.net_tunnel_server_stopped))
+        }
+
+        // 失败原因单独成条，而不是塞进状态文字里被截断
+        if (tunnelState.status == TunnelStatus.Failed && tunnelState.errorMessage.isNotBlank()) {
+            Spacer(Modifier.height(10.dp))
+            WarnNote(tunnelState.errorMessage.ifBlank { unknownError })
+        }
+
         // 公网地址展示（始终显示，退出后也保留）
         if (tunnelState.publicUrl.isNotBlank()) {
             val isActive = tunnelState.status == TunnelStatus.Running
             Spacer(Modifier.height(12.dp))
-            Text(
-                if (isActive) stringResource(R.string.s610) else stringResource(R.string.s611),
-                color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+            AddressCopyRow(
+                label = if (isActive) stringResource(R.string.s610) else stringResource(R.string.s611),
+                value = tunnelState.publicUrl,
+                onCopy = onCopyUrl,
+                accent = if (isActive) Mint else Coral,
+                containerColor = if (isActive) MintSoft else CoralSoft,
+                borderColor = if (isActive) Mint else Coral
             )
-            Spacer(Modifier.height(6.dp))
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(if (isActive) MintSoft else CoralSoft)
-                    .border(1.dp, if (isActive) Color(0xFF4CAF50) else Color(0xFFFFA726), RoundedCornerShape(12.dp))
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
-            ) {
-                Text(
-                    tunnelState.publicUrl,
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Bold,
-                    fontFamily = FontFamily.Monospace,
-                    modifier = Modifier.weight(1f)
-                )
-                IconButton(onClick = onCopyUrl) {
-                    Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.s612), tint = Indigo)
-                }
-            }
             Spacer(Modifier.height(6.dp))
             Text(
                 if (isActive) stringResource(R.string.s613)
                 else stringResource(R.string.s614),
                 color = Muted, fontSize = 11.sp
             )
+        } else if (tunnelState.status == TunnelStatus.Running) {
+            // 隧道已通但没有公网地址：常见于平台 API 未返回接入地址（域名映射类
+            // 隧道、平台临时故障），或自建 frps 的配置里没写 remotePort。
+            // 这不是错误 —— 隧道本身是通的，只是我们无从得知入口地址 ——
+            // 所以给一条指引而不是报警。
+            Spacer(Modifier.height(10.dp))
+            WarnNote(stringResource(R.string.net_public_url_unknown))
+        }
+
+        // 运行统计：只在真正转发时才出现，未运行时不摆一排 0（借鉴 EdgeCube）
+        if (tunnelState.status == TunnelStatus.Running) {
+            Spacer(Modifier.height(12.dp))
+            if (tunnelState.activeConnections > 0 ||
+                tunnelState.totalUploadBytes > 0 || tunnelState.totalDownloadBytes > 0
+            ) {
+                StatLine(
+                    Icons.Outlined.Link,
+                    stringResource(R.string.net_stats_connections, tunnelState.activeConnections)
+                )
+                StatLine(
+                    Icons.Outlined.Speed,
+                    stringResource(
+                        R.string.net_stats_speed,
+                        formatBytes(tunnelState.uploadBytesPerSecond),
+                        formatBytes(tunnelState.downloadBytesPerSecond)
+                    )
+                )
+                StatLine(
+                    Icons.Outlined.DataUsage,
+                    stringResource(
+                        R.string.net_stats_traffic,
+                        formatBytes(tunnelState.totalUploadBytes),
+                        formatBytes(tunnelState.totalDownloadBytes)
+                    )
+                )
+            } else {
+                // 四种后端里目前只有 bore 会上报这几项，其余恒为 0——说清楚而不是显示假数据
+                StatLine(Icons.Outlined.Info, stringResource(R.string.net_stats_no_traffic))
+            }
         }
 
         Spacer(Modifier.height(12.dp))
@@ -481,46 +500,81 @@ private fun TunnelStatusCard(
     }
 }
 
-// ── 隧道日志预览 ──────────────────────────────────────────────
+/** 把字节数格式化成可读文本（沿用 EdgeCube 的量级分档）。 */
+private fun formatBytes(bytes: Long): String = when {
+    bytes < 1024 -> "$bytes B"
+    bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
+    bytes < 1024L * 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024))
+    else -> String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024))
+}
+
+// ── 隧道日志预览 + 连接日志 ───────────────────────────────────
 
 @Composable
-private fun TunnelLogPreview(consoleLines: List<String>) {
+private fun TunnelLogPreview(consoleLines: List<String>, tunnelState: TunnelState) {
     // 过滤出隧道相关日志
     val tunnelLogs: List<String> = remember(consoleLines) {
         consoleLines.filter { it.contains("[tunnel]") }
     }
 
-    if (tunnelLogs.isEmpty()) return
-
     var showFullLog by remember { mutableStateOf(false) }
 
-    McCard(title = stringResource(R.string.s616)) {
-        // 最近 8 条预览
-        tunnelLogs.takeLast(8).forEach { line ->
-            Text(
-                line,
-                fontSize = 10.sp,
-                fontFamily = FontFamily.Monospace,
-                color = Muted,
-                maxLines = 1,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 2.dp)
-            )
+    McCard(title = stringResource(R.string.net_section_log)) {
+        if (tunnelLogs.isEmpty()) {
+            Text(stringResource(R.string.net_log_empty), color = Muted, fontSize = 11.sp)
+        } else {
+            // 最近 8 条预览
+            tunnelLogs.takeLast(8).forEach { line ->
+                Text(
+                    line,
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = Muted,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 2.dp)
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { showFullLog = true },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(
+                    Icons.Outlined.OpenInFull,
+                    contentDescription = null,
+                    tint = Indigo,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    stringResource(R.string.net_log_expand) + " (${tunnelLogs.size})",
+                    fontSize = 12.sp,
+                    color = Indigo
+                )
+            }
         }
 
-        // 全屏按钮
-        Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = { showFullLog = true },
-            colors = ButtonDefaults.buttonColors(containerColor = IndigoSoft),
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Outlined.OpenInFull, contentDescription = null, modifier = Modifier.size(16.dp))
-            Spacer(Modifier.size(6.dp))
-            Text(stringResource(R.string.s617, tunnelLogs.size), fontSize = 12.sp)
+        // 连接日志：借鉴 EdgeCube 在隧道卡内单独给一块转发日志。
+        // 当前四个后端都只把明细汇进 [tunnel] 日志流，没有独立的连接事件流，
+        // 所以这里只报告状态与说明，不编造一个空窗口。
+        Spacer(Modifier.height(12.dp))
+        Text(
+            stringResource(R.string.net_log_connection),
+            color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(6.dp))
+        if (tunnelState.status == TunnelStatus.Running) {
+            StatLine(
+                Icons.Outlined.Link,
+                stringResource(R.string.net_stats_connections, tunnelState.activeConnections)
+            )
+            Spacer(Modifier.height(6.dp))
         }
+        HintNote(stringResource(R.string.net_log_connection_hint))
     }
 
     // 全屏日志 Dialog
@@ -593,6 +647,7 @@ private fun GuideSection(tunnelType: TunnelType) {
                 when (tunnelType) {
                     TunnelType.Frp -> FrpGuide()
                     TunnelType.Bore -> BoreGuide()
+                    TunnelType.Stun -> StunGuide()
                     TunnelType.SakuraFrp -> SakuraGuide()
                     TunnelType.MeFrp -> MeFrpGuide()
                 }
@@ -619,6 +674,16 @@ private fun MeFrpGuide() {
         GuideStep("3", "创建隧道", "在 ME Frp 网站「隧道管理」新建一条 TCP 隧道：本地地址 127.0.0.1，本地端口填服务器的端口（默认 25565）")
         GuideStep("4", "选中并启动", "回到本页点「拉取隧道列表」，选中刚创建的隧道，再点「启动隧道」即可")
         GuideStep("5", "把地址发给玩家", "启动成功后上方会显示公网地址，把它发给朋友就能连进来了")
+    }
+}
+
+@Composable
+private fun StunGuide() {
+    GuideBlock(title = stringResource(R.string.stun_guide_title)) {
+        GuideStep("1", stringResource(R.string.stun_guide_1_t), stringResource(R.string.stun_guide_1_d))
+        GuideStep("2", stringResource(R.string.stun_guide_2_t), stringResource(R.string.stun_guide_2_d))
+        GuideStep("3", stringResource(R.string.stun_guide_3_t), stringResource(R.string.stun_guide_3_d))
+        GuideStep("4", stringResource(R.string.stun_guide_4_t), stringResource(R.string.stun_guide_4_d))
     }
 }
 
@@ -895,6 +960,116 @@ private fun SakuraFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile
 // ── ME Frp 配置区（Token + 隧道列表） ─────────────────────────
 
 @Composable
+private fun StunConfigSection(vm: McViewModel, config: com.mineserve.mobile.data.McConfig) {
+    val followLocalPort = config.stunLocalPort <= 0
+    Column {
+        // 目标端口
+        Text(stringResource(R.string.stun_target_port), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Checkbox(
+                checked = followLocalPort,
+                onCheckedChange = { follow ->
+                    vm.updateConfig { it.copy(stunLocalPort = if (follow) 0 else it.localPort) }
+                }
+            )
+            Text(
+                stringResource(R.string.stun_follow_local_port, config.localPort),
+                color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp
+            )
+        }
+        if (!followLocalPort) {
+            Spacer(Modifier.height(6.dp))
+            DebouncedTextField(
+                value = config.stunLocalPort.toString(),
+                onValueChange = { v ->
+                    val port = v.filter(Char::isDigit).take(5).toIntOrNull() ?: 0
+                    vm.updateConfig { it.copy(stunLocalPort = port) }
+                },
+                placeholder = { Text(stringResource(R.string.stun_target_port_hint)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(Modifier.height(12.dp))
+        // 保活间隔
+        Text(stringResource(R.string.stun_keepalive), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        DebouncedTextField(
+            value = config.stunKeepAliveSeconds.toString(),
+            onValueChange = { v ->
+                val secs = v.filter(Char::isDigit).take(4).toIntOrNull() ?: 20
+                vm.updateConfig { it.copy(stunKeepAliveSeconds = secs) }
+            },
+            placeholder = { Text("20") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        HintNote(stringResource(R.string.stun_keepalive_hint))
+
+        Spacer(Modifier.height(12.dp))
+        // 并发上限
+        Text(stringResource(R.string.stun_max_conn), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        DebouncedTextField(
+            value = config.stunMaxConnections.toString(),
+            onValueChange = { v ->
+                val n = v.filter(Char::isDigit).take(5).toIntOrNull() ?: 128
+                vm.updateConfig { it.copy(stunMaxConnections = n) }
+            },
+            placeholder = { Text("128") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        Spacer(Modifier.height(12.dp))
+        // 开关项
+        StunToggleRow(
+            title = stringResource(R.string.stun_show_conn_log),
+            checked = config.stunShowConnectionLog,
+            onChange = { on -> vm.updateConfig { it.copy(stunShowConnectionLog = on) } }
+        )
+
+        Spacer(Modifier.height(4.dp))
+        StunToggleRow(
+            title = stringResource(R.string.stun_proxy_protocol),
+            checked = config.stunProxyProtocol,
+            onChange = { on -> vm.updateConfig { it.copy(stunProxyProtocol = on) } }
+        )
+        if (config.stunProxyProtocol) {
+            Spacer(Modifier.height(6.dp))
+            WarnNote(stringResource(R.string.stun_proxy_protocol_warn))
+        }
+
+        Spacer(Modifier.height(12.dp))
+        // 自定义服务器
+        Text(stringResource(R.string.stun_servers), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        DebouncedTextField(
+            value = config.stunServers,
+            onValueChange = { v -> vm.updateConfig { it.copy(stunServers = v) } },
+            placeholder = { Text(stringResource(R.string.stun_servers_hint)) },
+            singleLine = false,
+            maxLines = 4,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        HintNote(stringResource(R.string.stun_servers_note))
+    }
+}
+
+/** STUN 配置里的单行开关。 */
+@Composable
+private fun StunToggleRow(title: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Text(title, color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
+    }
+}
+
+@Composable
 private fun MeFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile.data.McConfig) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val token = config.meFrpToken.trim()
@@ -1019,7 +1194,7 @@ private fun SakuraCreateTunnelDialog(
 ) {
     var selectedNode by remember { mutableStateOf(nodes.firstOrNull { it.online }) }
     var nodeMenu by remember { mutableStateOf(false) }
-    var name by remember { mutableStateOf("MineServe") }
+    var name by remember { mutableStateOf("Minexa") }
     var type by remember { mutableStateOf("tcp") }
     var portText by remember { mutableStateOf(defaultPort.toString()) }
     val port = portText.toIntOrNull()
@@ -1088,7 +1263,7 @@ private fun SakuraCreateTunnelDialog(
             Button(
                 onClick = {
                     val node = selectedNode ?: return@Button
-                    onConfirm(node, name.ifBlank { "MineServe" }, type, port ?: defaultPort)
+                    onConfirm(node, name.ifBlank { "Minexa" }, type, port ?: defaultPort)
                 },
                 enabled = selectedNode != null && port != null && name.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo)

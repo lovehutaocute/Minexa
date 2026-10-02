@@ -51,7 +51,7 @@ class McpProtocolTest {
         )
         assertEquals("2025-03-26", body["result"]!!.jsonObject["protocolVersion"]!!.jsonPrimitive.content)
         val serverInfo = body["result"]!!.jsonObject["serverInfo"]!!.jsonObject
-        assertEquals("MineServe Mobile", serverInfo["name"]!!.jsonPrimitive.content)
+        assertEquals("Minexa", serverInfo["name"]!!.jsonPrimitive.content)
         assertEquals("1.0.0-test", serverInfo["version"]!!.jsonPrimitive.content)
     }
 

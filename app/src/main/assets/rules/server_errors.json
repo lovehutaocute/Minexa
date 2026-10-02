@@ -1,7 +1,7 @@
 {
   "version": 1,
   "_comment": [
-    "MineServe Mobile 崩溃日志规则表。",
+    "Minexa 崩溃日志规则表。",
     "设计：把「识别一种崩溃 -> 给出主信息 + 建议操作」的知识从代码里抽出来，",
     "改成数据驱动，新增/修订规则不需要改动 Kotlin 代码。",
     "加载顺序（后者覆盖前者）：内置本文件 -> {filesDir}/error_rules/*.json（用户自定义，可用 App 内文件管理器写入）。",
@@ -303,6 +303,25 @@
       "detail": "服务端读取世界存档失败，通常是 level.dat 或区块文件损坏。",
       "evidence": "检测到世界/区块读取失败",
       "suggest": "先从备份快照恢复该世界；若没有备份，可考虑重置世界（会丢失存档，请先确认）。"
+    },
+    {
+      "id": "missing-native-library",
+      "level": "Identified",
+      "contains": [
+        "error while loading shared libraries",
+        "cannot open shared object file",
+        "No such file or directory",
+        "failed to map segment from shared object",
+        "libjvm.so",
+        "UnsatisfiedLinkError",
+        "libc.so.6: version",
+        "GLIBC_"
+      ],
+      "regex": "[A-Za-z0-9_.+-]+\\.so(?:\\.[0-9.]+)?:?\\s*(?:cannot open shared object file|No such file)",
+      "label": "本地动态库(.so)缺失",
+      "detail": "运行所需的动态库（.so，如 libjvm.so、libc.so.6、libz.so 等）在 Android/Termux 环境里找不到或版本不满足。Android 使用的是 bionic libc，缺少完整 glibc 生态，很多服务端/插件/模组依赖的 .so 在这里本就不存在。",
+      "evidence": "检测到 error while loading shared libraries / cannot open shared object file / 缺少 .so",
+      "suggest": "推荐使用 PRoot 容器运行服务端：在「运行环境」里把来源切到 PRoot Linux 容器（Ubuntu 20.04 / 22.04），它提供标准 glibc 环境，能补齐这些 .so。若已在 PRoot 内仍报缺库，进入该容器执行 apt 安装对应依赖（如 libc6、zlib1g、libstdc++6）后重试。"
     }
   ]
 }

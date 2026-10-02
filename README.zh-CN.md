@@ -10,7 +10,7 @@
 
 </div>
 
-MineServe Mobile 是一款 Android 原生应用，可在手机上运行 Minecraft Java 版服务端，并通过 PowerNukkitX、PocketMine-MP、Allay 支持基岩版。它提供多核心管理、插件与模组管理、Modrinth 对接、内网穿透、自动备份、崩溃报告、后台保活、MCP 远程管理，以及免 Root 数据访问。
+Minexa 是一款 Android 原生应用，可在手机上运行 Minecraft Java 版服务端，并通过 PowerNukkitX、PocketMine-MP、Allay 支持基岩版。它提供多核心管理、插件与模组管理、Modrinth 对接、内网穿透、自动备份、崩溃报告、后台保活、MCP 远程管理，以及免 Root 数据访问。
 
 ## ✨ 特性
 

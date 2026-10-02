@@ -971,7 +971,7 @@ internal class McpToolRunner(
                 conn.connectTimeout = timeoutMs
                 conn.readTimeout = timeoutMs
                 conn.instanceFollowRedirects = true
-                conn.setRequestProperty("User-Agent", "MineServe-MCP/${BuildConfig.VERSION_NAME}")
+                conn.setRequestProperty("User-Agent", "Minexa-MCP/${BuildConfig.VERSION_NAME}")
                 if (body != null && method !in setOf("GET", "HEAD")) {
                     conn.doOutput = true
                     conn.setRequestProperty("Content-Type", "application/json")
@@ -1011,7 +1011,7 @@ internal class McpToolRunner(
             return McpToolResult("$method $uri failed: ${it.message}", isError = true)
         }
         val port = McpRawHttp.port(uri)
-        val userAgent = "MineServe-MCP/${BuildConfig.VERSION_NAME}"
+        val userAgent = "Minexa-MCP/${BuildConfig.VERSION_NAME}"
         var socket: Socket? = null
         return try {
             socket = Socket().apply { connect(InetSocketAddress(host, port), timeoutMs) }

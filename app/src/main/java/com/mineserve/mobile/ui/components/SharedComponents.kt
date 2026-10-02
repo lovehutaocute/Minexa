@@ -42,7 +42,10 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -80,6 +83,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
@@ -94,6 +98,7 @@ import com.mineserve.mobile.data.StepStatus
 import kotlinx.coroutines.delay
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
+import com.mineserve.mobile.ui.theme.FieldBg
 import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoDark
@@ -206,6 +211,11 @@ fun HeroBlock(
     state: ServerState,
     coreLabel: String,
     cpuPercent: Int? = null,
+    /**
+     * 服务端 -Xmx 上限（MB）。内存进度条用它作分母，与 [ServerState.usedMemoryMb] 一起
+     * 决定进度比例；为 null/0 时进度条按 0 处理，只显示数值文本。
+     */
+    maxHeapMb: Int? = null,
     onlineModeEnabled: Boolean = false,
     isRefreshing: Boolean = false,
     lastRefreshAtMs: Long = 0L,
@@ -308,17 +318,21 @@ fun HeroBlock(
                     stringResource(R.string.hero_online)
                 )
                 HeroStat(
-                    if (state.isRunning && state.usedMemoryMb > 0) formatMemory(state.usedMemoryMb) else "--",
-                    stringResource(R.string.hero_memory)
-                )
-                HeroStat(
                     if (state.isRunning && state.runningSinceMs > 0)
                         formatUptime(android.os.SystemClock.elapsedRealtime() - state.runningSinceMs)
                     else "--",
                     stringResource(R.string.hero_uptime)
                 )
-                HeroStat(cpuPercent?.let { "$it%" } ?: "--", stringResource(R.string.hero_cpu))
             }
+            // CPU 与内存同为水平进度条，各占一行；CPU 是整机读数，未运行服务端时也照常显示。
+            Spacer(Modifier.height(8.dp))
+            CpuMeterBar(percent = cpuPercent)
+            Spacer(Modifier.height(8.dp))
+            MemoryBar(
+                usedMb = if (state.isRunning) state.usedMemoryMb else 0L,
+                maxMb = maxHeapMb?.toLong() ?: 0L,
+                running = state.isRunning
+            )
             // 手动刷新完成反馈：明确告诉用户「已经更新过了」，
             // 即使各项数值本身没有变化，也不会被误认为按钮失效。
             if (!isRefreshing && lastRefreshAtMs > 0L) {
@@ -363,6 +377,95 @@ fun HeroBlock(
         }
     }
 }
+
+/**
+ * Hero 卡片里的内存水平进度条。
+ *
+ * - 进度 = 已用内存 / 设置的上限（[ServerState.usedMemoryMb] / `maxHeapMb`）；
+ * - 最右侧显示「已使用内存 / 设置的上限内存」，如 `2.4 GB / 4 GB`；
+ * - 上限未知或为 0 时进度条按 0 处理，只显示数值文本，避免出现除零或满格误导。
+ */
+@Composable
+private fun MemoryBar(usedMb: Long, maxMb: Long, running: Boolean) {
+    val label = stringResource(R.string.hero_memory)
+    val safeMax = maxMb.coerceAtLeast(0L)
+    val safeUsed = usedMb.coerceIn(0L, if (safeMax > 0L) safeMax else usedMb)
+    val ratio = if (safeMax > 0L) (safeUsed.toFloat() / safeMax.toFloat()).coerceIn(0f, 1f) else 0f
+    val valueText = if (running) {
+        "${formatMemoryFull(safeUsed)} / ${formatMemoryFull(safeMax)}"
+    } else {
+        "-- / ${formatMemoryFull(safeMax)}"
+    }
+    HeroMeterBar(label = label, ratio = ratio, valueText = valueText)
+}
+
+/**
+ * Hero 卡片里的 CPU 水平进度条（与内存同款外形）。
+ *
+ * 与内存条唯一的区别是右侧数值为百分比，且**不受服务端运行状态影响**：
+ * CPU 是整机读数，服务端没跑也要显示当前占用。
+ */
+@Composable
+private fun CpuMeterBar(percent: Int?) {
+    val label = stringResource(R.string.hero_cpu)
+    val value = percent?.coerceIn(0, 100)
+    val ratio = (value ?: 0) / 100f
+    HeroMeterBar(label = label, ratio = ratio, valueText = value?.let { "$it%" } ?: "--")
+}
+
+/**
+ * Hero 卡片内「标签 + 水平进度条 + 右侧数值」的通用行。
+ *
+ * CPU 与内存共用同一外形（原 CPU 的环形条已按需求改为与内存一致的水平条）：
+ * 圆角轨道 + 渐变填充，底色针对深色渐变卡片用半透明白，保证在靛蓝背景上仍可辨认。
+ */
+@Composable
+private fun HeroMeterBar(label: String, ratio: Float, valueText: String) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clearAndSetSemantics { contentDescription = "$label, $valueText" }
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                label,
+                color = Color.White.copy(alpha = 0.75f),
+                fontSize = 9.sp
+            )
+            Spacer(Modifier.width(8.dp))
+            // 进度条占据剩余空间，右端留给数值文本。
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(7.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color.White.copy(alpha = 0.22f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(ratio.coerceIn(0f, 1f))
+                        .height(7.dp)
+                        .clip(RoundedCornerShape(4.dp))
+                        .background(
+                            Brush.linearGradient(listOf(MintBright, Mint))
+                        )
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Text(
+                valueText,
+                color = Color.White,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+/** 内存数值格式化：MB 输入，>=1024MB 用 GB 展示（保留一位小数），否则用 MB。 */
+private fun formatMemoryFull(mb: Long): String =
+    if (mb >= 1024) String.format(java.util.Locale.US, "%.1f GB", mb / 1024.0) else "${mb} MB"
 
 @Composable
 private fun HeroStat(value: String, label: String) {
@@ -551,9 +654,6 @@ fun SegPill(
     }
 }
 
-private fun formatMemory(mb: Long): String =
-    if (mb >= 1024) String.format("%.1fG", mb / 1024.0) else "${mb}M"
-
 /**
  * 防抖输入框：本地即时编辑 + 300ms 防抖写回外部值，失焦时立即写回。
  *
@@ -649,6 +749,145 @@ fun DebouncedTextField(
         textStyle = textStyle,
         shape = shape
     )
+}
+
+// ── EdgeCube 式网络状态组件 ────────────────────────────────────
+//
+// 借鉴 EdgeCube「网络映射页」的信息组织：状态用胶囊而不是纯文本，地址用带图标与
+// 复制按钮的小卡片，运行统计在位时才出现，失败原因单独成条而不是塞进状态文字里。
+
+/**
+ * 状态胶囊：圆角 12dp + 12% alpha 同色底 + 同色文字。
+ *
+ * 语义色沿用项目既有的三档：运行中 [Mint]、进行中（启动/探测）[Coral]、其余 [Muted]。
+ * 调用方负责按状态给色，本组件只负责画。
+ */
+@Composable
+fun StatusPill(text: String, color: Color, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(12.dp))
+            .background(color.copy(alpha = 0.12f))
+            .padding(horizontal = 10.dp, vertical = 3.dp)
+    ) {
+        Text(text, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+    }
+}
+
+/**
+ * 公网/局域网地址展示条：图标 + 标题 + 等宽加粗地址 + 一键复制。
+ *
+ * [value] 为空时不显示复制按钮——没有可复制的内容时留一个禁用按钮只会让人反复点。
+ */
+@Composable
+fun AddressCopyRow(
+    label: String,
+    value: String,
+    onCopy: () -> Unit,
+    icon: ImageVector = Icons.Outlined.Public,
+    accent: Color = Indigo,
+    containerColor: Color = FieldBg,
+    borderColor: Color? = null
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(containerColor)
+            .then(
+                if (borderColor != null) Modifier.border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                else Modifier
+            )
+            .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+        Spacer(Modifier.size(10.dp))
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(2.dp))
+            Text(
+                value,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        if (value.isNotBlank()) {
+            IconButton(onClick = onCopy) {
+                Icon(
+                    Icons.Outlined.ContentCopy,
+                    contentDescription = stringResource(R.string.s388),
+                    tint = accent
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 单行运行统计：小图标 + 说明文本。
+ *
+ * 只在隧道真正运行时才调用——未运行时不摆一排「0 B/s」占地方。
+ */
+@Composable
+fun StatLine(icon: ImageVector, text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, contentDescription = null, tint = Muted, modifier = Modifier.size(15.dp))
+        Spacer(Modifier.size(8.dp))
+        Text(text, color = Muted, fontSize = 11.sp)
+    }
+}
+
+/**
+ * 前提说明条：info 图标 + 说明文案。
+ *
+ * 用来讲清「这个功能只在什么条件下有效」，避免用户在不支持的环境下反复尝试。
+ */
+@Composable
+fun HintNote(text: String, icon: ImageVector = Icons.Outlined.Info) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(FieldBg)
+            .padding(12.dp)
+    ) {
+        Icon(icon, contentDescription = null, tint = Indigo, modifier = Modifier.size(16.dp))
+        Spacer(Modifier.size(8.dp))
+        Text(text, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
+    }
+}
+
+/**
+ * 失败/警告条：warning 图标 + 原因文案，用 Coral 系配色。
+ *
+ * 与 [HintNote] 分开是因为「当前出错了」和「使用前需知」的视觉权重不该一样。
+ */
+@Composable
+fun WarnNote(text: String) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(CoralSoft)
+            .border(1.dp, Coral, RoundedCornerShape(12.dp))
+            .padding(12.dp)
+    ) {
+        Icon(
+            Icons.Outlined.WarningAmber,
+            contentDescription = null,
+            tint = Coral,
+            modifier = Modifier.size(16.dp)
+        )
+        Spacer(Modifier.size(8.dp))
+        Text(text, color = Coral, fontSize = 11.sp, lineHeight = 16.sp)
+    }
 }
 
 /** QQ 交流群跳转链接 */

@@ -247,6 +247,14 @@ class TermuxRuntime(context: Context) {
     @Volatile private var cpuBaselineJiffies: Long = 0L
     @Volatile private var cpuBaselineAtElapsedMs: Long = 0L
 
+    // 整机 CPU 采样基线（/proc/stat 首行）。与进程级基线无关：
+    // 服务端未运行时也要有读数，所以它不跟随服务端启停重置。
+    @Volatile private var deviceCpuBaseline: DeviceCpuMath.Sample? = null
+
+    // cpufreq 频率比读数的短缓存：同一帧/同一秒内的重复调用直接复用，避免反复遍历 sysfs。
+    @Volatile private var cachedFreqCpuPercent: Int? = null
+    @Volatile private var cachedFreqCpuAtMs: Long = 0L
+
     val consoleFlow: SharedFlow<String> get() = executor.consoleFlow
 
     /**
@@ -260,7 +268,7 @@ class TermuxRuntime(context: Context) {
      * 崩溃报告因此拿不出任何证据（实测出现过「最近日志 共 0 行」）。
      *
      * 现在所有 [emitLog] 同时追加到这里，即便服务端零输出，
-     * 也能看到 MineServe 自己走到了哪一步、启动命令长什么样。
+     * 也能看到 Minexa 自己走到了哪一步、启动命令长什么样。
      */
     private val appLogFile: File
         get() = File(installer.rootDir, "home/logs/mineserve.log")
@@ -321,7 +329,7 @@ class TermuxRuntime(context: Context) {
     }
 
     /**
-     * 读取应用侧日志的尾部若干行，供崩溃报告补充「MineServe 视角」的上下文。
+     * 读取应用侧日志的尾部若干行，供崩溃报告补充「Minexa 视角」的上下文。
      * 文件不存在或为空时返回空列表（调用方据此区分「没有」和「空」）。
      */
     fun readAppLogTail(maxLines: Int = 400): List<String> {
@@ -917,7 +925,7 @@ class TermuxRuntime(context: Context) {
             conn.connectTimeout = 20_000
             conn.readTimeout = 60_000
             conn.instanceFollowRedirects = true
-            conn.setRequestProperty("User-Agent", "MineServeMobile/1.0 (Android)")
+            conn.setRequestProperty("User-Agent", "Minexa/1.0 (Android)")
             if (conn.responseCode !in 200..299) return false
             conn.inputStream.use { input ->
                 target.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
@@ -982,7 +990,6 @@ class TermuxRuntime(context: Context) {
             InstallStep.Jdk -> isJavaInstalled(JavaVersion.Java17)
             InstallStep.Wget -> hasExecutable("bin/wget", "usr/bin/wget", "data/data/com.termux/files/usr/bin/wget") &&
                 File(prefix, "etc/fonts/fonts.conf").isFile
-            InstallStep.Frp -> hasExecutable("bin/frpc", "usr/bin/frpc", "data/data/com.termux/files/usr/bin/frpc")
             InstallStep.Rclone -> hasExecutable("bin/rclone", "usr/bin/rclone", "data/data/com.termux/files/usr/bin/rclone")
             InstallStep.Proot -> hasExecutable("bin/proot", "usr/bin/proot")
         }
@@ -1499,7 +1506,7 @@ class TermuxRuntime(context: Context) {
             connectTimeout = 20_000
             readTimeout = 60_000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "MineServeMobile/1.0")
+            setRequestProperty("User-Agent", "Minexa/1.0")
         }
         try {
             connection.connect()
@@ -2498,7 +2505,7 @@ class TermuxRuntime(context: Context) {
      *
      * 背景：Termux 官方打包的脚本（pkg、apt-get、termux-* 等）shebang 与内容里都硬编码
      * /data/data/com.termux/files/usr/...（如 pkg 第 11 行调用 termux-setup-package-manager）。
-     * 这些路径指向其他 app（com.termux）目录，MineServe 进程跨 app 执行被拒 →
+     * 这些路径指向其他 app（com.termux）目录，Minexa 进程跨 app 执行被拒 →
      * "Permission denied"（退出码 126 / 1）。
      *
      * 修复：把 shebang（第一行）与内容中的 Termux 路径改写为自身 rootfs 路径 $PREFIX；
@@ -4329,6 +4336,96 @@ class TermuxRuntime(context: Context) {
         } catch (e: Exception) {
             null
         }
+    }
+
+    /**
+     * 整机 CPU 总使用率（%），0..100。
+     *
+     * ## 数据源优先级（2026-10 修正：主次曾经颠倒）
+     * 1. **procfs 增量**（主）：读 `/proc/stat` 首行 `cpu` 的累计计数，
+     *    与上一次采样做差算「非空闲增量 / 总增量」。这是与系统工具同源的口径，
+     *    反映的是**真实调度结果**。
+     * 2. **cpufreq 频率比**（回退）：仅在 /proc/stat 不可用（部分内核/沙箱不暴露）
+     *    或首次采样尚无基线时使用。它读的是调频器**请求**的频率，与真实占用率只是
+     *    相关而非等价：schedutil/boost 会让空闲时也维持高频率、`cpuinfo_max_freq`
+     *    在很多设备上是 boost 上限、big.LITTLE 各核区间不同却被朴素平均——
+     *    因此只能当作粗略代理，**不作为主数据源**。
+     *
+     * `/proc/stat` 首次调用只建立基线并返回 null（没有可比较的前值），
+     * 此时会落到 cpufreq 先给一个粗略值，下一次采样起即由主路径接管。
+     * 两条路径都拿不到值时返回 null，UI 显示 `--`。
+     *
+     * **不按核心数归一化** —— 整机口径本身就是 0..100（见 [DeviceCpuMath]）。
+     * 与 [mcProcessCpuPercent] 不同：这里不关心服务端是否运行，未运行时也照常给出整机读数。
+     */
+    fun deviceCpuPercent(): Int? {
+        // 主路径：/proc/stat 两次采样增量（与系统工具同源，反映真实调度结果）。
+        runCatching { deviceCpuPercentFromProcStat() }.getOrNull()?.let { return it }
+        // 回退路径：cpufreq 频率比，仅在无 /proc/stat 基线或读不到时提供一个粗略值。
+        return runCatching { deviceCpuPercentFromFreqs() }.getOrNull()
+    }
+
+    /**
+     * 用各 CPU 核心的 cpufreq 频率比估算整机使用率（**回退路径**，非主数据源）。
+     *
+     * 只读 sysfs（不涉及 procfs 权限），用于 /proc/stat 不可用或尚无基线时给一个粗略值。
+     * 准确性有限：读的是调频器请求的频率而非真实占用（详见 [deviceCpuPercent] 注释）。
+     * 读不到任何核心时返回 null。
+     * 结果按 1 秒缓存：sysfs 是小文件但核心多、调用频繁时没必要每次都遍历，
+     * 采样周期本身是 15s 级，1s 缓存完全够用且能挡住同一帧内的重复读取。
+     */
+    private fun deviceCpuPercentFromFreqs(): Int? {
+        val now = android.os.SystemClock.elapsedRealtime()
+        val cached = cachedFreqCpuPercent
+        if (cached != null && now - cachedFreqCpuAtMs < FREQ_CPU_CACHE_MS) return cached
+        val cpuBase = File("/sys/devices/system/cpu")
+        val coreDirs = cpuBase.listFiles { f ->
+            f.isDirectory && f.name.startsWith("cpu") &&
+                f.name.length > 3 && f.name.substring(3).all { it.isDigit() }
+        } ?: return null
+        if (coreDirs.isEmpty()) return null
+        val freqs = coreDirs.mapNotNull { dir ->
+            val freqDir = File(dir, "cpufreq")
+            val cur = readLongFromFile(File(freqDir, "scaling_cur_freq"))
+            val min = readLongFromFile(File(freqDir, "cpuinfo_min_freq"))
+            val max = readLongFromFile(File(freqDir, "cpuinfo_max_freq"))
+            // 任一节点缺失（readLongFromFile 返回 -1）就跳过该核。
+            if (cur < 0L || min < 0L || max < 0L) null
+            else DeviceCpuMath.CoreFreq(curKhz = cur, minKhz = min, maxKhz = max)
+        }
+        val percent = DeviceCpuMath.percentFromFreqs(freqs) ?: return null
+        cachedFreqCpuPercent = percent
+        cachedFreqCpuAtMs = now
+        return percent
+    }
+
+    /** 读 sysfs 中的整型数值；文件不存在或读取失败返回 -1。 */
+    private fun readLongFromFile(file: File): Long = try {
+        if (!file.isFile) -1L
+        else file.bufferedReader().use { it.readLine()?.trim()?.toLongOrNull() } ?: -1L
+    } catch (e: Exception) {
+        -1L
+    }
+
+    /** cpufreq 读数的复用窗口：采样周期是 15s 级，1s 内没必要重复遍历 sysfs。 */
+    private val FREQ_CPU_CACHE_MS = 1_000L
+
+    /**
+     * 用 `/proc/stat` 首行的累计计数增量估算整机使用率（cpufreq 不可用时的回退）。
+     *
+     * - 首次调用只建立基线返回 null。
+     * - 读取/解析失败返回 null，但**保留旧基线**，否则一次偶发失败会让下一次读数也被吞掉。
+     */
+    private fun deviceCpuPercentFromProcStat(): Int? {
+        val statFile = File("/proc/stat")
+        val firstLine: String? = if (statFile.isFile) statFile.bufferedReader().use { it.readLine() } else null
+        val sample: DeviceCpuMath.Sample? = firstLine?.let { DeviceCpuMath.parse(it) }
+        if (sample == null) {
+            return null
+        }
+        val prev = deviceCpuBaseline
+        deviceCpuBaseline = sample
+        return if (prev == null) null else DeviceCpuMath.percent(sample, prev)
     }
 
     private var cachedCoreCount: Int = 0

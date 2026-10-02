@@ -21,8 +21,18 @@ object SakuraFrpApi {
     private const val BASE = "https://api.natfrp.com/v4"
     private const val TIMEOUT_MS = 15_000
 
-    /** 本应用自带的上游原版 frpc 版本（/tunnel/config 需声明目标版本） */
-    private const val FRPC_VERSION = "0.69.1"
+    /**
+     * 向平台声明的目标 frpc 版本（`/tunnel/config` 需要它）。
+     *
+     * 声明的版本决定平台按哪套字段集生成配置：声明得比用户实际导入的引擎旧，
+     * 平台就会下发老格式，引擎不认识其中的字段，于是 `unknown field` 直接退出。
+     *
+     * 引擎如今由用户自行导入到数据目录（见 FrpcRuntime），版本不再由本文件决定，
+     * 所以这里只能取一个「较新且已知可用」的值作为默认。用户若导入了更旧的引擎，
+     * 需自行承担字段集不匹配的风险 —— 出错时引擎会打印不认识的字段名，
+     * 应用也会在诊断信息里提示导入更新版本。
+     */
+    private const val FRPC_VERSION = "0.71.0"
 
     class ApiException(message: String) : Exception(message)
 
@@ -185,7 +195,7 @@ object SakuraFrpApi {
             put("node", node.toIntOrNull() ?: 0)
             put("name", name)
             put("type", type)
-            put("note", "Create By MineServe")
+            put("note", "Create By Minexa")
             put("local_ip", localIp)
             put("local_port", localPort)
             if (remotePort != null) put("remote", "$remotePort")

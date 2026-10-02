@@ -45,6 +45,8 @@ import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PlayerManager
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
+import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
+import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntimeDownloader
 import com.mineserve.mobile.server.PowerNukkitXConfigManager
 import com.mineserve.mobile.server.PowerNukkitXLayout
 import com.mineserve.mobile.server.ServerImporter
@@ -540,6 +542,121 @@ class McViewModel(
     /** 隧道运行状态，UI 层订阅展示 */
     val tunnelState: StateFlow<TunnelState> = tunnelManager.state
 
+    // ── frpc 引擎（内置引擎，不依赖 Termux） ────────────────────────
+
+    /** frpc 引擎信息快照，供隧道页展示「已安装 / 未安装」。 */
+    data class FrpcEngineInfo(
+        val installed: Boolean = false,
+        val version: String? = null,
+        val sizeBytes: Long = 0,
+        val sha256: String? = null
+    )
+
+    private val _frpcEngine = MutableStateFlow(FrpcEngineInfo())
+    val frpcEngine: StateFlow<FrpcEngineInfo> = _frpcEngine.asStateFlow()
+
+    /** 引擎导入结果提示，一次性消费后清空。 */
+    private val _frpcEngineMessage = MutableStateFlow<String?>(null)
+    val frpcEngineMessage: StateFlow<String?> = _frpcEngineMessage.asStateFlow()
+
+    fun clearFrpcEngineMessage() {
+        _frpcEngineMessage.value = null
+    }
+
+    private val frpcRuntime get() = tunnelManager.frpcRuntime
+
+    /** 刷新 frpc 引擎状态（含 SHA-256 计算，走 IO 线程）。 */
+    fun refreshFrpcEngine() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val installed = frpcRuntime.isInstalled()
+            _frpcEngine.value = FrpcEngineInfo(
+                installed = installed,
+                version = if (installed) frpcRuntime.installedVersion else null,
+                sizeBytes = if (installed) frpcRuntime.engineFile.length() else 0,
+                sha256 = if (installed) frpcRuntime.engineSha256() else null
+            )
+        }
+    }
+
+    /** 在线下载状态。未配置下载源时 UI 不显示下载入口，这个状态也就一直是 Idle。 */
+    sealed interface DownloadState {
+        data object Idle : DownloadState
+        data class Downloading(val fraction: Float) : DownloadState
+    }
+
+    private val _frpcDownload = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val frpcDownload: StateFlow<DownloadState> = _frpcDownload.asStateFlow()
+
+    /** 是否配置了在线下载源；没配置时 UI 只保留本地导入。 */
+    val frpcOnlineAvailable: Boolean get() = FrpcEngineConfig.isConfigured
+
+    /**
+     * 在线下载并安装引擎。
+     *
+     * 下载失败**不动**已有引擎（[FrpcRuntimeDownloader] 保证）：用户可能只是想升级，
+     * 升级失败却把当前可用的版本弄没了，那是最糟的结果。所以这里失败只提示，不清理。
+     */
+    fun downloadFrpcEngine() {
+        if (_frpcDownload.value is DownloadState.Downloading) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _frpcDownload.value = DownloadState.Downloading(-1f)
+            try {
+                val downloader = FrpcRuntimeDownloader(frpcRuntime)
+                val manifest = downloader.fetchManifest()
+                val result = downloader.downloadAndInstall(manifest) { fraction ->
+                    _frpcDownload.value = DownloadState.Downloading(fraction)
+                }
+                _frpcEngineMessage.value = "引擎下载完成" +
+                    (result.version?.let { "（版本 $it）" } ?: "")
+            } catch (e: Exception) {
+                _frpcEngineMessage.value = "下载失败：${e.message ?: "网络不可用"}"
+            } finally {
+                _frpcDownload.value = DownloadState.Idle
+                refreshFrpcEngine()
+            }
+        }
+    }
+
+    /**
+     * 从用户选中的文件导入 frpc 引擎（libfrpc.so）。
+     *
+     * 校验在 [com.mineserve.mobile.server.tunnel.frpc.FrpcRuntime.install] 内完成
+     * （体积 / ELF 魔数 / arm64 架构）。校验失败时**不覆盖**已装引擎 ——
+     * 用户手上未必还有第二份可用的引擎。
+     */
+    fun importFrpcEngine(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val name = queryDisplayName(uri)
+                app.contentResolver.openInputStream(uri)?.use { input ->
+                    frpcRuntime.install(input, name)
+                } ?: throw IllegalStateException("无法读取所选文件")
+                _frpcEngineMessage.value = "引擎导入成功" +
+                    (frpcRuntime.installedVersion?.let { "（版本 $it）" } ?: "")
+                refreshFrpcEngine()
+            } catch (e: Exception) {
+                _frpcEngineMessage.value = "导入失败：${e.message}"
+            }
+        }
+    }
+
+    /** 卸载 frpc 引擎。 */
+    fun uninstallFrpcEngine() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = frpcRuntime.uninstall()
+            _frpcEngineMessage.value = if (ok) "引擎已卸载" else "卸载失败，请重试"
+            refreshFrpcEngine()
+        }
+    }
+
+    /** 取 SAF 文件的显示名，仅用于从文件名里认引擎版本号。 */
+    private fun queryDisplayName(uri: Uri): String? = runCatching {
+        app.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
+        }
+    }.getOrNull()
+
     // ── 软件更新（GitHub Releases） ──────────────────────────────────
 
     /** 更新界面状态 */
@@ -785,6 +902,16 @@ class McViewModel(
     /** Samples values that belong to the selected server. */
     private fun startServerResourceCollection() {
         viewModelScope.launch {
+            // 首屏尽快出值：原来开局先 delay(15s)，加上「首次采样只建基线」的语义，
+            // 用户进界面后可能半分钟都看不到 CPU/内存。这里先立即采一次轻量数据
+            // （不扫服务端目录），再做原来的 15s 周期循环。
+            withContext(Dispatchers.IO) { collectServerResourcesOnce(includeDirectorySize = false) }
+            // 整机 CPU 走 /proc/stat 两次采样求差值，首次调用只建基线、拿不到读数。
+            // 若等到 15s 后的下一轮才采第二次，进界面后会有十几秒显示 `--`；
+            // 这里隔 1.2s 补采一次（采样窗口 ≥1s 才有意义），让主路径尽快出真实值，
+            // 期间 UI 会由 cpufreq 回退路径先给一个粗略值兜底。
+            delay(1_200)
+            withContext(Dispatchers.IO) { collectServerResourcesOnce(includeDirectorySize = false) }
             // Defer the first recursive server-directory scan until the first screen settles.
             delay(15_000)
             while (true) {
@@ -889,6 +1016,9 @@ class McViewModel(
             val effectiveMemory = cachedMemoryMb.takeIf { running && it > 0L }
             // 服务端进程自身 CPU（支持多线程超过 100%），不可用或未运行时为 null。
             val cpu = if (running) repo.termuxRuntime.mcProcessCpuPercent() else null
+            // 整机 CPU 总使用率：与 running 解耦，服务端未运行时也要有读数；
+            // 首次调用只建立基线返回 null，下一次周期采样即拿到真实值。
+            val deviceCpu = repo.termuxRuntime.deviceCpuPercent()
             if (running && now - cachedJavaAvailableAtMs >= 60_000L) {
                 cachedJavaAvailable = repo.termuxRuntime.isJavaInstalled(cfg.selectedJavaVersion, cfg.selectedJavaVendor)
                 cachedJavaAvailableAtMs = now
@@ -897,6 +1027,7 @@ class McViewModel(
             val newStats = ServerResourceStats(
                 processMemoryMb = effectiveMemory,
                 cpuPercent = cpu,
+                deviceCpuPercent = deviceCpu,
                 availableBytes = available,
                 directoryBytes = directoryBytes,
                 javaAvailable = javaAvailable,
@@ -908,6 +1039,7 @@ class McViewModel(
             if (force ||
                 prev.processMemoryMb != newStats.processMemoryMb ||
                 prev.cpuPercent != newStats.cpuPercent ||
+                prev.deviceCpuPercent != newStats.deviceCpuPercent ||
                 prev.availableBytes != newStats.availableBytes ||
                 prev.directoryBytes != newStats.directoryBytes ||
                 prev.javaAvailable != newStats.javaAvailable
@@ -2216,6 +2348,10 @@ class McViewModel(
         viewModelScope.launch {
             try {
                 tunnelManager.start(config.value)
+                // 注意：STUN 等后端的 start() 是**异步就绪**的——它立即返回，
+                // 实际探测在后台进行，就绪/失败稍后经 tunnelState 反映。
+                // 因此这里只能提示「正在启动」，不能按 Running 判定成功，
+                // 否则网络慢时会误报失败。结果由界面观察 tunnelState 得出。
                 val st = tunnelState.value
                 when (st.status) {
                     TunnelStatus.Running -> {

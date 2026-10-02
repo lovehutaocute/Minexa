@@ -102,7 +102,7 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
 
     fun copyToClipboard(text: String) {
         val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("MineServe MCP", text))
+        cm.setPrimaryClip(ClipData.newPlainText("Minexa MCP", text))
         Toast.makeText(context, R.string.mcp_copied, Toast.LENGTH_SHORT).show()
     }
 

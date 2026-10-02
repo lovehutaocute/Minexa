@@ -62,6 +62,7 @@ enum class ServerCore(val displayName: String) {
 enum class TunnelType(val displayName: String, val description: String) {
     Frp("frp", "自建服务器，功能最全，支持自定义端口"),
     Bore("bore", "自建服务器，协议最简，纯手机端运行无需下载二进制"),
+    Stun("STUN 直连", "无需服务器，全锥形 NAT 下直连，带宽即家宽上行"),
     SakuraFrp("SakuraFrp", "填入 Token 管理隧道，官方节点，无需自建服务器"),
     MeFrp("ME Frp", "填入 Token 管理隧道，免费节点，无需自建服务器")
 }
@@ -132,7 +133,6 @@ enum class AptMirror(val displayName: String, val url: String) {
 enum class InstallStep(val label: String) {
     Jdk("JDK 17 运行环境"),
     Wget("Wget 下载工具"),
-    Frp("Frp 内网穿透"),
     Rclone("Rclone 远程挂载"),
     Proot("PRoot 兼容层")
 }
@@ -535,6 +535,26 @@ data class McConfig(
     val meFrpToken: String = "",
     /** ME Frp: 选中的隧道（代理）ID（启动时据此拉取官方配置） */
     val meFrpTunnelId: String = "",
+    /**
+     * STUN: 转发目标本地端口；0 表示跟随 [localPort]（MC 服务端实际监听端口）。
+     */
+    val stunLocalPort: Int = 0,
+    /** STUN: 并发转发连接数上限，超出的入站连接直接拒绝 */
+    val stunMaxConnections: Int = 128,
+    /** STUN: 保活探测间隔（秒），同时用于发现公网地址变化 */
+    val stunKeepAliveSeconds: Int = 20,
+    /**
+     * STUN: 转发前是否发送 PROXY protocol v2 头。
+     *
+     * 开启后服务端才能看到玩家真实 IP（否则只有 127.0.0.1），但**服务端必须自行
+     * 开启对应支持**（Paper/Velocity 等的 proxy_protocol 选项），否则这些字节会被
+     * 当作协议数据，玩家直接进不来。故默认关闭。
+     */
+    val stunProxyProtocol: Boolean = false,
+    /** STUN: 是否把每条入站连接的建立/断开写进隧道日志 */
+    val stunShowConnectionLog: Boolean = true,
+    /** STUN: 自定义 STUN 服务器（host 或 host:port）；留空使用内置列表 */
+    val stunServers: String = "",
     val maxHeapMb: Int = 1024,            // -Xmx JVM 堆上限，按设备 RAM 给推荐值
     val autoRestartOnCrash: Boolean = false, // 默认关闭省电，避免误触发
     /**
@@ -764,7 +784,7 @@ enum class StartupPhase(val label: String, val progress: Float) {
  * 这是本函数最容易出错的地方。有两类中文日志都要认：
  *
  * ### 1. 服务端自己的中文输出
- * MineServe 打包的服务端（Fabric/Forge 等）在中文环境下会输出：
+ * Minexa 打包的服务端（Fabric/Forge 等）在中文环境下会输出：
  * ```
  * 正在加载 Minecraft server
  * 正在加载 required files

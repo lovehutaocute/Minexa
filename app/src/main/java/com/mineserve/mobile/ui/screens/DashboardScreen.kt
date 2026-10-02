@@ -240,11 +240,8 @@ fun DashboardScreen(
 
             // 一卡一 item：恢复 LazyColumn 虚拟化。状态刷新只 invalidate 单卡布局，
             // 首屏组合分摊、视口外卡片延迟组合，避免滚动帧与整树重布局冲突（高压环境掉帧根因之一）。
-            item {
-                // 原「运行诊断」卡片已折叠为资源卡片右上角的警示图标入口（点击进入诊断页）。
-                DashboardResourceCard(vm = vm, onShowDiagnostics = onShowDiagnostics)
-            }
-
+            // 原「服务端资源」卡片已删除（其内存信息并入 Hero 卡片，诊断入口移到启动卡片）；
+            // 直接移除该 item，下方卡片由 LazyColumn 自动上移，不留空白。
             item {
                 // ── MC 终端入口（设备状态卡片下方） ──
                 DashboardBootstrapCard(
@@ -265,6 +262,7 @@ fun DashboardScreen(
                     vm = vm,
                     isBootstrapped = isBootstrapped,
                     onShowSettings = { showStartSettings = true },
+                    onShowDiagnostics = onShowDiagnostics,
                     onShowMessage = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
                 )
             }
@@ -360,6 +358,7 @@ private fun DashboardCoreSelectionCard(
     vm: McViewModel,
     isBootstrapped: Boolean,
     onShowSettings: () -> Unit,
+    onShowDiagnostics: () -> Unit,
     onShowMessage: (String) -> Unit
 ) {
     val installedCores by vm.config
@@ -428,21 +427,57 @@ private fun DashboardCoreSelectionCard(
         )
     }
 
+    // 「运行诊断」入口原在已删除的「服务端资源」卡片右上角，现移到本卡片齿轮左侧。
+    // 颜色/文案语义保持不变：修复中/诊断中=Indigo，未诊断=Muted，通过=Mint，有问题=Coral，
+    // 结论文案挂 contentDescription，读屏仍能获知诊断结果。
+    val diagnosticReport by vm.diagnosticReport.collectAsState()
+    val isDiagnosing by vm.isDiagnosing.collectAsState()
+    val isRepairingRuntime by vm.isRepairingRuntime.collectAsState()
+    val diagnosticIssues = diagnosticReport.issueCount
+    val diagnosticSummary = when {
+        isRepairingRuntime -> stringResource(R.string.dash_diag_repairing)
+        isDiagnosing -> stringResource(R.string.dash_diag_running)
+        diagnosticReport.generatedAtMs == 0L -> stringResource(R.string.dash_diag_not_run)
+        diagnosticIssues == 0 -> stringResource(R.string.dash_diag_pass)
+        else -> stringResource(R.string.dash_diag_issues, diagnosticIssues)
+    }
+    val diagnosticTint = when {
+        isRepairingRuntime || isDiagnosing -> Indigo
+        diagnosticReport.generatedAtMs == 0L -> Muted
+        diagnosticIssues == 0 -> Mint
+        else -> Coral
+    }
+
     McCard(
         title = stringResource(R.string.s368),
         compact = true,
         trailing = {
-            // 较大的齿轮入口：命中区 40dp、图标 24dp，与标题行 14sp 字重相称。
-            IconButton(
-                onClick = onShowSettings,
-                modifier = Modifier.size(40.dp)
-            ) {
-                Icon(
-                    Icons.Outlined.Settings,
-                    contentDescription = stringResource(R.string.s378),
-                    tint = Indigo,
-                    modifier = Modifier.size(24.dp)
-                )
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                // 诊断入口（警示图标）排在齿轮左侧；命中区与图标沿用原资源卡片中的收敛尺寸，
+                // 但为避免与 40dp 齿轮并排时命中区过小，这里统一到 36dp / 18dp。
+                IconButton(
+                    onClick = onShowDiagnostics,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.Warning,
+                        contentDescription = diagnosticSummary,
+                        tint = diagnosticTint,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
+                // 较大的齿轮入口：命中区 40dp、图标 24dp，与标题行 14sp 字重相称。
+                IconButton(
+                    onClick = onShowSettings,
+                    modifier = Modifier.size(40.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.Settings,
+                        contentDescription = stringResource(R.string.s378),
+                        tint = Indigo,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
             }
         }
     ) {
@@ -596,7 +631,15 @@ private fun DashboardDependenciesCard(
     val depsInstalled = dependencySteps.isNotEmpty() && dependencySteps.all {
         it.status == com.mineserve.mobile.data.StepStatus.Done
     }
-    if (!depsInstalled) {
+    // frpc 引擎也纳入首启检测。
+    //
+    // 它不在 InstallStep 里（不经 Termux apt，而是联网下载独立引擎），但同样是
+    // frp 系隧道能启动的前提。首启时不提示，用户配好隧道点启动才会撞上
+    // 「引擎未安装」，那时他已经离开了这个页面。
+    val engine by vm.frpcEngine.collectAsState()
+    val download by vm.frpcDownload.collectAsState()
+    LaunchedEffect(Unit) { vm.refreshFrpcEngine() }
+    if (!depsInstalled || !engine.installed) {
         McCard(
             title = stringResource(R.string.s357),
             compact = true,
@@ -625,6 +668,15 @@ private fun DashboardDependenciesCard(
                 }
                 StepRow(name = "${idx + 1}. ${step.step.label}", status = step.status, tag = tag)
             }
+            // 引擎排在依赖之后，同样用 StepRow 保持视觉一致。
+            StepRow(
+                name = "${dependencySteps.size + 1}. ${stringResource(R.string.frpc_engine_title)}",
+                status = if (engine.installed) com.mineserve.mobile.data.StepStatus.Done
+                else com.mineserve.mobile.data.StepStatus.Wait,
+                tag = stringResource(
+                    if (engine.installed) R.string.s361 else R.string.s363
+                )
+            )
             Spacer(Modifier.height(10.dp))
             ProgressTrack(percent = progress)
             Spacer(Modifier.height(12.dp))
@@ -648,6 +700,30 @@ private fun DashboardDependenciesCard(
                     color = Color.White,
                     fontWeight = FontWeight.SemiBold
                 )
+            }
+            // 引擎独立于 apt 依赖，单独一个按钮：它走联网下载，与上面那条
+            // Termux 安装流程不是一回事，混在一个按钮里无法表达"只缺引擎"。
+            if (!engine.installed) {
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(
+                    onClick = { vm.downloadFrpcEngine() },
+                    enabled = download !is McViewModel.DownloadState.Downloading && vm.frpcOnlineAvailable,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    val downloading = download is McViewModel.DownloadState.Downloading
+                    if (downloading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        Spacer(Modifier.size(8.dp))
+                    }
+                    Text(
+                        (download as? McViewModel.DownloadState.Downloading)
+                            ?.fraction?.takeIf { it >= 0f }
+                            ?.let { "${stringResource(R.string.frpc_engine_downloading)} ${(it * 100).toInt()}%" }
+                            ?: stringResource(R.string.frpc_engine_download),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         }
     }
@@ -775,6 +851,10 @@ private fun DashboardHeroBlock(
         .map { it.skipStartupProgress }
         .distinctUntilChanged()
         .collectAsState(initial = false)
+    val maxHeapMb by vm.config
+        .map { it.maxHeapMb }
+        .distinctUntilChanged()
+        .collectAsState(initial = 1024)
     val serverProperties by vm.serverProperties.collectAsState()
     val onlineModeEnabled = serverProperties["online-mode"]
         ?.trim()
@@ -782,7 +862,8 @@ private fun DashboardHeroBlock(
     HeroBlock(
         state = heroState,
         coreLabel = coreLabel,
-        cpuPercent = resources.cpuPercent,
+        cpuPercent = resources.deviceCpuPercent,
+        maxHeapMb = maxHeapMb,
         onlineModeEnabled = onlineModeEnabled,
         isRefreshing = isRefreshingStatus,
         lastRefreshAtMs = lastRefreshAtMs,
@@ -848,101 +929,6 @@ private fun DashboardPluginsCard(vm: McViewModel) {
             } else {
                 Text(stringResource(R.string.s392, installedPlugins.size), fontSize = 11.sp)
             }
-        }
-    }
-}
-
-@Composable
-private fun DashboardResourceCard(vm: McViewModel, onShowDiagnostics: () -> Unit) {
-    val maxHeapMb by vm.config.map { it.maxHeapMb }.distinctUntilChanged().collectAsState(initial = 1024)
-    val javaVersionName by vm.config.map { it.selectedJavaVersion.displayName }.distinctUntilChanged().collectAsState(initial = JavaVersion.Java17.displayName)
-    val resources by vm.serverResources.collectAsState()
-    // 原「运行诊断」卡片折叠为标题栏右侧的警示图标：
-    // 颜色沿用原卡片语义（修复中/诊断中=Indigo，未诊断=Muted，通过=Mint，有问题=Coral），
-    // 原来的结论文案改挂 contentDescription，读屏仍能获知诊断结果。
-    val diagnosticReport by vm.diagnosticReport.collectAsState()
-    val isDiagnosing by vm.isDiagnosing.collectAsState()
-    val isRepairingRuntime by vm.isRepairingRuntime.collectAsState()
-    val diagnosticIssues = diagnosticReport.issueCount
-    val diagnosticSummary = when {
-        isRepairingRuntime -> stringResource(R.string.dash_diag_repairing)
-        isDiagnosing -> stringResource(R.string.dash_diag_running)
-        diagnosticReport.generatedAtMs == 0L -> stringResource(R.string.dash_diag_not_run)
-        diagnosticIssues == 0 -> stringResource(R.string.dash_diag_pass)
-        else -> stringResource(R.string.dash_diag_issues, diagnosticIssues)
-    }
-    val diagnosticTint = when {
-        isRepairingRuntime || isDiagnosing -> Indigo
-        diagnosticReport.generatedAtMs == 0L -> Muted
-        diagnosticIssues == 0 -> Mint
-        else -> Coral
-    }
-    val memText = resources.processMemoryMb?.let { "${it} MB / $maxHeapMb MB" } ?: stringResource(R.string.dash_res_not_running)
-    val spaceText = resources.availableBytes?.let(::formatServerBytes) ?: stringResource(R.string.dash_res_na)
-    val javaText = if (resources.javaAvailable) {
-        stringResource(R.string.dash_res_java_ready, javaVersionName)
-    } else {
-        stringResource(R.string.dash_res_java_unavail, javaVersionName)
-    }
-    val dirText = resources.directoryBytes?.let(::formatServerBytes) ?: stringResource(R.string.dash_res_na)
-    McCard(
-        title = stringResource(R.string.dash_res_title),
-        compact = true,
-        trailing = {
-            // compact 标题行高度有限，IconButton 默认 48dp 会把标题行撑高，这里收敛到 28dp。
-            IconButton(
-                onClick = onShowDiagnostics,
-                modifier = Modifier.size(28.dp)
-            ) {
-                Icon(
-                    Icons.Outlined.Warning,
-                    contentDescription = diagnosticSummary,
-                    tint = diagnosticTint,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-        }
-    ) {
-        Column(
-            modifier = Modifier.clearAndSetSemantics {
-                contentDescription = listOf(memText, spaceText, javaText, dirText).joinToString(", ")
-            }
-        ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            DeviceStatCell(
-                label = stringResource(R.string.dash_res_mem),
-                value = resources.processMemoryMb?.let { "${it} MB / $maxHeapMb MB" }
-                    ?: stringResource(R.string.dash_res_not_running),
-                modifier = Modifier.weight(1f)
-            )
-            DeviceStatCell(
-                label = stringResource(R.string.dash_res_space),
-                value = resources.availableBytes?.let(::formatServerBytes)
-                    ?: stringResource(R.string.dash_res_na),
-                modifier = Modifier.weight(1f)
-            )
-            DeviceStatCell(
-                label = "Java",
-                value = if (resources.javaAvailable) {
-                    stringResource(R.string.dash_res_java_ready, javaVersionName)
-                } else {
-                    stringResource(R.string.dash_res_java_unavail, javaVersionName)
-                },
-                modifier = Modifier.weight(1f)
-            )
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            stringResource(
-                R.string.dash_res_dir_usage,
-                resources.directoryBytes?.let(::formatServerBytes) ?: stringResource(R.string.dash_res_na)
-            ),
-            color = Muted,
-            fontSize = 11.sp
-        )
         }
     }
 }
@@ -1031,30 +1017,6 @@ private fun formatSpeedShort(bytesPerSec: Long): String {
         bytesPerSec >= 1_048_576 -> String.format("%.1f MB/s", bytesPerSec / 1_048_576.0)
         bytesPerSec >= 1024 -> String.format("%.0f KB/s", bytesPerSec / 1024.0)
         else -> "$bytesPerSec B/s"
-    }
-}
-
-private fun formatServerBytes(bytes: Long): String = when {
-    bytes >= 1_073_741_824L -> String.format(java.util.Locale.US, "%.1f GB", bytes / 1_073_741_824.0)
-    bytes >= 1_048_576L -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1_048_576.0)
-    bytes >= 1_024L -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1_024.0)
-    else -> "$bytes B"
-}
-
-// ── 设备状态卡片辅助组件 ────────────────────────────────────────────
-
-@Composable
-private fun DeviceStatCell(label: String, value: String, modifier: Modifier = Modifier) {
-    Column(modifier = modifier) {
-        Text(label, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-        Spacer(Modifier.height(2.dp))
-        Text(
-            value,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
     }
 }
 

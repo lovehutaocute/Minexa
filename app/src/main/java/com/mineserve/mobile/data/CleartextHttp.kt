@@ -25,7 +25,7 @@ import java.util.Locale
 internal object CleartextHttp {
 
     /** 默认 UA，与 [MultiThreadDownloader] 保持一致，避免同一应用出现两种身份。 */
-    const val DEFAULT_USER_AGENT = "MineServeMobile/1.0 (Android)"
+    const val DEFAULT_USER_AGENT = "Minexa/1.0 (Android)"
 
     /** 最多跟随的重定向次数，防止环状重定向把下载卡死。 */
     const val MAX_REDIRECTS = 5

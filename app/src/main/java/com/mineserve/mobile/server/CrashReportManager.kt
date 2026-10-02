@@ -66,7 +66,7 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             val sb = StringBuilder()
             // ── 头部 ──
             sb.appendLine("====================================")
-            sb.appendLine("MineServeMobile 崩溃报告")
+            sb.appendLine("Minexa 崩溃报告")
             sb.appendLine("时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(now)}")
             sb.appendLine("退出码: $exitCode")
             sb.appendLine("进程状态: 异常退出")
@@ -104,13 +104,13 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             // 背景：latest.log 只装「MC 服务端自己输出的内容」。一旦服务端在启动阶段
             // 就失败（例如启动命令不完整、Java 缺失、核心不匹配），它一个字节都不会输出，
             // 报告就只剩「共 0 行」——没有任何诊断价值。而真正的原因往往记录在
-            // MineServe 自己的日志里（java 路径解析、启动命令、缺库警告）。
+            // Minexa 自己的日志里（java 路径解析、启动命令、缺库警告）。
             //
             // 因此这里把 app 侧日志作为独立小节补出来，并明确标注状态，
             // 避免读者再对着一个空文件猜。
             val appLogLines = termux.readAppLogTail()
             if (appLogLines.isNotEmpty()) {
-                sb.appendLine("--- MineServe 应用日志 (最后 ${minOf(400, appLogLines.size)} 行，共 ${appLogLines.size} 行) ---")
+                sb.appendLine("--- Minexa 应用日志 (最后 ${minOf(400, appLogLines.size)} 行，共 ${appLogLines.size} 行) ---")
                 appLogLines.forEach { sb.appendLine(it) }
                 sb.appendLine()
             }
@@ -126,7 +126,7 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             val logState = when {
                 !logExists -> "latest.log 不存在（服务端目录可能还没建好）"
                 scan.totalLines == 0 -> "latest.log 存在但为空 —— 服务端进程从未产生任何输出，" +
-                    "说明它很可能根本没被启动起来；请结合上方「MineServe 应用日志」判断"
+                    "说明它很可能根本没被启动起来；请结合上方「Minexa 应用日志」判断"
                 else -> null
             }
             sb.appendLine("--- 最近日志 (最后 ${minOf(tailCount, scan.totalLines)} 行，共 ${scan.totalLines} 行) ---")

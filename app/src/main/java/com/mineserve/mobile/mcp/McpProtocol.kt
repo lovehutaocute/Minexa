@@ -33,7 +33,7 @@ sealed class McpOutcome {
  */
 object McpProtocol {
 
-    const val SERVER_NAME = "MineServe Mobile"
+    const val SERVER_NAME = "Minexa"
     const val LATEST_PROTOCOL_VERSION = "2025-06-18"
     val SUPPORTED_PROTOCOL_VERSIONS = listOf("2024-11-05", "2025-03-26", "2025-06-18")
 

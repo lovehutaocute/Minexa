@@ -26,7 +26,7 @@ class McpSkillDocTest {
     @Test
     fun `导出文档带 frontmatter 与本机端点令牌`() {
         val doc = McpSkillDoc.build(endpoint, token, listOf(tool("a_tool")))
-        assertTrue(doc.startsWith("---\nname: mineserve-mobile\n"))
+        assertTrue(doc.startsWith("---\nname: minexa-mobile\n"))
         assertTrue(doc.contains("\"url\": \"$endpoint\""))
         assertTrue(doc.contains("\"Authorization\": \"Bearer $token\""))
         assertTrue(doc.contains("## 四、工具清单（1 个）"))

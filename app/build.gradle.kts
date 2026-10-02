@@ -14,7 +14,9 @@ composeCompiler {
 
 // 正式包名（影响 APK 输出文件名）
 base {
-    archivesName.set("MineServeMobile")
+    // APK 输出文件名。注意：这与 AppUpdateService.APK_NAME（远端 Release 上实际存在的
+    // 资产名）是两回事——后者指向已发布的下载地址，改名会让自动更新取不到包，故保持不变。
+    archivesName.set("Minexa")
 }
 
 android {
@@ -39,6 +41,17 @@ android {
             reset()
             include("arm64-v8a")
             isUniversalApk = false
+        }
+    }
+
+    // libfrpcloader.so —— frpc 启动器。
+    // 它其实是可执行 ELF，靠 CMake 里的 PREFIX/SUFFIX 伪装成 .so 以便打进
+    // lib/<abi>/（nativeLibraryDir 是 Android 允许 execve 的特例）。详见
+    // app/src/main/cpp/frpcloader.c 顶部说明。
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
         }
     }
 

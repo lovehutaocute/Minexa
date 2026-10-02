@@ -78,7 +78,7 @@ object RemoteArtifact {
                 connectTimeout = 8_000
                 readTimeout = 8_000
                 setRequestProperty("Accept", "application/vnd.github+json")
-                setRequestProperty("User-Agent", "MineServeMobile")
+                setRequestProperty("User-Agent", "Minexa")
             }
             try {
                 if (conn.responseCode !in 200..299) return@runCatching null
