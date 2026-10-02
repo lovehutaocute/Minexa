@@ -70,35 +70,45 @@ internal val mcVersionComparator: Comparator<String> = Comparator { left, right 
 }
 
 /**
- * 由 MC 版本号推导 NeoForge 版本号前缀，保证「点号段」严格对齐。
+ * 由 MC 版本号推导 NeoForge 版本号的「段前缀」，**带尾点**以保证段边界。
  *
  * NeoForge 编号规则：MC `1.21.4` → NeoForge `21.4.x`（去掉开头的 `1.`）；
  * MC `26.2` → NeoForge `26.2.x`（新编号体系不再去前缀）。
  *
- * 返回的前缀带尾部点号（除精确等于的情况），例如：
- * - `26.2`   → `["26.2", "26.2."]`
- * - `1.21.4` → `["21.4", "21.4."]`
- * - `1.21`   → `["21", "21."]` —— 只允许 `21.4.157` 这类两段以上？不，需排除 `21.11.45`。
- *   因此对两段式 MC 版本额外限定：NeoForge 号去掉补丁段后必须与 MC 号完全相等。
+ * 返回的串一律带尾点（如 `1.21.1` → `["21.1."]`），供 `startsWith` 锁死段边界。
+ *
+ * 这里绝不能返回不带尾点的裸前缀：MC `1.21.1` 若生成 `21.1` 并参与 `startsWith`，
+ * 会把 `21.11.45` 一起命中（`"21.11.45".startsWith("21.1") == true`），
+ * 于是下载 1.21.1 的 NeoForge 时错误地选到 1.21.11 的包。
  */
 internal fun buildNeoForgePrefixes(minecraftVersion: String): List<String> {
     val mc = minecraftVersion.trim().removePrefix("v").removePrefix("V")
     // NeoForge 侧编号：MC 1.x.y → x.y；MC 26.x → 26.x
     val nf = if (mc.startsWith("1.")) mc.removePrefix("1.") else mc
-    return listOf(nf, "$nf.")
+    return listOf("$nf.")
+}
+
+/**
+ * 判断某个 NeoForge 版本号是否属于给定 MC 版本（严格点号段边界）。
+ *
+ * 两条规则，缺一不可：
+ * 1. 段数相同 → 必须完全相等：`21.1 == 21.1` 命中，`21.11` / `21.1.4` 不命中 MC `1.21.1`；
+ * 2. 段数更多 → 必须以 `nf + "."` 开头：`21.1.9` 命中 MC `1.21.1`，
+ *    而 `21.11.45` 不以 `21.1.` 开头，故不命中。
+ */
+internal fun neoForgeVersionMatches(mcVersion: String, neoForgeVersion: String): Boolean {
+    val mc = mcVersion.trim().removePrefix("v").removePrefix("V")
+    val nf = if (mc.startsWith("1.")) mc.removePrefix("1.") else mc
+    val clean = neoForgeVersion.split('-').first().trim()
+    if (clean == nf) return true
+    return clean.startsWith("$nf.")
 }
 
 internal fun selectNeoForgeVersion(minecraftVersion: String, versions: List<String>): String? {
-    val mc = minecraftVersion.trim()
-    // 严格按「点号段」匹配，避免前缀碰撞：
-    // 旧实现用 startsWith("21.")，导致 MC 1.21 会把 21.1.x / 21.11.x 全部命中并选出 21.11.45。
-    // 现在要求段数与 MC 版本严格对齐 —— 26.2 → "26.2"，21.4 → "21.4."，21.4.157 合法，21.11.45 不再命中。
-    val candidatePrefixes = buildNeoForgePrefixes(mc)
     return versions.asSequence()
         .filter { full ->
             if (full.contains("-beta", ignoreCase = true)) return@filter false
-            val clean = full.split('-').first()
-            candidatePrefixes.any { prefix -> clean == prefix.trimEnd('.') || clean.startsWith(prefix) }
+            neoForgeVersionMatches(minecraftVersion, full)
         }
         .maxWithOrNull(Comparator { left, right ->
             val leftParts = VERSION_DIGITS.findAll(left).map { it.value.toInt() }.toList()
