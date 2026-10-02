@@ -1,5 +1,6 @@
 package com.mineserve.mobile.server
 
+import android.util.Log
 import com.mineserve.mobile.runtime.TermuxRuntime
 import java.io.File
 import java.text.SimpleDateFormat
@@ -17,6 +18,8 @@ import java.util.Locale
  *  - MC 原生：home/servers/{dirName}/crash-reports/（Minecraft 服务端自动生成）
  */
 class CrashReportManager(private val termux: TermuxRuntime) {
+
+    private val TAG = "CrashReportManager"
 
     /** 崩溃报告信息 */
     data class CrashReport(
@@ -81,15 +84,20 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             //   3) 两者去重后按原顺序输出
             val logFile = latestLogFile(dirName)
             val logExists = logFile.exists()
-            val allLines: List<String> = if (logExists) {
+            val tailCount = 800
+            // 单遍流式扫描：latest.log 可达数十至上百 MB，readLines() 会把整份文件载入
+            // List<String> 造成 OOM（且这里运行在崩溃退出的回调线程上）。流式处理只保留
+            // 尾部 tailCount 行与命中的关键片段，同时统计总行数（报告头需要「共 N 行」）。
+            val scan: LogScan = if (logExists) {
                 try {
-                    logFile.readLines()
+                    scanLatestLog(logFile, tailCount)
                 } catch (e: Exception) {
-                    listOf("(读取 latest.log 失败: ${e.message})")
+                    LogScan(1, listOf("(读取 latest.log 失败: ${e.message})"), emptyList())
                 }
             } else {
-                listOf("(latest.log 不存在)")
+                LogScan(1, listOf("(latest.log 不存在)"), emptyList())
             }
+            val allLines = scan.tailLines
 
             // latest.log 是空的 / 不存在时，补上应用侧日志。
             //
@@ -107,26 +115,25 @@ class CrashReportManager(private val termux: TermuxRuntime) {
                 sb.appendLine()
             }
 
-            val highlights = extractHighlights(allLines)
+            val highlights = scan.highlights
             if (highlights.isNotEmpty()) {
                 sb.appendLine("--- 关键片段 (Watchdog / 异常栈 / 致命错误) ---")
                 highlights.forEach { sb.appendLine(it) }
                 sb.appendLine()
             }
 
-            val tailCount = 800
             // 明确区分三种状态，不再输出无信息量的「共 0 行」
             val logState = when {
                 !logExists -> "latest.log 不存在（服务端目录可能还没建好）"
-                allLines.isEmpty() -> "latest.log 存在但为空 —— 服务端进程从未产生任何输出，" +
+                scan.totalLines == 0 -> "latest.log 存在但为空 —— 服务端进程从未产生任何输出，" +
                     "说明它很可能根本没被启动起来；请结合上方「MineServe 应用日志」判断"
                 else -> null
             }
-            sb.appendLine("--- 最近日志 (最后 ${minOf(tailCount, allLines.size)} 行，共 ${allLines.size} 行) ---")
+            sb.appendLine("--- 最近日志 (最后 ${minOf(tailCount, scan.totalLines)} 行，共 ${scan.totalLines} 行) ---")
             if (logState != null) {
                 sb.appendLine("(说明: $logState)")
             }
-            allLines.takeLast(tailCount).forEach { sb.appendLine(it) }
+            allLines.forEach { sb.appendLine(it) }
             sb.appendLine()
 
             // ── MC 原生崩溃报告 ──
@@ -146,6 +153,10 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             reportFile.writeText(sb.toString())
             reportFile.absolutePath
         } catch (e: Exception) {
+            // 不能静默吞掉：报告生成失败时用户看到的是「没有崩溃报告」，无从判断原因。
+            // 历史上就是这里吞掉了 parseNativeFilename 抛出的 ParseException，
+            // 掩盖了「有原生报告就再也不生成报告」这个 bug。
+            Log.e(TAG, "生成崩溃报告失败（将返回 null，界面会显示无报告）", e)
             null
         }
     }
@@ -194,42 +205,62 @@ class CrashReportManager(private val termux: TermuxRuntime) {
     // ── 内部工具 ──
 
     /**
-     * 从完整日志中提取「关键片段」，供崩溃报告优先展示。
-     *
-     * 设计目标：Paper Watchdog 转储的线程栈长达数百行，而报告体积有限。
-     * 若只截取尾部，最关键的 `Current Thread: Server thread` 段落会被丢掉，
-     * 导致无法定位主线程卡在何处。这里按块提取：
-     *
-     *  - 命中 [KEY_MARKERS] 的行作为起点，向后吞掉随后的缩进栈行（以 tab/空格开头）
-     *  - 命中 [SEVERE_MARKERS] 的行单独保留（一行一事，无后继栈）
-     *  - `Caused by:` 行向前回溯，尽量带上所属异常栈
-     *
-     * 输出保持原始顺序并去除重叠，最多 [MAX_HIGHLIGHT_LINES] 行，避免报告过大。
+     * 流式扫描结果：总行数 + 尾部若干行 + 关键片段。内存占用与文件大小无关（有界）。
      */
-    private fun extractHighlights(lines: List<String>): List<String> {
-        if (lines.isEmpty()) return emptyList()
+    private class LogScan(val totalLines: Int, val tailLines: List<String>, val highlights: List<String>)
 
-        val picked = sortedSetOf<Int>()
-
-        lines.forEachIndexed { idx, line ->
-            val isBlockStart = KEY_MARKERS.any { line.contains(it, ignoreCase = true) }
-            if (isBlockStart) {
-                // 块起点：本行 + 后续连续缩进的栈行
-                picked.add(idx)
-                var j = idx + 1
-                while (j < lines.size && j - idx <= 60 && isStackLine(lines[j])) {
-                    picked.add(j)
-                    j++
+    /**
+     * 单遍流式扫描日志，同时完成原先「提取关键片段」与 `takeLast(n)` 两件事：
+     *
+     *  - 用 [ArrayDeque] 保留最后 [tailCount] 行（内存有界）；
+     *  - 命中 [KEY_MARKERS] 的行连同随后的缩进栈行、命中 [SEVERE_MARKERS] 的行，
+     *    按原顺序收集为关键片段（最多 [MAX_HIGHLIGHT_LINES] 行）；
+     *  - 统计总行数供报告头使用。
+     *
+     * 保持与原先 `readLines() + 关键片段提取 + takeLast` 完全一致的输出语义，
+     * 只是不再把整份文件读进内存。
+     */
+    private fun scanLatestLog(file: File, tailCount: Int): LogScan {
+        val tail = ArrayDeque<String>(tailCount + 1)
+        val highlights = mutableListOf<String>()
+        var total = 0
+        var stackBudget = 0
+        var highlightChars = 0
+        file.bufferedReader().use { reader ->
+            var line = reader.readLine()
+            while (line != null) {
+                total++
+                tail.addLast(line)
+                if (tail.size > tailCount) tail.removeFirst()
+                // 关键片段必须**边扫边截断**：刷屏日志里 `Could not`/`Caused by:` 命中率很高，
+                // 攒到最后再 take(MAX) 意味着崩溃收集线程上可能先持有百万级字符串。
+                // OOM 恰好会杀掉这次要保住的崩溃报告，所以这里按「行数 + 总字符数」双上限收紧。
+                if (highlights.size < MAX_HIGHLIGHT_LINES && highlightChars < MAX_HIGHLIGHT_CHARS) {
+                    when {
+                        KEY_MARKERS.any { line.contains(it, ignoreCase = true) } -> {
+                            highlights.add(line)
+                            highlightChars += line.length
+                            // 块起点：随后最多 60 行的缩进栈行一并保留
+                            stackBudget = 60
+                        }
+                        stackBudget > 0 && isStackLine(line) -> {
+                            highlights.add(line)
+                            highlightChars += line.length
+                            stackBudget--
+                        }
+                        else -> {
+                            stackBudget = 0
+                            if (SEVERE_MARKERS.any { line.contains(it, ignoreCase = true) }) {
+                                highlights.add(line)
+                                highlightChars += line.length
+                            }
+                        }
+                    }
                 }
-                return@forEachIndexed
-            }
-            if (SEVERE_MARKERS.any { line.contains(it, ignoreCase = true) }) {
-                picked.add(idx)
+                line = reader.readLine()
             }
         }
-
-        if (picked.isEmpty()) return emptyList()
-        return picked.take(MAX_HIGHLIGHT_LINES).map { lines[it] }
+        return LogScan(total, tail.toList(), highlights.take(MAX_HIGHLIGHT_LINES))
     }
 
     /** 栈行/续行判定：以空白字符开头（Java 栈、at ... 等） */
@@ -260,6 +291,13 @@ class CrashReportManager(private val termux: TermuxRuntime) {
     )
 
     private val MAX_HIGHLIGHT_LINES = 600
+
+    /**
+     * 关键片段的字符总量上限（约 256KB 文本）。
+     * 只有行数上限是不够的——单行异常/路径拼接可以很长；
+     * 而且这是崩溃回调线程，内存爆掉会把崩溃报告本身一起丢掉。
+     */
+    private val MAX_HIGHLIGHT_CHARS = 256 * 1024
 
     /** 扫描指定目录下的报告文件，解析文件名时间戳并按时间倒序排列 */
     private fun listReportsFrom(dir: File, isNative: Boolean): List<CrashReport> {
@@ -318,13 +356,26 @@ class CrashReportManager(private val termux: TermuxRuntime) {
         return SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).parse(core)?.time
     }
 
-    /** 解析 MC 原生报告文件名 crash-yyyy-MM-dd_HH.mm.ss-server.txt */
-    private fun parseNativeFilename(name: String): Long? {
-        if (!name.startsWith("crash-") || !name.endsWith(".txt")) return null
-        // 提取 yyyy-MM-dd_HH.mm.ss 部分（crash- 后到第一个 - 之前）
-        val core = name.removePrefix("crash-").substringBefore("-")
-        if (core.isEmpty()) return null
-        return SimpleDateFormat("yyyy-MM-dd_HH.mm.ss", Locale.US).parse(core)?.time
+    internal companion object {
+        /** 解析 MC 原生报告文件名 crash-yyyy-MM-dd_HH.mm.ss-server.txt */
+        fun parseNativeFilename(name: String): Long? {
+            if (!name.startsWith("crash-") || !name.endsWith(".txt")) return null
+            // 取 `crash-` 与后缀之间的**完整**时间戳。
+            //
+            // 旧实现是 `substringBefore("-")`，而时间戳本身是 `2024-01-02_12.34.56`，
+            // 于是只截到 "2024"，SimpleDateFormat 按 "yyyy-MM-dd_HH.mm.ss" 解析 "2024"
+            // 必抛 ParseException（实测：Unparseable date: "2024"）。
+            // 该异常从 maxByOrNull 的 selector 里冒出去，被 captureCrash 的外层 catch 吞成 null，
+            // 结果是**只要目录里存在原生崩溃报告，应用自己的崩溃报告就完全不会生成**。
+            val core = name.removePrefix("crash-").removeSuffix(".txt").substringBefore("-server")
+            if (core.isEmpty()) return null
+            // 解析失败不能抛：调用点在 maxByOrNull 的 selector 里，异常会毁掉整次报告生成。
+            return try {
+                SimpleDateFormat("yyyy-MM-dd_HH.mm.ss", Locale.US).parse(core)?.time
+            } catch (_: Throwable) {
+                null
+            }
+        }
     }
 
     /** 查找 MC 原生 crash-reports 目录下最新的报告文件 */
@@ -334,8 +385,11 @@ class CrashReportManager(private val termux: TermuxRuntime) {
         val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".txt") }
             ?: return null
         if (files.isEmpty()) return null
-        // 按解析出的时间戳排序，解析失败回退到 lastModified
-        return files.maxByOrNull { f -> parseNativeFilename(f.name) ?: f.lastModified() }
+        // 按解析出的时间戳排序，解析失败回退到 lastModified。
+        // runCatching 作为兜底：任何意外文件名都不该让「生成崩溃报告」整体失败。
+        return files.maxByOrNull { f ->
+            runCatching { parseNativeFilename(f.name) }.getOrNull() ?: f.lastModified()
+        }
     }
 
     /** 格式化文件大小为 KB/MB */

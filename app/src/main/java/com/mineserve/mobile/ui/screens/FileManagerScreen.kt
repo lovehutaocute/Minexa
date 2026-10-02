@@ -58,6 +58,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -153,13 +154,9 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
         ) {
             HeaderBlock(eyebrow = stringResource(R.string.eyebrow_files), title = stringResource(R.string.s488))
 
-            // 教程 + MT 管理器 + 导出服务器（三个按钮统一收起/展开，状态持久化）
-            val prefs = androidx.compose.ui.platform.LocalContext.current.getSharedPreferences(
-                "mc_config_meta", android.content.Context.MODE_PRIVATE
-            )
-            var topActionsExpanded by remember {
-                mutableStateOf(prefs.getBoolean("files_top_actions_expanded", true))
-            }
+            // 教程 + MT 管理器 + 导出服务器（三个按钮统一收起/展开）。折叠状态用 rememberSaveable 保存，
+            // 避免在组合体内同步读 SharedPreferences 造成首帧主线程读盘。
+            var topActionsExpanded by rememberSaveable { mutableStateOf(true) }
             // 折叠时只保留一行提示，三个入口一起收起，避免误点
             Row(
                 modifier = Modifier
@@ -219,10 +216,7 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                     }
                 }
                 IconButton(
-                    onClick = {
-                        topActionsExpanded = !topActionsExpanded
-                        prefs.edit().putBoolean("files_top_actions_expanded", topActionsExpanded).apply()
-                    },
+                    onClick = { topActionsExpanded = !topActionsExpanded },
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
@@ -430,8 +424,16 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
             confirmButton = {
                 TextButton(
                     onClick = {
-                        if (newDirName.isNotBlank()) {
-                            vm.createDirectory(File(currentPath), newDirName.trim())
+                        val name = newDirName.trim()
+                        // 拒绝非法名称：'/' 会静默创建嵌套目录，'..' 可在服务器目录外建目录，首尾空白也一并拒绝
+                        val invalid = name.isBlank() || name != newDirName ||
+                            name.contains('/') || name.contains('\\') || name.contains("..")
+                        if (invalid) {
+                            scope.launch {
+                                snackbarHostState.showSnackbar(context.getString(R.string.fm_new_dir_invalid_name))
+                            }
+                        } else {
+                            vm.createDirectory(File(currentPath), name)
                             showNewDirDialog = false
                         }
                     }

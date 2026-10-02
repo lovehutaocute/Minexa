@@ -51,6 +51,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,6 +61,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.data.ServerCore
+import com.mineserve.mobile.data.InstalledCore
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McCard
@@ -84,6 +86,7 @@ private data class DownloadImport(val kind: String, val uri: Uri)
 fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     val context = LocalContext.current
     val config by vm.config.collectAsState()
+    val serverState by vm.serverState.collectAsState()
     val isBootstrapped by vm.isBootstrapped.collectAsState()
     val availableVersions by vm.availableVersions.collectAsState()
     val versionHints by vm.versionHints.collectAsState()
@@ -106,6 +109,8 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     var importName by remember { mutableStateOf("") }
     var importObservedRunning by remember { mutableStateOf(false) }
     var showAllVersions by remember { mutableStateOf(false) }
+    // 待删除的已安装核心（二次确认；删除会连同该目录下的世界、插件与配置一起移除）
+    var pendingDeleteCore by remember { mutableStateOf<InstalledCore?>(null) }
     val folderImportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         uri?.let { pendingImport = DownloadImport("folder", it); showImportDialog = true }
     }
@@ -157,11 +162,9 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
         ) {
             HeaderBlock(eyebrow = stringResource(R.string.eyebrow_download), title = stringResource(R.string.s450))
 
-            // 当前下载状态（已安装核心列表，默认折叠，展开状态持久化）
-            val prefs = context.getSharedPreferences("mc_config_meta", android.content.Context.MODE_PRIVATE)
-            var installedExpanded by remember {
-                mutableStateOf(prefs.getBoolean("download_installed_cores_expanded", false))
-            }
+            // 当前下载状态（已安装核心列表，默认折叠）。折叠状态用 rememberSaveable 保存，
+            // 避免在组合体内同步读 SharedPreferences 造成首帧主线程读盘。
+            var installedExpanded by rememberSaveable { mutableStateOf(false) }
             McCard(
                 title = stringResource(R.string.s451),
                 compact = true,
@@ -169,12 +172,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier
-                            .clickable {
-                                installedExpanded = !installedExpanded
-                                prefs.edit()
-                                    .putBoolean("download_installed_cores_expanded", installedExpanded)
-                                    .apply()
-                            }
+                            .clickable { installedExpanded = !installedExpanded }
                             .padding(horizontal = 8.dp, vertical = 14.dp)
                     ) {
                         Text(
@@ -258,7 +256,9 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                             ) { Text(stringResource(R.string.dl_core_verify), color = Mint, fontSize = 11.sp) }
                             Spacer(Modifier.size(6.dp))
                             OutlinedButton(
-                                onClick = { vm.deleteCore(core.name) },
+                                // 运行中禁止删除：先置 pendingDeleteCore，弹二次确认后再真正删除
+                                onClick = { pendingDeleteCore = core },
+                                enabled = !serverState.isRunning,
                                 shape = RoundedCornerShape(12.dp),
                                 border = BorderStroke(1.dp, Coral),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
@@ -266,6 +266,10 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                         }
                     }
                     }
+                }
+                if (serverState.isRunning) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(stringResource(R.string.dl_core_delete_running), color = Coral, fontSize = 10.sp)
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
@@ -573,6 +577,30 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                         }
                     }
                 }
+            }
+            // 删除核心二次确认：VM 内是整目录 deleteRecursively，会连同世界存档、插件与配置一起永久删除
+            pendingDeleteCore?.let { core ->
+                AlertDialog(
+                    onDismissRequest = { pendingDeleteCore = null },
+                    title = { Text(stringResource(R.string.dl_core_delete_title), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Text(
+                            stringResource(R.string.dl_core_delete_content, core.name),
+                            color = Muted, fontSize = 12.sp
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingDeleteCore = null
+                            vm.deleteCore(core.name)
+                        }) { Text(stringResource(R.string.s339), color = Coral, fontWeight = FontWeight.SemiBold) }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDeleteCore = null }) {
+                            Text(stringResource(R.string.s402), color = Muted)
+                        }
+                    }
+                )
             }
             if (showImportDialog) {
                 AlertDialog(

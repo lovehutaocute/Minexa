@@ -1,0 +1,123 @@
+name: Build ipv6fix native lib
+
+# libipv6fix.so（让 JVM 在 Android 上认为 IPv6 可用，见 app/src/main/cpp/ipv6fix.c）
+# **不随常规 CI 构建**：build.yml 里的构建链刻意不依赖 NDK，所以这个库以预编译
+# 形式提交在 app/src/main/jniLibs/arm64-v8a/ 下。
+#
+# 需要改动 ipv6fix.c 时，手动运行本工作流：它会用 NDK 重新编译，
+# 把产物写回 jniLibs 并提交到当前分支。
+#
+# 触发：Actions → Build ipv6fix native lib → Run workflow
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  OUTPUT_PATH: app/src/main/jniLibs/arm64-v8a/libipv6fix.so
+  SOURCE_PATH: app/src/main/cpp/ipv6fix.c
+  # minSdk 26（见 app/build.gradle.kts）
+  API_LEVEL: "26"
+
+jobs:
+  build:
+    name: Rebuild libipv6fix.so (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 运行器镜像已预装 Android SDK 与若干 NDK，但版本不确定；
+      # 这里统一取仓库中可用的**最新** NDK，避免把版本号写死在某次发布上。
+      - name: Set up Android SDK and NDK
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+
+          SDKMGR=""
+          for candidate in "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager; do
+            [ -x "$candidate" ] && SDKMGR="$candidate"
+          done
+          if [ -z "$SDKMGR" ]; then
+            echo "::error::未找到 sdkmanager（$SDK_ROOT/cmdline-tools/*/bin）"
+            exit 1
+          fi
+
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          NDK_VERSION=$("$SDKMGR" --list 2>/dev/null \
+            | sed -n 's/^ *ndk;\([0-9][0-9.]*\).*/\1/p' \
+            | sort -V | tail -n1)
+          if [ -z "$NDK_VERSION" ]; then
+            echo "::error::无法从 SDK 仓库解析出可用 NDK 版本"
+            exit 1
+          fi
+          echo "NDK_VERSION=$NDK_VERSION" >> "$GITHUB_ENV"
+          echo "使用 NDK: $NDK_VERSION"
+          "$SDKMGR" --install "ndk;$NDK_VERSION"
+
+      # 注意：这里**不加** -fvisibility=hidden —— 本库靠导出 fopen/fopen64 抢占
+      # 符号，隐藏了就等于什么都没做（下面的 dyn-syms 自检就是在拦这个）。
+      - name: Compile libipv6fix.so
+        run: |
+          set -euo pipefail
+          CLANG="$ANDROID_HOME/ndk/$NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android${API_LEVEL}-clang"
+          if [ ! -x "$CLANG" ]; then
+            echo "::error::找不到编译器 $CLANG"
+            exit 1
+          fi
+          mkdir -p "$(dirname "$OUTPUT_PATH")"
+          "$CLANG" \
+            -shared -fPIC -Oz \
+            -ffunction-sections -fdata-sections \
+            -Wl,--gc-sections \
+            -Wl,-z,max-page-size=16384 \
+            -Wall -Wextra \
+            -o "$OUTPUT_PATH" "$SOURCE_PATH"
+          ls -l "$OUTPUT_PATH"
+          file "$OUTPUT_PATH" || true
+          # 自检 1：必须是 aarch64 的共享库
+          readelf -h "$OUTPUT_PATH" | grep -q 'AArch64' \
+            || { echo "::error::产物架构不是 AArch64"; exit 1; }
+          # 自检 2：fopen / fopen64 必须真的被导出。这两个符号一旦被隐藏，
+          # LD_PRELOAD 会静默失效（服务端照旧报 UnsupportedAddressTypeException），
+          # 从日志上看不出任何异常，所以在这里硬拦。
+          DYNSYMS=$(readelf --dyn-syms "$OUTPUT_PATH")
+          for sym in fopen fopen64; do
+            echo "$DYNSYMS" | grep -Eq "FUNC +GLOBAL +DEFAULT +[0-9]+ +$sym$" \
+              || { echo "::error::$sym 未被导出（-fvisibility=hidden 会藏掉它）"; echo "$DYNSYMS"; exit 1; }
+          done
+          echo "自检通过：fopen / fopen64 已导出"
+          # 自检 3：依赖只允许 libc.so / libdl.so。NDK 的 clang 驱动默认给 shared
+          # library 记上这两个 NEEDED（它们由 linker 在进程启动时就已加载），
+          # 对 java 进程零新增负担；除此之外的任何依赖都意味着这个库可能在设备上
+          # 加载失败，必须拦下。
+          UNEXPECTED=$(readelf -d "$OUTPUT_PATH" \
+            | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' \
+            | grep -vx -e 'libc.so' -e 'libdl.so' || true)
+          if [ -n "$UNEXPECTED" ]; then
+            echo "::error::产物引入了预期外的依赖：$UNEXPECTED"
+            readelf -d "$OUTPUT_PATH"
+            exit 1
+          fi
+          echo "自检通过：aarch64 共享库，NEEDED 仅 libc/libdl"
+
+      - name: Commit rebuilt library
+        run: |
+          set -euo pipefail
+          # 注意：产物首次生成时是**未跟踪文件**，`git diff` 对它不报告差异，
+          # 会把这一步误判成「无需提交」而静默跳过（实测踩过这个坑）。
+          # 用 status --porcelain 才能同时覆盖「未跟踪」与「已修改」两种情况。
+          if [ -z "$(git status --porcelain -- "$OUTPUT_PATH")" ]; then
+            echo "产物与仓库内现有文件逐字节相同，无需提交"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$OUTPUT_PATH"
+          # [skip ci]：产物更新不需要再触发一轮完整构建（build.yml 的 push 触发）
+          git commit -m "chore(native): 重新生成 libipv6fix.so (arm64-v8a) [skip ci]"
+          git push
+          echo "已提交产物：$(git rev-parse --short HEAD)"

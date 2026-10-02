@@ -7,6 +7,8 @@ import com.mineserve.mobile.R
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -16,6 +18,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -47,7 +50,9 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -60,10 +65,12 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -71,6 +78,7 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -82,6 +90,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
@@ -90,25 +99,28 @@ import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mineserve.mobile.data.InstalledCore
+import com.mineserve.mobile.data.JavaRuntime
+import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.PhpVersion
+import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.ServerState
+import com.mineserve.mobile.data.isProotGuestRuntime
+import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.HeroBlock
-import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
-import com.mineserve.mobile.ui.PillButton
 import com.mineserve.mobile.ui.ProgressTrack
 import com.mineserve.mobile.ui.QqGroupDialog
-import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.StepRow
 import com.mineserve.mobile.ui.theme.Coral
+import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
@@ -140,12 +152,6 @@ fun DashboardScreen(
     var showStartSettings by remember { mutableStateOf(false) }
     // QQ 群弹窗（顶部企鹅图标触发）
     var showQqDialog by remember { mutableStateOf(false) }
-    // 服务器图标选择器
-    val iconPickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        if (uri != null) vm.setServerIcon(uri)
-    }
     // Snackbar 文案需在 Composable 上下文取值（onClick 内不可调用 @Composable）
     val mirrorSwitchMsg = stringResource(R.string.mirror_switch_requested)
 
@@ -254,22 +260,13 @@ fun DashboardScreen(
             }
 
             item {
+                // 「启动服务端」卡片：核心选择 + 运行环境摘要 + 底部启停按钮（含启动设置抽屉入口）
                 DashboardCoreSelectionCard(
                     vm = vm,
+                    isBootstrapped = isBootstrapped,
+                    onShowSettings = { showStartSettings = true },
                     onShowMessage = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
                 )
-            }
-
-            item {
-                DashboardServerControlCard(
-                    vm = vm,
-                    isBootstrapped = isBootstrapped,
-                    onShowSettings = { showStartSettings = true }
-                )
-            }
-
-            item {
-                AdvancedStartupCard(vm = vm)
             }
 
             item {
@@ -286,42 +283,11 @@ fun DashboardScreen(
             QqGroupDialog(onDismiss = { showQqDialog = false })
         }
 
-        // 服务器启动设置弹窗
+        // 服务器启动设置抽屉（底部滑出）
         if (showStartSettings) {
-            val autoRestartOnCrash by vm.config.map { it.autoRestartOnCrash }.distinctUntilChanged().collectAsState(initial = false)
-            val configuredMaxHeapMb by vm.config.map { it.maxHeapMb }.distinctUntilChanged().collectAsState(initial = 1024)
-            AlertDialog(
-                onDismissRequest = { showStartSettings = false },
-                title = { Text(stringResource(R.string.s395), fontWeight = FontWeight.Bold) },
-                text = {
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(stringResource(R.string.s396), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                                Text(
-                                    stringResource(R.string.s397),
-                                    color = Muted,
-                                    fontSize = 10.sp
-                                )
-                            }
-                            Switch(
-                                checked = autoRestartOnCrash,
-                                onCheckedChange = { vm.setAutoRestart(it) }
-                            )
-                        }
-                        Spacer(Modifier.height(10.dp))
-                        Text(
-                            stringResource(R.string.s398, configuredMaxHeapMb),
-                            color = Muted,
-                            fontSize = 11.sp
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showStartSettings = false }) {
-                        Text(stringResource(R.string.s73), color = Indigo, fontWeight = FontWeight.SemiBold)
-                    }
-                }
+            StartSettingsSheet(
+                vm = vm,
+                onDismiss = { showStartSettings = false }
             )
         }
     }
@@ -338,12 +304,16 @@ private fun DashboardJavaInstallCard(vm: McViewModel) {
     val config by vm.config.collectAsState()
     val isInstalling by vm.isInstalling.collectAsState()
     val operation by vm.javaOperation.collectAsState()
-    val selected = config.selectedJavaVersion
+    val selected = config.selectedJavaRuntime
 
-    // 进入页面与环境就绪时刷新已装 Java 列表，保证卡片随安装结果实时隐藏
-    LaunchedEffect(isBootstrapped) { if (isBootstrapped) vm.refreshJava() }
+    // 进入页面与环境就绪时刷新已装 Java 列表，保证卡片随安装结果实时隐藏。
+    // 不按 isBootstrapped 设门槛：FCL 来源的 JRE 不依赖 Termux 前缀。
+    LaunchedEffect(isBootstrapped) { vm.refreshJava() }
 
-    if (!isBootstrapped || selected in installed) return
+    // FCL 来源是 Android 原生二进制，环境没初始化也能下载安装；
+    // Termux 来源必须先有环境（apt 装在里面）。
+    val canInstall = selected.vendor == JavaVendor.Fcl || isBootstrapped
+    if (!canInstall || selected in installed) return
     val op = operation
 
     McCard(title = stringResource(R.string.dash_java_title), compact = true) {
@@ -353,6 +323,10 @@ private fun DashboardJavaInstallCard(vm: McViewModel) {
             fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold
         )
+        if (selected.vendor == JavaVendor.Fcl) {
+            Spacer(Modifier.height(4.dp))
+            Text(stringResource(R.string.java_group_fcl_note), color = Muted, fontSize = 10.sp)
+        }
         Spacer(Modifier.height(8.dp))
         if (op != null) {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -374,9 +348,18 @@ private fun DashboardJavaInstallCard(vm: McViewModel) {
     }
 }
 
+/**
+ * 「启动服务端」卡片：核心选择 + 运行环境摘要 + 底部启停长条按钮。
+ *
+ * 右上角的齿轮是**启动设置抽屉**的唯一入口（运行环境 / 各来源版本 / 自定义启动命令 /
+ * 崩溃自动重启 / 跳过启动中进度）。原先散在「服务控制」卡片里的启停按钮与
+ * 「高级启动选项」卡片里的自定义命令，现在都收进这一张卡片与抽屉里。
+ */
 @Composable
 private fun DashboardCoreSelectionCard(
     vm: McViewModel,
+    isBootstrapped: Boolean,
+    onShowSettings: () -> Unit,
     onShowMessage: (String) -> Unit
 ) {
     val installedCores by vm.config
@@ -387,11 +370,82 @@ private fun DashboardCoreSelectionCard(
         .map { it.activeCoreName }
         .distinctUntilChanged()
         .collectAsState(initial = null)
+    val runtimeKind by vm.config
+        .map { it.runtimeKind }
+        .distinctUntilChanged()
+        .collectAsState(initial = RuntimeKind.Java)
+    val selectedJavaRuntime by vm.config
+        .map { it.selectedJavaRuntime }
+        .distinctUntilChanged()
+        .collectAsState(initial = JavaRuntime.Default)
+    val selectedJavaVersion by vm.config
+        .map { it.selectedJavaVersion }
+        .distinctUntilChanged()
+        .collectAsState(initial = JavaVersion.Java17)
+    val selectedPhpVersion by vm.config
+        .map { it.selectedPhpVersion }
+        .distinctUntilChanged()
+        .collectAsState(initial = PhpVersion.Default)
+    val installedPhp by vm.installedPhp.collectAsState()
+    val isRunning by vm.serverState
+        .map { it.isRunning }
+        .distinctUntilChanged()
+        .collectAsState(initial = false)
+    val stopInFlight by vm.stopInFlight.collectAsState()
+    val forceStopInFlight by vm.forceStopInFlight.collectAsState()
     var showCoreDropdown by remember { mutableStateOf(false) }
+    var showForceStopConfirm by remember { mutableStateOf(false) }
     val context = androidx.compose.ui.platform.LocalContext.current
     val activeCore = installedCores.find { it.name == activeCoreName }
+    val phpInstalled = selectedPhpVersion in installedPhp
 
-    McCard(title = stringResource(R.string.s368), compact = true) {
+    if (showForceStopConfirm) {
+        AlertDialog(
+            onDismissRequest = { showForceStopConfirm = false },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Warning, contentDescription = null, tint = Coral, modifier = Modifier.size(20.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text(stringResource(R.string.dash_force_stop_confirm_title), fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            },
+            text = {
+                Text(stringResource(R.string.dash_force_stop_confirm_msg), fontSize = 12.sp, color = Muted)
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    showForceStopConfirm = false
+                    vm.forceStopServer()
+                }) {
+                    Text(stringResource(R.string.dash_force_stop_confirm_ok), color = Coral, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showForceStopConfirm = false }) {
+                    Text(stringResource(R.string.env_cancel), color = Muted)
+                }
+            }
+        )
+    }
+
+    McCard(
+        title = stringResource(R.string.s368),
+        compact = true,
+        trailing = {
+            // 较大的齿轮入口：命中区 40dp、图标 24dp，与标题行 14sp 字重相称。
+            IconButton(
+                onClick = onShowSettings,
+                modifier = Modifier.size(40.dp)
+            ) {
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = stringResource(R.string.s378),
+                    tint = Indigo,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+        }
+    ) {
         if (installedCores.isEmpty()) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -473,455 +527,53 @@ private fun DashboardCoreSelectionCard(
                 }
             }
         }
-    }
-}
 
-@Composable
-private fun DashboardServerControlCard(
-    vm: McViewModel,
-    isBootstrapped: Boolean,
-    onShowSettings: () -> Unit
-) {
-    val installedCores by vm.config
-        .map { it.installedCores }
-        .distinctUntilChanged()
-        .collectAsState(initial = emptyList())
-    val activeCoreName by vm.config
-        .map { it.activeCoreName }
-        .distinctUntilChanged()
-        .collectAsState(initial = null)
-    val selectedJavaVersion by vm.config
-        .map { it.selectedJavaVersion }
-        .distinctUntilChanged()
-        .collectAsState(initial = JavaVersion.Java17)
-    val installedPhp by vm.installedPhp.collectAsState()
-    val runtimeKind by vm.config
-        .map { it.runtimeKind }
-        .distinctUntilChanged()
-        .collectAsState(initial = RuntimeKind.Java)
-    val selectedPhpVersion by vm.config
-        .map { it.selectedPhpVersion }
-        .distinctUntilChanged()
-        .collectAsState(initial = PhpVersion.Default)
-    val isRunning by vm.serverState
-        .map { it.isRunning }
-        .distinctUntilChanged()
-        .collectAsState(initial = false)
-    var isStopping by remember { mutableStateOf(false) }
-    var showEnvPicker by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val activeServerCore = installedCores.find { it.name == activeCoreName }
-    // 当前核心更适配的运行环境。仅用于弹窗里给一句提示 —— 切换与否完全由用户决定。
-    val requiredKind = if (activeServerCore?.core == ServerCore.PocketMine) RuntimeKind.Php else RuntimeKind.Java
-    val phpInstalled = selectedPhpVersion in installedPhp
-
-    LaunchedEffect(isBootstrapped) { if (isBootstrapped) vm.refreshPhp() }
-
-    if (showEnvPicker) {
-        RuntimeEnvPickerDialog(
-            vm = vm,
-            initialKind = runtimeKind,
-            requiredKind = requiredKind,
-            installedPhp = installedPhp,
-            selectedJavaVersion = selectedJavaVersion,
-            selectedPhpVersion = selectedPhpVersion,
-            onDismiss = { showEnvPicker = false }
-        )
-    }
-
-    McCard(
-        title = stringResource(R.string.s377),
-        compact = true,
-        trailing = {
-            IconButton(onClick = onShowSettings) {
-                Icon(Icons.Outlined.Settings, stringResource(R.string.s378), tint = Indigo, modifier = Modifier.size(18.dp))
-            }
-        }
-    ) {
-        // ── 运行环境（点击打开选择弹窗）──
-        // 注意：不再有独立的运行模式下拉框；Java / PHP 的切换放在弹窗顶部的长条切换器里。
-        Text(
-            stringResource(R.string.dash_runtime_env),
-            color = Muted,
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold
-        )
-        Spacer(Modifier.height(4.dp))
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedButton(
-                onClick = { showEnvPicker = true },
-                enabled = !isRunning,
-                modifier = Modifier.weight(0.9f),
-                shape = RoundedCornerShape(8.dp),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 6.dp)
-            ) {
-                Text(
-                    when (runtimeKind) {
-                        RuntimeKind.Java -> selectedJavaVersion.displayName
-                        RuntimeKind.Php -> selectedPhpVersion.displayName
-                    },
-                    color = Indigo,
-                    fontSize = 12.sp,
-                    maxLines = 1,
-                    modifier = Modifier.weight(1f)
-                )
-                Icon(
-                    Icons.Outlined.KeyboardArrowDown,
-                    contentDescription = null,
-                    tint = Indigo,
-                    modifier = Modifier.size(16.dp)
-                )
-            }
-            Button(
-                onClick = {
-                    if (isRunning) {
-                        isStopping = true
-                        vm.stopServer()
-                        scope.launch { isStopping = false }
-                    } else {
-                        vm.startServer()
-                    }
+        // ── 当前运行环境摘要（真正的选择在齿轮抽屉里）──
+        Spacer(Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.dash_current_env),
+                color = Muted,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.width(6.dp))
+            Text(
+                when (runtimeKind) {
+                    RuntimeKind.Java -> javaRuntimeLabel(selectedJavaRuntime)
+                    RuntimeKind.Php -> stringResource(R.string.dash_env_php) + " · " + selectedPhpVersion.displayName
                 },
-                enabled = if (isRunning) !isStopping else isBootstrapped,
-                colors = ButtonDefaults.buttonColors(containerColor = if (isRunning) Coral else Mint),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.weight(1.1f),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(vertical = 8.dp)
-            ) {
-                if (isRunning && isStopping) {
-                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = Color.White, strokeWidth = 2.dp)
-                    Spacer(Modifier.size(6.dp))
-                }
-                Text(
-                    when {
-                        isRunning && isStopping -> stringResource(R.string.s381)
-                        isRunning -> stringResource(R.string.s382)
-                        else -> stringResource(R.string.s380)
-                    },
-                    color = Color.White,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 12.sp
-                )
-            }
+                color = Indigo,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold
+            )
         }
-        Spacer(Modifier.height(8.dp))
-        Text(
-            if (isRunning) stringResource(R.string.s383) else stringResource(R.string.s384),
-            color = if (isRunning) Mint else Muted,
-            fontSize = 11.sp
-        )
-        Spacer(Modifier.height(6.dp))
-        Text(stringResource(R.string.s385), color = Muted, fontSize = 10.sp)
-        if (activeServerCore?.core == ServerCore.PowerNukkitX &&
+
+        if (activeCore?.core == ServerCore.PowerNukkitX &&
             (selectedJavaVersion == JavaVersion.Java8 || selectedJavaVersion == JavaVersion.Java17)) {
             Spacer(Modifier.height(6.dp))
             Text(stringResource(R.string.dash_pnx_java_note), color = Coral, fontSize = 11.sp)
         }
         if (runtimeKind == RuntimeKind.Php && !phpInstalled) {
             Spacer(Modifier.height(6.dp))
-            Text(
-                stringResource(R.string.dash_php_not_installed_note),
-                color = Coral,
-                fontSize = 11.sp
-            )
+            Text(stringResource(R.string.dash_php_not_installed_note), color = Coral, fontSize = 11.sp)
         }
-    }
-}
-
-/**
- * 运行环境选择弹窗。
- *
- * 顶部是一条 Java / PHP 长条切换器，绿色高亮块用 [animateFloatAsState] 在两个
- * 选项卡之间平滑滑动；下方版本列表随所选环境切换（Java 只列 Java，PHP 只列 PHP）。
- *
- * 版本数据直接复用 JavaVersion / PhpVersion 枚举与 ViewModel 的既有状态，
- * 选中后写回 config，启动逻辑读取的就是同一份数据。
- */
-@Composable
-private fun RuntimeEnvPickerDialog(
-    vm: McViewModel,
-    initialKind: RuntimeKind,
-    requiredKind: RuntimeKind,
-    installedPhp: Set<PhpVersion>,
-    selectedJavaVersion: JavaVersion,
-    selectedPhpVersion: PhpVersion,
-    onDismiss: () -> Unit
-) {
-    // 弹窗内的临时选择态：打开时对齐当前运行环境，关闭后才真正写回
-    var kind by remember { mutableStateOf(initialKind) }
-    var pendingJava by remember { mutableStateOf(selectedJavaVersion) }
-    var pendingPhp by remember { mutableStateOf(selectedPhpVersion) }
-
-    // 绿色高亮块位置：0f = Java，1f = PHP，切换时平滑过渡
-    val targetFraction = if (kind == RuntimeKind.Php) 1f else 0f
-    val indicatorFraction by animateFloatAsState(
-        targetValue = targetFraction,
-        animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
-        label = "runtimeTabIndicator"
-    )
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
-        // 弹窗自带淡入/缩放（AlertDialog 默认），这里只补内容切换的过渡
-        containerColor = MaterialTheme.colorScheme.surface,
-        title = {
-            Text(
-                stringResource(R.string.runtime_picker_title),
-                fontWeight = FontWeight.Bold,
-                fontSize = 16.sp
-            )
-        },
-        text = {
-            Column(Modifier.fillMaxWidth()) {
-                // ── Java / PHP 长条切换器 ──
-                BoxWithConstraints(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(FieldGray)
-                        .padding(3.dp)
-                ) {
-                    val tabWidth = maxWidth / 2
-                    // 滑动的高亮块
-                    Box(
-                        modifier = Modifier
-                            .offset(x = tabWidth * indicatorFraction)
-                            .width(tabWidth)
-                            .fillMaxHeight()
-                            .clip(RoundedCornerShape(10.dp))
-                            .background(Mint.copy(alpha = 0.18f))
-                            .border(
-                                width = 1.5.dp,
-                                color = Mint,
-                                shape = RoundedCornerShape(10.dp)
-                            )
-                    )
-                    Row(Modifier.fillMaxSize()) {
-                        RuntimeKind.entries.forEach { entry ->
-                            val selectedTab = kind == entry
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .fillMaxHeight()
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .clickable { kind = entry },
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    when (entry) {
-                                        RuntimeKind.Java -> stringResource(R.string.dash_runtime_java)
-                                        RuntimeKind.Php -> stringResource(R.string.dash_runtime_php)
-                                    },
-                                    color = if (selectedTab) Mint else Muted,
-                                    fontSize = 13.sp,
-                                    fontWeight = if (selectedTab) FontWeight.Bold else FontWeight.Medium
-                                )
-                            }
-                        }
-                    }
-                }
-
-                if (kind != requiredKind) {
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        stringResource(
-                            R.string.runtime_picker_mismatch,
-                            when (requiredKind) {
-                                RuntimeKind.Java -> stringResource(R.string.dash_runtime_java)
-                                RuntimeKind.Php -> stringResource(R.string.dash_runtime_php)
-                            }
-                        ),
-                        color = Coral,
-                        fontSize = 10.sp
-                    )
-                }
-
-                Spacer(Modifier.height(12.dp))
-
-                // ── 版本列表 ──
-                // 关键：动画不能驱动容器尺寸。
-                // Java 有 5 行、PHP 只有 1 行，若用 AnimatedContent 直接包裹高度可变的内容，
-                // 过渡期间新旧内容会同时参与测量，弹窗高度就会来回抽搐。
-                // 这里把版本列表放进一个**固定高度**的滚动容器里，外层尺寸恒定，
-                // 切换只在容器内部做淡入淡出 —— 弹窗整体高度一动不动。
-                val listHeight = 232.dp
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(listHeight)
-                ) {
-                    AnimatedContent(
-                        targetState = kind,
-                        transitionSpec = {
-                            (fadeIn(tween(200))).togetherWith(fadeOut(tween(140)))
-                        },
-                        label = "runtimeVersionList"
-                    ) { current ->
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .fillMaxHeight()
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            when (current) {
-                                RuntimeKind.Java -> JavaVersion.entries.forEach { version ->
-                                    RuntimeVersionRow(
-                                        label = version.displayName,
-                                        note = null,
-                                        status = null,
-                                        selected = version == pendingJava,
-                                        onClick = { pendingJava = version }
-                                    )
-                                }
-                                RuntimeKind.Php -> PhpVersion.entries.forEach { version ->
-                                    val installed = version in installedPhp
-                                    RuntimeVersionRow(
-                                        label = version.displayName,
-                                        note = version.noteRes?.let { stringResource(it) },
-                                        status = if (installed) stringResource(R.string.env_php_installed)
-                                        else stringResource(R.string.env_php_not_installed),
-                                        statusColor = if (installed) Mint else Muted,
-                                        selected = version == pendingPhp,
-                                        onClick = { pendingPhp = version }
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                // 单次原子写入运行模式 + 两个版本。
-                // 不能拆成 setRuntimeKind()/setPhpVersion() 两次调用：config 落盘有 300ms debounce，
-                // 第二次调用读到的仍是旧快照，会把刚写入的 runtimeKind 覆盖回 Java。
-                vm.applyRuntimeSelection(kind, pendingJava, pendingPhp)
-                onDismiss()
-            }) {
-                Text(stringResource(R.string.runtime_picker_apply), color = Indigo, fontWeight = FontWeight.SemiBold)
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text(stringResource(R.string.env_cancel), color = Muted)
-            }
+        if (!isRunning) {
+            Spacer(Modifier.height(6.dp))
+            Text(stringResource(R.string.s385), color = Muted, fontSize = 10.sp)
         }
-    )
-}
 
-/** 弹窗里的单个版本行：选中态用 Mint 边框 + 淡底，点击立即反馈 */
-@Composable
-private fun RuntimeVersionRow(
-    label: String,
-    note: String?,
-    status: String?,
-    statusColor: Color = Muted,
-    selected: Boolean,
-    onClick: () -> Unit
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(if (selected) Mint.copy(alpha = 0.12f) else Color.Transparent)
-            .border(
-                width = if (selected) 1.5.dp else 0.dp,
-                color = if (selected) Mint else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 9.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Column(Modifier.weight(1f)) {
-            Text(
-                label,
-                fontSize = 13.sp,
-                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                color = if (selected) Mint else Color.Unspecified
-            )
-            note?.let {
-                Text(it, color = Muted, fontSize = 10.sp)
-            }
-        }
-        status?.let {
-            Text(it, color = statusColor, fontSize = 11.sp)
-        }
-    }
-}
-
-@Composable
-private fun AdvancedStartupCard(vm: McViewModel) {
-    val customCommandEnabled by vm.config.map { it.advancedCustomCommandEnabled }.distinctUntilChanged().collectAsState(initial = false)
-    val customCommand by vm.config.map { it.advancedCustomCommand }.distinctUntilChanged().collectAsState(initial = "")
-    var showAdvanced by remember { mutableStateOf(false) }
-    McCard(
-        title = "高级启动选项",
-        compact = true,
-        trailing = {
-            Icon(
-                if (showAdvanced) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
-                contentDescription = if (showAdvanced) "收起" else "展开",
-                tint = Indigo,
-                modifier = Modifier
-                    .size(20.dp)
-                    .clickable { showAdvanced = !showAdvanced }
-            )
-        }
-    ) {
-        AnimatedVisibility(
-            visible = showAdvanced,
-            enter = expandVertically(),
-            exit = shrinkVertically()
-        ) {
-            Column {
-                Text("开启后使用手动输入的完整命令；关闭后由应用自动生成启动命令", color = Muted, fontSize = 11.sp)
-                Spacer(Modifier.height(12.dp))
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            "完全自定义启动命令",
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text("关闭时使用应用默认启动命令", color = Muted, fontSize = 10.sp)
-                    }
-                    Switch(
-                        checked = customCommandEnabled,
-                        onCheckedChange = { enabled ->
-                            vm.updateConfig { it.copy(advancedCustomCommandEnabled = enabled) }
-                        }
-                    )
-                }
-                Spacer(Modifier.height(10.dp))
-                if (customCommandEnabled) {
-                    DebouncedTextField(
-                        value = customCommand,
-                        onValueChange = { value ->
-                            vm.updateConfig { it.copy(advancedCustomCommand = value) }
-                        },
-                        modifier = Modifier.fillMaxWidth(),
-                        label = { Text("完整启动命令", fontSize = 11.sp) },
-                        placeholder = {
-                            Text("java -Xmx1024M -jar server.jar nogui", fontSize = 11.sp, color = Muted)
-                        },
-                        minLines = 3,
-                        maxLines = 6,
-                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
-                    )
-                }
-            }
-        }
+        // ── 底部启停长条：未运行 = 一整条「启动」；运行中 = 水滴分裂成「强制停止 | 停止」──
+        Spacer(Modifier.height(10.dp))
+        StartStopBar(
+            isRunning = isRunning,
+            startEnabled = isBootstrapped,
+            stopInFlight = stopInFlight,
+            forceStopInFlight = forceStopInFlight,
+            onStart = { vm.startServer() },
+            onStop = { vm.stopServer() },
+            onForceStop = { showForceStopConfirm = true }
+        )
     }
 }
 
@@ -1119,6 +771,10 @@ private fun DashboardHeroBlock(
     val resources by vm.serverResources.collectAsState()
     val isRefreshingStatus by vm.isRefreshingStatus.collectAsState()
     val lastRefreshAtMs by vm.lastStatusRefreshAtMs.collectAsState()
+    val skipStartupProgress by vm.config
+        .map { it.skipStartupProgress }
+        .distinctUntilChanged()
+        .collectAsState(initial = false)
     val serverProperties by vm.serverProperties.collectAsState()
     val onlineModeEnabled = serverProperties["online-mode"]
         ?.trim()
@@ -1130,6 +786,7 @@ private fun DashboardHeroBlock(
         onlineModeEnabled = onlineModeEnabled,
         isRefreshing = isRefreshingStatus,
         lastRefreshAtMs = lastRefreshAtMs,
+        skipStartupProgress = skipStartupProgress,
         onRefresh = onRefresh
     )
 }
@@ -1401,14 +1058,606 @@ private fun DeviceStatCell(label: String, value: String, modifier: Modifier = Mo
     }
 }
 
-/** MB 数值格式化：超过 1GB 显示 G */
-private fun formatDeviceMb(mb: Long): String =
-    if (mb >= 1024) String.format("%.1fG", mb / 1024.0) else "${mb}M"
+/**
+ * 「来源 · 版本」形式的短标签，用在空间有限、又必须区分来源的地方
+ * （启动卡片上的运行环境按钮）。
+ *
+ * 两套 JDK 的版本号完全重合（都有 17/21/25），只写「Java 21」等于没说是哪一套。
+ * 弹窗与依赖页都按来源分组、靠分组标题区分，所以那边不用这个函数。
+ */
+@Composable
+private fun javaRuntimeLabel(runtime: JavaRuntime): String {
+    val vendor = stringResource(
+        when (runtime.vendor) {
+            JavaVendor.Termux -> R.string.java_vendor_termux
+            JavaVendor.Fcl -> R.string.java_vendor_fcl
+            JavaVendor.Proot -> R.string.java_vendor_proot
+        }
+    )
+    return "$vendor · ${runtime.displayName}"
+}
 
-/** 字节数格式化（网络流量）：KB/MB/GB */
-private fun formatNetBytes(bytes: Long): String = when {
-    bytes >= 1024 * 1024 * 1024 -> String.format("%.1fGB", bytes / (1024.0 * 1024 * 1024))
-    bytes >= 1024 * 1024 -> String.format("%.1fMB", bytes / (1024.0 * 1024))
-    bytes >= 1024 -> String.format("%.1fKB", bytes / 1024.0)
-    else -> "${bytes}B"
+// ── 启动区域：长条启停按钮 + 启动设置抽屉 ──────────────────────────────
+
+/**
+ * 卡片底部的启停长条。
+ *
+ * 未运行时是一整条「启动」；运行中则以「水滴分裂」的方式分成左右两个按钮
+ * （左：强制停止，右：停止）。
+ *
+ * 分裂用一个 0f→1f 的 [animateFloatAsState] 驱动：
+ * 左按钮宽度由整宽收缩到半宽、右按钮宽度由 0 长到半宽、中间间隙同步张开。
+ * 三者的宽度之和恒等于容器宽度，所以整条按钮的外框在任何一帧都不会跳动；
+ * 颜色（填充绿 → 描边红 / 填充红）也用 [animateColorAsState] 插值，
+ * 避免中途替换控件造成颜色瞬变。
+ */
+@Composable
+private fun StartStopBar(
+    isRunning: Boolean,
+    startEnabled: Boolean,
+    stopInFlight: Boolean,
+    forceStopInFlight: Boolean,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onForceStop: () -> Unit
+) {
+    val split by animateFloatAsState(
+        targetValue = if (isRunning) 1f else 0f,
+        animationSpec = tween(durationMillis = 460, easing = FastOutSlowInEasing),
+        label = "startStopSplit"
+    )
+    val leftContainer by animateColorAsState(
+        targetValue = if (isRunning) Color.Transparent else Mint,
+        animationSpec = tween(durationMillis = 460, easing = FastOutSlowInEasing),
+        label = "startStopLeftContainer"
+    )
+    val leftContent by animateColorAsState(
+        targetValue = if (isRunning) Coral else Color.White,
+        animationSpec = tween(durationMillis = 460, easing = FastOutSlowInEasing),
+        label = "startStopLeftContent"
+    )
+    val leftBorder by animateColorAsState(
+        targetValue = if (isRunning) Coral else Color.Transparent,
+        animationSpec = tween(durationMillis = 460, easing = FastOutSlowInEasing),
+        label = "startStopLeftBorder"
+    )
+    val shape = RoundedCornerShape(12.dp)
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(46.dp)
+    ) {
+        val full = maxWidth
+        val gap = 10.dp
+        val half = (full - gap) / 2
+        val leftWidth = full * (1f - split) + half * split
+        val rightWidth = half * split
+
+        // ── 左：启动（未运行）→ 强制停止（运行中）──
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .width(leftWidth)
+                .fillMaxHeight()
+                .alpha(if (!isRunning && !startEnabled) 0.45f else 1f)
+                .clip(shape)
+                .background(leftContainer)
+                .border(BorderStroke(1.5.dp, leftBorder), shape)
+                .clickable(
+                    enabled = if (isRunning) !forceStopInFlight else startEnabled,
+                    onClick = { if (isRunning) onForceStop() else onStart() }
+                ),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(
+                    if (isRunning) Icons.Outlined.Warning else Icons.Filled.PlayArrow,
+                    contentDescription = null,
+                    tint = leftContent,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.width(6.dp))
+                Crossfade(
+                    targetState = isRunning,
+                    animationSpec = tween(durationMillis = 220),
+                    label = "startStopLeftLabel"
+                ) { running ->
+                    Text(
+                        if (running) stringResource(R.string.dash_force_stop)
+                        else stringResource(R.string.s380),
+                        color = leftContent,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+
+        // ── 右：停止（随分裂进度从右边缘长出来并淡入）──
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .width(rightWidth)
+                .fillMaxHeight()
+                .alpha(split)
+                .clip(shape)
+                .background(Coral)
+                .clickable(enabled = split > 0.6f && !stopInFlight, onClick = onStop)
+        ) {
+            // 内层固定半宽并贴右：外层宽度增长时文字原地不动、由左向右被"揭开"，
+            // 不会随着宽度变化左右滑动。
+            Box(
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .width(half)
+                    .fillMaxHeight(),
+                contentAlignment = Alignment.Center
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (stopInFlight) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = Color.White,
+                            strokeWidth = 2.dp
+                        )
+                        Spacer(Modifier.width(6.dp))
+                    }
+                    Text(
+                        if (stopInFlight) stringResource(R.string.s381) else stringResource(R.string.s382),
+                        color = Color.White,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        softWrap = false
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 抽屉下拉框的一项：key 是写回配置用的稳定标识，label/note 只用于展示。 */
+private data class SheetOption(val key: String, val label: String, val note: String? = null)
+
+private const val ENV_TERMUX_JAVA = "termux_java"
+private const val ENV_FCL_JAVA = "fcl_java"
+private const val ENV_PROOT_JAVA = "proot_java"
+private const val ENV_PHP = "php"
+
+/**
+ * 通用下拉行：灰底胶囊 + 右侧箭头，点开 [DropdownMenu]。
+ *
+ * 与卡片里核心选择的行内样式同源（FieldGray + Indigo 文字），保持视觉一致。
+ */
+@Composable
+private fun SheetDropdownRow(
+    label: String,
+    selectedLabel: String,
+    options: List<SheetOption>,
+    selectedKey: String,
+    enabled: Boolean,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(label, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(4.dp))
+        Box(modifier = Modifier.fillMaxWidth()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(FieldGray)
+                    .alpha(if (enabled) 1f else 0.5f)
+                    .clickable(enabled = enabled) { expanded = true }
+                    .padding(horizontal = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    selectedLabel,
+                    color = Indigo,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Icon(
+                    Icons.Outlined.KeyboardArrowDown,
+                    contentDescription = null,
+                    tint = Indigo,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false }
+            ) {
+                options.forEach { option ->
+                    DropdownMenuItem(
+                        text = {
+                            Column {
+                                Text(
+                                    option.label,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = if (option.key == selectedKey) Indigo
+                                    else MaterialTheme.colorScheme.onSurface
+                                )
+                                option.note?.let { Text(it, color = Muted, fontSize = 10.sp) }
+                            }
+                        },
+                        onClick = {
+                            expanded = false
+                            onSelect(option.key)
+                        }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 抽屉里的开关行：左标题 + 说明，右开关。 */
+@Composable
+private fun SheetSwitchRow(
+    title: String,
+    note: String,
+    checked: Boolean,
+    enabled: Boolean = true,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp)
+            .alpha(if (enabled) 1f else 0.5f),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.height(2.dp))
+            Text(note, color = Muted, fontSize = 10.sp)
+        }
+        Spacer(Modifier.width(10.dp))
+        Switch(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
+    }
+}
+
+/**
+ * 启动设置抽屉（Bottom Sheet）。
+ *
+ * 承载原先「服务控制」卡片里的运行环境选择与「高级启动选项」卡片里的自定义启动命令，
+ * 外加运行模式、崩溃自动重启、跳过启动中进度。顺序固定为：
+ * ① 运行环境 → ② 版本 → ③ 自定义启动命令 → ④ 崩溃自动重启 → ⑤ 跳过启动中进度。
+ *
+ * 版本选择按运行环境**互不混用**：选 Termux Java 只列 Termux 的版本，选 FCL Java
+ * 只列 FCL 已发布的版本（上游没有 8/11），选 PHP 只列 PHP。改动一律走
+ * [McViewModel.applyRuntimeSelection] 一次原子写入 —— 拆成多次 set 会被 config 的
+ * 300ms 落盘 debounce 互相覆盖。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StartSettingsSheet(
+    vm: McViewModel,
+    onDismiss: () -> Unit
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val scope = rememberCoroutineScope()
+    // 必须先把下滑动画播完再移除组件：ModalBottomSheet 不会自己退场，
+    // 直接 onDismiss() 会让抽屉"啪"地消失。
+    val closeSheet: () -> Unit = {
+        scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
+    }
+
+    val runtimeKind by vm.config.map { it.runtimeKind }.distinctUntilChanged().collectAsState(initial = RuntimeKind.Java)
+    val selectedJavaRuntime by vm.config.map { it.selectedJavaRuntime }.distinctUntilChanged().collectAsState(initial = JavaRuntime.Default)
+    val selectedPhpVersion by vm.config.map { it.selectedPhpVersion }.distinctUntilChanged().collectAsState(initial = PhpVersion.Default)
+    val installedJava by vm.installedJava.collectAsState()
+    val installedPhp by vm.installedPhp.collectAsState()
+    val prootDistro by vm.config.map { it.prootDistro }.distinctUntilChanged().collectAsState(initial = ProotDistro.Default)
+    val customCommandEnabled by vm.config.map { it.advancedCustomCommandEnabled }.distinctUntilChanged().collectAsState(initial = false)
+    val customCommand by vm.config.map { it.advancedCustomCommand }.distinctUntilChanged().collectAsState(initial = "")
+    val autoRestartOnCrash by vm.config.map { it.autoRestartOnCrash }.distinctUntilChanged().collectAsState(initial = false)
+    val skipStartupProgress by vm.config.map { it.skipStartupProgress }.distinctUntilChanged().collectAsState(initial = false)
+    val maxHeapMb by vm.config.map { it.maxHeapMb }.distinctUntilChanged().collectAsState(initial = 1024)
+    val isRunning by vm.serverState.map { it.isRunning }.distinctUntilChanged().collectAsState(initial = false)
+
+    val installedLabel = stringResource(R.string.dash_java_installed)
+    val notInstalledLabel = stringResource(R.string.dash_java_not_installed)
+    // 打开抽屉时刷新一次已装列表：版本下拉里的「已安装/未安装」必须是最新的，
+    // 否则刚在依赖页装完的版本会显示成未安装。
+    LaunchedEffect(Unit) {
+        vm.refreshJava()
+        vm.refreshPhp()
+    }
+    // 运行环境与启动命令只在启动那一刻读一次 config，运行中改动无法生效，
+    // 因此运行中一律置灰（而不是骗用户"改了就好"）。
+    val editable = !isRunning
+
+    val envKey = when {
+        runtimeKind == RuntimeKind.Php -> ENV_PHP
+        selectedJavaRuntime.vendor == JavaVendor.Fcl -> ENV_FCL_JAVA
+        // Proot 来源必须单独成一项。此前没有这一支，于是选了 Proot 的用户
+        // 打开抽屉会看到「Termux Java」被选中，而版本列表又是 Termux 的那一份 ——
+        // 界面显示的来源与实际运行的来源不一致。
+        selectedJavaRuntime.vendor == JavaVendor.Proot -> ENV_PROOT_JAVA
+        // 历史配置可能是 Termux + Java 8（它实际跑在容器里）。这里按实际链路
+        // 归到 Proot 那一项，而不是让用户在「Termux Java」下看到一个
+        // 已经不再列出的版本。
+        isProotGuestRuntime(selectedJavaRuntime.vendor, selectedJavaRuntime.version) -> ENV_PROOT_JAVA
+        else -> ENV_TERMUX_JAVA
+    }
+
+    val envOptions = listOf(
+        SheetOption(ENV_TERMUX_JAVA, stringResource(R.string.dash_env_termux_java)),
+        SheetOption(ENV_FCL_JAVA, stringResource(R.string.dash_env_fcl_java)),
+        SheetOption(ENV_PROOT_JAVA, stringResource(R.string.dash_env_proot_java)),
+        SheetOption(ENV_PHP, stringResource(R.string.dash_env_php))
+    )
+
+    val versionLabel: String
+    val versionOptions: List<SheetOption>
+    val versionKey: String
+    when (envKey) {
+        ENV_PHP -> {
+            versionLabel = stringResource(R.string.dash_env_version_php)
+            versionKey = selectedPhpVersion.name
+            versionOptions = PhpVersion.entries.map { version ->
+                SheetOption(
+                    key = version.name,
+                    label = version.displayName,
+                    note = if (version in installedPhp) installedLabel else notInstalledLabel
+                )
+            }
+        }
+        ENV_FCL_JAVA -> {
+            versionLabel = stringResource(R.string.dash_env_version_fcl_java)
+            versionKey = selectedJavaRuntime.version.name
+            versionOptions = JavaVendor.Fcl.versions.map { version ->
+                SheetOption(
+                    key = version.name,
+                    label = version.displayName,
+                    note = if (JavaRuntime(JavaVendor.Fcl, version) in installedJava) installedLabel else notInstalledLabel
+                )
+            }
+        }
+        ENV_PROOT_JAVA -> {
+            versionLabel = stringResource(R.string.dash_env_version_proot_java)
+            versionKey = selectedJavaRuntime.version.name
+            // 只列**当前发行版确实提供**的版本。列并集会出现「看得到但装不上」的项
+            // （focal 没有 Java 21、jammy 没有 Java 8），点下去 apt 只会报
+            // 「Unable to locate package」，用户无法理解为什么。
+            versionOptions = prootDistro.availableJavaVersions.map { version ->
+                SheetOption(
+                    key = version.name,
+                    label = version.displayName,
+                    note = if (JavaRuntime(JavaVendor.Proot, version) in installedJava) {
+                        installedLabel
+                    } else {
+                        notInstalledLabel
+                    }
+                )
+            }
+        }
+        else -> {
+            versionLabel = stringResource(R.string.dash_env_version_termux_java)
+            versionKey = selectedJavaRuntime.version.name
+            versionOptions = JavaVendor.Termux.versions.map { version ->
+                SheetOption(
+                    key = version.name,
+                    label = version.displayName,
+                    note = if (JavaRuntime(JavaVendor.Termux, version) in installedJava) installedLabel else notInstalledLabel
+                )
+            }
+        }
+    }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface,
+        // 明显的暗色遮罩：抽屉是"浮在原页面之上"的一层，顶部留出的那部分原页面必须被压暗。
+        scrimColor = Color.Black.copy(alpha = 0.5f)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(max = 620.dp)
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 18.dp)
+                .padding(bottom = 18.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.s395),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Text(
+                        stringResource(R.string.dash_start_settings_subtitle),
+                        color = Muted,
+                        fontSize = 10.sp
+                    )
+                }
+                TextButton(onClick = closeSheet) {
+                    Text(stringResource(R.string.s73), color = Indigo, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            if (isRunning) {
+                Spacer(Modifier.height(4.dp))
+                Text(stringResource(R.string.env_java_running_block), color = Coral, fontSize = 10.sp)
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // ① 运行环境
+            SheetDropdownRow(
+                label = stringResource(R.string.dash_runtime_env),
+                selectedLabel = envOptions.first { it.key == envKey }.label,
+                options = envOptions,
+                selectedKey = envKey,
+                enabled = editable
+            ) { key ->
+                val php = selectedPhpVersion
+                when (key) {
+                    ENV_PHP -> vm.applyRuntimeSelection(RuntimeKind.Php, selectedJavaRuntime, php)
+                    ENV_FCL_JAVA -> vm.applyRuntimeSelection(
+                        RuntimeKind.Java, JavaRuntime(JavaVendor.Fcl, selectedJavaRuntime.version), php
+                    )
+                    // 切到 Proot 时把版本对齐到当前发行版：从 FCL/Termux 切过来时
+                    // 手上可能是 Java 25（两个发行版都没有），必须落到一个装得上的版本。
+                    ENV_PROOT_JAVA -> vm.applyRuntimeSelection(
+                        RuntimeKind.Java,
+                        JavaRuntime(JavaVendor.Proot, selectedJavaRuntime.version),
+                        php,
+                        prootDistro = prootDistro
+                    )
+                    else -> vm.applyRuntimeSelection(
+                        RuntimeKind.Java, JavaRuntime(JavaVendor.Termux, selectedJavaRuntime.version), php
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(12.dp))
+
+            // ①b 发行版：只在选了 PRoot 容器时出现。
+            // 放在版本之前，因为它决定版本列表 —— 顺序反了会让人以为「换了发行版
+            // 版本却没变」是 bug（实际是被自动对齐到了一个该发行版提供的版本）。
+            if (envKey == ENV_PROOT_JAVA) {
+                SheetDropdownRow(
+                    label = stringResource(R.string.dash_env_distro_label),
+                    selectedLabel = prootDistro.displayName,
+                    options = ProotDistro.entries.map { SheetOption(it.name, it.displayName) },
+                    selectedKey = prootDistro.name,
+                    enabled = editable
+                ) { key ->
+                    val picked = ProotDistro.fromName(key) ?: return@SheetDropdownRow
+                    // 换发行版必须同时重新挑版本：focal 与 jammy 的可用版本不同，
+                    // 沿用旧版本会写出一个该发行版装不上的组合。
+                    vm.applyRuntimeSelection(
+                        RuntimeKind.Java,
+                        JavaRuntime(JavaVendor.Proot, selectedJavaRuntime.version),
+                        selectedPhpVersion,
+                        prootDistro = picked
+                    )
+                }
+                Spacer(Modifier.height(12.dp))
+            }
+
+            // ② 版本（随运行环境切换，三者互不混用）
+            SheetDropdownRow(
+                label = versionLabel,
+                selectedLabel = versionOptions.firstOrNull { it.key == versionKey }?.label ?: "",
+                options = versionOptions,
+                selectedKey = versionKey,
+                enabled = editable
+            ) { key ->
+                val php = selectedPhpVersion
+                when (envKey) {
+                    ENV_PHP -> PhpVersion.fromName(key)?.let { picked ->
+                        vm.applyRuntimeSelection(RuntimeKind.Php, selectedJavaRuntime, picked)
+                    }
+                    ENV_FCL_JAVA -> JavaVersion.entries.firstOrNull { it.name == key }?.let { picked ->
+                        vm.applyRuntimeSelection(
+                            RuntimeKind.Java,
+                            JavaRuntime(JavaVendor.Fcl, picked),
+                            php
+                        )
+                    }
+                    ENV_PROOT_JAVA -> JavaVersion.entries.firstOrNull { it.name == key }?.let { picked ->
+                        vm.applyRuntimeSelection(
+                            RuntimeKind.Java,
+                            JavaRuntime(JavaVendor.Proot, picked),
+                            php,
+                            prootDistro = prootDistro
+                        )
+                    }
+                    else -> JavaVersion.entries.firstOrNull { it.name == key }?.let { picked ->
+                        vm.applyRuntimeSelection(
+                            RuntimeKind.Java,
+                            JavaRuntime(JavaVendor.Termux, picked),
+                            php
+                        )
+                    }
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ③ 自定义启动命令
+            SheetSwitchRow(
+                title = stringResource(R.string.dash_custom_command_title),
+                note = stringResource(R.string.dash_custom_command_note),
+                checked = customCommandEnabled,
+                enabled = editable,
+                onCheckedChange = { enabled ->
+                    vm.updateConfig { it.copy(advancedCustomCommandEnabled = enabled) }
+                }
+            )
+            AnimatedVisibility(
+                visible = customCommandEnabled,
+                enter = fadeIn(tween(180)) + expandVertically(tween(220)),
+                exit = fadeOut(tween(140)) + shrinkVertically(tween(180))
+            ) {
+                Column {
+                    Spacer(Modifier.height(4.dp))
+                    DebouncedTextField(
+                        value = customCommand,
+                        onValueChange = { value ->
+                            vm.updateConfig { it.copy(advancedCustomCommand = value) }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        label = { Text(stringResource(R.string.dash_custom_command_label), fontSize = 11.sp) },
+                        placeholder = {
+                            Text(
+                                stringResource(R.string.dash_custom_command_placeholder),
+                                fontSize = 11.sp,
+                                color = Muted
+                            )
+                        },
+                        minLines = 3,
+                        maxLines = 6,
+                        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(14.dp))
+
+            // ④ 崩溃自动重启
+            SheetSwitchRow(
+                title = stringResource(R.string.s396),
+                note = stringResource(R.string.s397),
+                checked = autoRestartOnCrash,
+                onCheckedChange = { vm.setAutoRestart(it) }
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            // ⑤ 跳过启动中进度
+            SheetSwitchRow(
+                title = stringResource(R.string.dash_skip_startup_progress),
+                note = stringResource(R.string.dash_skip_startup_progress_note),
+                checked = skipStartupProgress,
+                onCheckedChange = { vm.setSkipStartupProgress(it) }
+            )
+
+            Spacer(Modifier.height(12.dp))
+            Text(
+                stringResource(R.string.s398, maxHeapMb),
+                color = Muted,
+                fontSize = 10.sp
+            )
+        }
+    }
 }

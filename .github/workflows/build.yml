@@ -99,7 +99,8 @@ jobs:
 
   release:
     name: Release (tag)
-    # Release APK is published from the maintainer machine so it keeps the original signing key.
+    # Release APK 用发布密钥签名：keystore 从 Secret KEYSTORE_BASE64 还原（见下方
+    # “Restore release keystore”），因此与本地 assembleRelease 是同一把密钥，可以覆盖安装。
     # 触发条件：推送 v* 标签即产出，不再要求同时走 workflow_dispatch（旧条件几乎无法命中）。
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build

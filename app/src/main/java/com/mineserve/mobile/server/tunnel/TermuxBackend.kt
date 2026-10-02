@@ -39,6 +39,11 @@ abstract class TermuxBackend(
     /** 看门狗超时 ms */
     protected open val watchdogTimeoutMs: Long = 30_000
 
+    /** 诊断时保留的进程输出最大行数（环形缓冲，防止长会话内存增长） */
+    private companion object {
+        const val DIAGNOSTIC_LINES = 200
+    }
+
     /** 是否通过 proot 运行（让 /etc/resolv.conf → PREFIX/etc/resolv.conf） */
     protected open val useProot: Boolean = false
 
@@ -193,13 +198,16 @@ abstract class TermuxBackend(
         Thread({
             try {
                 val reader = BufferedReader(InputStreamReader(proc.inputStream))
-                val outputLines = StringBuilder()
+                // 环形缓冲：frpc 反复重连时输出会持续刷屏，只保留最后 DIAGNOSTIC_LINES 行
+                // 供 diagnoseFailure 使用，避免长会话内存单调增长。
+                val outputLines = ArrayDeque<String>()
                 var gotUrl = false
 
                 var line: String? = reader.readLine()
                 while (line != null) {
                     log(line)
-                    outputLines.append(line).append('\n')
+                    outputLines.addLast(line)
+                    if (outputLines.size > DIAGNOSTIC_LINES) outputLines.removeFirst()
 
                     if (!gotUrl) {
                         val url = parsePublicUrl(line)
@@ -216,7 +224,7 @@ abstract class TermuxBackend(
                 val exitCode = proc.waitFor()
                 if (isRunning) {
                     val errMsg = if (!gotUrl) {
-                        diagnoseFailure(exitCode, outputLines.toString())
+                        diagnoseFailure(exitCode, outputLines.joinToString("\n"))
                     } else {
                         "隧道进程已退出 (code=$exitCode)"
                     }

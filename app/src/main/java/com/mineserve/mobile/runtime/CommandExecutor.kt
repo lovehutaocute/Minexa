@@ -194,7 +194,12 @@ class CommandExecutor(
         Log.d(TAG, "execWithOutput: ${full.joinToString(" ").take(200)}")
         val pb = ProcessBuilder(full).apply {
             redirectErrorStream(true)
-            redirectInput(File("/dev/null"))
+            // 这里**不能** redirectInput(/dev/null)：
+            // 一旦把 stdin 重定向到文件，Process.outputStream 就变成 Java 的 null output stream，
+            // 写入既不报错也不生效。而下面马上把这个流赋给 interactiveInput、由
+            // sendInteractiveInput 往上写——于是用户在终端面板敲的 y/n、read、python 输入
+            // 全被静默丢弃，UI 却照常回显「> 输入」，命令永远卡住。
+            // 保持 PIPE（默认）才能让交互真正生效。
             directory(File(installer.rootDir, "home").apply { mkdirs() })
             environment().putAll(termuxEnv())
             env.forEach { (k, v) -> environment()[k] = v }

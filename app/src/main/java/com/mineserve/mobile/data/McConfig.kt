@@ -39,9 +39,6 @@ enum class ServerCore(val displayName: String) {
     /** 是否支持 Fabric/Forge 模组体系 */
     val supportsMods: Boolean get() = this == Fabric || this == Forge || this == NeoForge || this == Quilt
 
-    /** 是否支持桥接兼容层（插件↔模组互转，如 CardBoard 等，需用户自行安装） */
-    val supportsBridge: Boolean get() = this == Fabric || this == Forge || this == NeoForge || this == Quilt
-
     val propertiesMode: PropertiesMode
         get() = when (this) {
             PowerNukkitX -> PropertiesMode.PowerNukkitXYaml
@@ -59,12 +56,14 @@ enum class ServerCore(val displayName: String) {
  * - Frp: 自建 frp 服务器，最灵活，功能最全
  * - Bore: 自建 bore 服务器，协议极简，纯 Kotlin 实现无需 Termux
  * - SakuraFrp: SakuraFrp 平台，填 Token 自动拉取隧道配置，无需自建服务器
+ * - MeFrp: ME Frp 平台，填 Token 自动拉取隧道配置，免费节点，无需自建服务器
  */
 @Serializable
 enum class TunnelType(val displayName: String, val description: String) {
     Frp("frp", "自建服务器，功能最全，支持自定义端口"),
     Bore("bore", "自建服务器，协议最简，纯手机端运行无需下载二进制"),
-    SakuraFrp("SakuraFrp", "填入 Token 管理隧道，官方节点，无需自建服务器")
+    SakuraFrp("SakuraFrp", "填入 Token 管理隧道，官方节点，无需自建服务器"),
+    MeFrp("ME Frp", "填入 Token 管理隧道，免费节点，无需自建服务器")
 }
 
 /**
@@ -149,9 +148,269 @@ enum class JavaVersion(val displayName: String, val packageName: String, val dir
 }
 
 /**
+ * PRoot 来宾发行版（rootfs 画像）。
+ *
+ * ## 为什么要有这个枚举
+ *
+ * 在这之前，PRoot 只服务于**一个**用途：在 Ubuntu 20.04 里跑 Java 8。
+ * 于是 rootfs 路径（`java8-ubuntu-rootfs`）、就绪标记（`java-8-ubuntu-ready`）、
+ * 来宾 JAVA_HOME（`/usr/lib/jvm/java-8-openjdk-arm64`）、apt 源代号（`focal`）
+ * 全部硬编码在 `TermuxRuntime` 里。 *
+ * 现在 PRoot 要作为**通用 Linux 容器**暴露给用户（第三种 [JavaVendor]），
+ * 就得支持多个发行版，并把上面那批常量参数化 —— 这个枚举就是那组参数的唯一来源。
+ *
+ * ## 首期范围
+ *
+ * 只实现 [Focal]（Ubuntu 20.04）与 [Jammy]（Ubuntu 22.04）。
+ * **刻意不预留 Debian/Bookworm 空壳条目**：列表里出现的每一项都必须是真能装上的，
+ * 否则就成了「点了装不上」的死路（同 [JavaVendor.versions] 的原则）。
+ *
+ * ## 路径命名：每个发行版一个独立子目录
+ *
+ * 每个发行版在 `$PREFIX/var/lib/mineserve/` 下有**自己独立的**目录名
+ * （`focal-rootfs` / `jammy-rootfs`），互不共享。
+ *
+ * 这是刻意的：早期 PRoot 只用于「Ubuntu 20.04 + Java 8」一种用途，
+ * 路径直接叫 `java8-ubuntu-rootfs`，既编码了发行版又编码了 Java 版本 ——
+ * 而同一个 rootfs 本就可以装任意受支持的 JDK。现在改成按发行版命名，
+ * 「哪个 rootfs」与「里面装哪个 Java」彻底解耦。
+ *
+ * **代价（已知并接受）**：升级前已装好 Java 8 的用户，其 rootfs 仍在旧路径下，
+ * 应用会显示「未安装」，需要重新下载安装一次。旧目录不会被自动删除 ——
+ * 应用不再引用它，也不做自动清理（避免误删用户数据）；
+ * 如需回收空间，可由用户手动删除 `var/lib/mineserve/java8-ubuntu-rootfs`。
+ *
+ * ## rootfs 来源
+ *
+ * 沿用既有的 Ubuntu Base 直下方案（清华 / 中科大镜像的 `ubuntu-cdimage`），
+ * **不走 Docker Hub** —— 移动网络下 Docker Hub 经常返回 HTTP 429，
+ * 而 Ubuntu 归档站是普通 HTTP 端点，不需要账号、不限速。
+ */
+@Serializable
+enum class ProotDistro(
+    /** 界面与日志里的显示名。刻意带上版本号，用户选的就是「哪个发行版」。 */
+    val displayName: String,
+    /** 来宾代号，用于拼 apt 源（`deb <mirror> <codename> main ...`）。 */
+    val codename: String,
+    /** rootfs 落点目录名（相对 `$PREFIX/var/lib/mineserve/`）。 */
+    val dirName: String
+) {
+    Focal(
+        displayName = "Ubuntu 20.04 (focal)",
+        codename = "focal",
+        dirName = "focal-rootfs"
+    ),
+
+    Jammy(
+        displayName = "Ubuntu 22.04 (jammy)",
+        codename = "jammy",
+        dirName = "jammy-rootfs"
+    );
+
+    /**
+     * 本发行版的 apt 源镜像。
+     *
+     * 只用国内镜像：PRoot 容器首次安装 JDK 要拉 100–200MB 的 deb，
+     * 走海外源在移动网络下基本不可用。安装脚本会逐个尝试。
+     */
+    val aptMirrors: List<String> get() = listOf(
+        "http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports",
+        "http://mirrors.ustc.edu.cn/ubuntu-ports"
+    );
+
+    /**
+     * 本发行版**确实能通过 apt 装到**的 Java 版本。
+     *
+     * ## 为什么不能直接用 `JavaVersion.entries`
+     *
+     * 这张表是「上游包现实」的忠实记录，而不是我们的愿望清单：
+     *
+     * - `openjdk-8-jdk` 只存在于 focal；Jammy 的源里没有 Java 8。
+     * - `openjdk-21-jdk` 只存在于 jammy；Focal 的源里没有 Java 21。
+     * - **Java 25 在两者中都不存在** —— Ubuntu 官方 arm64 源根本没有 openjdk-25。
+     *
+     * 若照抄全版本，界面会列出装了必然失败的选项（用户点了只看到 apt 报
+     * `Unable to locate package`，藏在日志深处，很容易被当成应用 bug）。
+     * 因此 UI、安装、启动校验、诊断四处**都必须**从这张表派生，不得各自硬编码。
+     *
+     * 另注：Java 25 的缺失是**首期已确认的范围决策**，不是待办事项 ——
+     * 文案口径应为「该容器不提供」，而不是「暂未支持」（后者暗示等更新就有）。
+     */
+    val availableJavaVersions: List<JavaVersion>
+        get() = when (this) {
+            Focal -> listOf(JavaVersion.Java8, JavaVersion.Java11, JavaVersion.Java17)
+            Jammy -> listOf(JavaVersion.Java11, JavaVersion.Java17, JavaVersion.Java21)
+        };
+
+    /** 本发行版下「容器内 Java 版本」的完整坐标；版本不可装时返回 null。 */
+    fun profileFor(version: JavaVersion): ProotContainerProfile? =
+        availableJavaVersions.firstOrNull { it == version }
+            ?.let { ProotContainerProfile(this, it) }
+
+    /**
+     * 胶囊切换控件里用的短名（「Ubuntu 20.04」）。
+     *
+     * [displayName] 带代号（「Ubuntu 20.04 (focal)」），在只有两个选项、每条
+     * 只有一半宽度的胶囊里会挤成两行。代号本身在分组说明里已经出现过，
+     * 这里省掉不丢信息。
+     */
+    val shortName: String
+        get() = displayName.substringBefore(" (")
+
+    companion object {
+        /** 新装容器的默认发行版：Java 版本覆盖面更适合新核心（11/17/21）。 */
+        val Default: ProotDistro = Jammy
+
+        fun fromName(name: String?): ProotDistro? = entries.firstOrNull { it.name == name }
+    }
+}
+
+/**
+ * Java 运行时的**来源分类**。
+ *
+ * 两套 JDK 是同一个东西的两个来源，都跑在同一个 Termux 环境里、共用同一套启动链路，
+ * 差别只在「谁是 JDK 本体」：
+ *
+ * - [Termux]：Termux 生态的 openjdk（apt 装，Java 8 额外走 proot/Ubuntu 容器）。
+ *   它的 `libnet.so` 在 Android 上判定「本机没有 IPv6」，因此需要 [JvmFlavor.PatchedJdk]
+ *   那层兼容库才能监听 `::`。
+ * - [Fcl]：FoldCraftLauncher 血统的 Android 原生 JRE（PojavLauncherTeam 构建，
+ *   从 `.ecpkg` 包安装）。它的 `libnet.so` 编译期就跳过了 `/proc/net/if_inet6` 检查，
+ *   `::` 直接可用，不需要兼容层；只依赖系统库（`libc/libz/libdl/libm`），不依赖 Termux 前缀。
+ *
+ * 分类是给用户看的「来源」，版本号才是能力差异 —— 因此 UI 上按来源分组、
+ * 组内只显示纯版本号。
+ */
+@Serializable
+enum class JavaVendor {
+    /** Termux 官方/社区 openjdk（apt 安装，Java 8 走 proot 容器）。 */
+    Termux,
+
+    /** FoldCraftLauncher 血统的原生 JRE（.ecpkg 包，自带 IPv6 支持）。 */
+    Fcl,
+
+    /**
+     * PRoot Linux 容器里的 glibc JDK（Ubuntu 20.04 / 22.04，apt 安装）。
+     *
+     * ## 与 [Termux] 的区别
+     *
+     * 两者都是 apt 装的 openjdk，但**运行在不同的 libc 世界里**：
+     * [Termux] 用 bionic，跑在 Android 内核上直连；[Proot] 用 glibc，
+     * 跑在 PRoot 用户态兼容层重写的 Ubuntu rootfs 里。这带来三个实际差异：
+     *
+     * 1. **IPv6 兼容层（[JvmFlavor.PatchedJdk]）对它无效** —— 那层是按 bionic
+     *    构建的 `LD_PRELOAD` 库，guest 内是 glibc loader，加载不了。
+     * 2. **来宾版本受发行版 apt 源限制**：见 [ProotDistro.availableJavaVersions]，
+     *    首期 focal 提供 8/11/17、jammy 提供 11/17/21，**都不提供 Java 25**。
+     * 3. 多一层 `proot` + `ptrace`，启动更慢、IO 有开销。
+     *
+     * ## 为什么它值得存在
+     *
+     * 服务端目录以 bind 方式进入容器（`/srv/mineserve`），所以世界、插件、备份、
+     * 文件管理全部仍在原来的宿主路径上，应用其余部分一行都不用改；
+     * 而用户拿到的是一个**标准 glibc Linux 环境**，能跑那些在 bionic 上
+     * 水土不服的服务端与原生依赖。
+     */
+    Proot;
+
+    /**
+     * 该来源提供的版本列表。
+     *
+     * 三个来源各自如实列出**确实能装上**的版本，不虚构选项 ——
+     * UI 分组时直接用它，不要再各处硬编码一份。
+     *
+     * - Termux：11/17/21/25。**刻意不含 Java 8** —— Java 8 在 Termux 下同样
+     *   跑在 proot 容器里，把它列在这里会和「PRoot 容器」分组重复列同一个容器，
+     *   用户会以为有两份而重复安装、或看不懂磁盘占用为何翻倍。
+     *   它只出现在它真正所属的分组里（[Proot]）。
+     * - FCL：上游只发布 17/21/25（没有 8 与 11）。
+     * - Proot：取两个发行版可用版本的**并集**（focal 8/11/17 ∪ jammy 11/17/21），
+     *   即 8/11/17/21。**不含 Java 25** —— 这不是遗漏，是 Ubuntu arm64 源
+     *   确实没有该包。用户选到 Java 21 时，具体用哪个发行版由
+     *   [McConfig.prootDistro] 决定，启动前会校验该发行版是否真的提供这个版本。
+     *
+     * ⚠️ 历史配置里仍可能有 `selectedJavaVendor = Termux` + `JavaVersion.Java8`
+     * （该组合曾是这个分组下的唯一选项）。它**仍然可用**：见 [isProotGuestRuntime]，
+     * 该组合会被正确路由到 focal 容器。列表里不再展示，是为了不再重复；
+     * 已有配置不会因此失效。
+     */
+    val versions: List<JavaVersion>
+        get() = when (this) {
+            Termux -> listOf(
+                JavaVersion.Java11,
+                JavaVersion.Java17,
+                JavaVersion.Java21,
+                JavaVersion.Java25
+            )
+            Fcl -> listOf(JavaVersion.Java17, JavaVersion.Java21, JavaVersion.Java25)
+            Proot -> listOf(
+                JavaVersion.Java8,
+                JavaVersion.Java11,
+                JavaVersion.Java17,
+                JavaVersion.Java21
+            )
+        }
+
+    /**
+     * 日志与诊断里用的短名。
+     *
+     * 刻意不本地化：这些字样会出现在控制台日志与崩溃报告里，用户拿去搜索/对比时
+     * 必须与代码、文档里的叫法一致。界面上的分组标题另走 strings 资源。
+     */
+    val logName: String
+        get() = when (this) {
+            Termux -> "Termux"
+            Fcl -> "FCL"
+            Proot -> "PRoot"
+        }
+
+    /**
+     * 该来源在**指定发行版**下真正可安装的版本。
+     *
+     * 与 [versions] 的区别只在 [Proot]：[versions] 是两个发行版的并集，
+     * 而单个发行版只提供其中一部分（focal 无 21、jammy 无 8）。
+     * 其余来源与发行版无关，直接返回 [versions]。
+     *
+     * 需要判断「这个来源能不能装这个版本」时必须用本方法 ——
+     * 用 [versions] 会把 focal 装不上的 Java 21 判成可用，
+     * 直到进容器跑 apt 才报 `Unable to locate package`。
+     */
+    fun availableVersions(distro: ProotDistro): List<JavaVersion> =
+        if (this == Proot) distro.availableJavaVersions else versions
+}
+
+/**
+ * 判断某个 (来源, 版本) 在指定发行版下是否真的能装上。
+ *
+ * 这是判断可安装性的**唯一入口**：`Proot` 受发行版限制，其余来源不受。
+ */
+fun JavaVendor.provides(version: JavaVersion, distro: ProotDistro): Boolean =
+    version in availableVersions(distro)
+
+/**
+ * 一个具体的运行环境：**来源 + 版本**。
+ *
+ * 项目里凡是「当前用哪个 Java」的状态都应该是这个类型，而不是裸的 [JavaVersion] ——
+ * 否则「Java 17」在两个来源下会指向同一个值，选中的到底是哪一套就分不清了。
+ */
+data class JavaRuntime(val vendor: JavaVendor, val version: JavaVersion) {
+
+    /** 行内显示名。来源由分组标题表达，这里只给版本号。 */
+    val displayName: String get() = version.displayName
+
+    companion object {
+        val Default = JavaRuntime(JavaVendor.Termux, JavaVersion.Java17)
+
+        /** 全部可选运行环境，按来源分组顺序展开（Termux 在前）。 */
+        val all: List<JavaRuntime>
+            get() = JavaVendor.entries.flatMap { v -> v.versions.map { JavaRuntime(v, it) } }
+    }
+}
+
+/**
  * 运行环境大类：Java 系核心跑 JVM，PocketMine-MP 跑 PHP。
  *
- * 启动控制卡片的模式下拉、运行环境列表、依赖管理页的 PHP 版本选择共用这一个枚举，
+ * 启动设置抽屉的运行环境下拉、依赖管理页的 PHP 版本选择共用这一个枚举，
  * 避免各处各写一套判断。
  */
 enum class RuntimeKind { Java, Php }
@@ -200,6 +459,33 @@ enum class AutoBackupType(val displayName: String) {
     Server("完整服务器")
 }
 
+/**
+ * Java 核心使用的 JVM 实现（由运行环境来源隐含决定，界面上不再暴露开关）。
+ *
+ * 两者跑的都是同一批已安装的 openjdk，差别只在**启动时挂不挂一层兼容库**：
+ *
+ *  - [TermuxJdk]：原样启动 Termux 的 openjdk。它判定「本机有没有 IPv6」靠
+ *    `fopen("/proc/net/if_inet6")`，而 Android 上 App 读不到这个文件 ⇒ 判定为
+ *    不支持 IPv6 ⇒ `ServerSocketChannel` 只按 IPv4 打开 ⇒ `server-ip=::`
+ *    在 `Net.checkAddress` 抛 `UnsupportedAddressTypeException`，服务端启动即崩。
+ *  - [PatchedJdk]：额外 `LD_PRELOAD` 我们的 [NativeLibraryBundler.IPV6_FIX_LIB]，
+ *    把那次 fopen 重定向到非空文件，等价于 AOSP / Pojav 那条
+ *    `skip_proc_net6_check` 编译期补丁 ⇒ JVM 认为 IPv6 可用 ⇒ `server-ip=::`
+ *    可正常绑定（IPv6 与 IPv4 双栈监听）。
+ *
+ * 两种实现共用同一份 JAVA_HOME 与已装 JDK，**只影响 JVM 进程内的行为**：
+ * [PatchedJdk] 除 IPv6 判定外不改动任何其他逻辑（Xmx、时区、TMPDIR、堆标签修复
+ * 全都照旧）。Java 8（proot/Ubuntu 容器）用不到这层 —— guest 内是 glibc loader，
+ * 加载不了这个 bionic 构建的库。
+ */
+@Serializable
+enum class JvmFlavor {
+    /** Termux 官方 openjdk，原样启动。 */
+    TermuxJdk,
+    /** 同一份 JDK + libipv6fix 兼容层（IPv6 监听可用）。 */
+    PatchedJdk
+}
+
 @Serializable
 enum class StepStatus { Done, Active, Wait }
 
@@ -245,11 +531,56 @@ data class McConfig(
     val sakuraToken: String = "",
     /** SakuraFrp: 选中的隧道 ID（启动时据此拉取官方配置） */
     val sakuraTunnelId: String = "",
+    /** ME Frp: 访问令牌（api.mefrp.com） */
+    val meFrpToken: String = "",
+    /** ME Frp: 选中的隧道（代理）ID（启动时据此拉取官方配置） */
+    val meFrpTunnelId: String = "",
     val maxHeapMb: Int = 1024,            // -Xmx JVM 堆上限，按设备 RAM 给推荐值
     val autoRestartOnCrash: Boolean = false, // 默认关闭省电，避免误触发
+    /**
+     * 跳过「启动中」的阶段进度展示。
+     *
+     * 开启后概览页顶部不再显示启动阶段进度条与「正在启动服务端 · xxx」，
+     * 而是直接按运行中呈现（TPS / 在线人数等服务端就绪后自然填上）。
+     *
+     * 只影响**界面呈现**，不改变启动链路的任何等待或探测 ——
+     * 启动本身照旧逐步推进，[ServerState.startupPhase] 也照常更新，
+     * 只是概览页不再把它摆在最显眼的位置。
+     */
+    val skipStartupProgress: Boolean = false,
     val selectedJavaVersion: JavaVersion = JavaVersion.Java17,
     /**
-     * 启动控制卡片的运行模式（Java / PHP）。
+     * 当前选用的 Java **来源**（见 [JavaVendor]）。
+     *
+     * 与 [selectedJavaVersion] 一起构成完整的运行环境选择：版本号决定能力下限
+     * （MC 版本要求的 Java 版本），来源决定用哪一套 JDK 实现。
+     * 默认 [JavaVendor.Termux]，与历史行为一致（旧配置解析后自然落到这里）。
+     */
+    val selectedJavaVendor: JavaVendor = JavaVendor.Termux,
+    /**
+     * Termux 来源的 JDK 启动时是否挂 IPv6 兼容层（见 [JvmFlavor]）。
+     *
+     * 默认 [JvmFlavor.PatchedJdk] —— 也就是说 **Termux 来源默认就支持 `server-ip=::`**，
+     * 用户不需要（也没有）任何开关去理解这件事。历史上这个开关曾在启动卡片上以
+     * 「JVM 实现」两枚按键的形式暴露，容易让人以为默认那档是坏的；现在改为由
+     * 来源分类隐含：Termux 自动挂，FCL 自带（不需要挂）。
+     *
+     * 字段本身保留，是为了给 MCP / 高级排查留一条「关掉兼容层做对照」的路。
+     */
+    val jvmFlavor: JvmFlavor = JvmFlavor.PatchedJdk,
+    /**
+     * 所选 PRoot 容器发行版（仅 [JavaVendor.Proot] 有意义）。
+     *
+     * 与 [selectedJavaVersion] 一起构成 PRoot 运行环境的完整坐标：
+     * 「哪个发行版 + 里面装哪个 Java」。发行版决定**哪些 Java 版本真的能装**
+     * （见 [ProotDistro.availableJavaVersions]），因此启动前必须校验这个组合，
+     * 不能假设用户选的版本一定在该发行版里存在。
+     *
+     * 默认 [ProotDistro.Default]（jammy）。字段带默认值，老配置反序列化不受影响。
+     */
+    val prootDistro: ProotDistro = ProotDistro.Default,
+    /**
+     * 启动设置抽屉的运行模式（Java / PHP）。
      *
      * 仅作为"用户想看哪一类运行环境"的界面状态；真正决定用哪个运行时的是
      * 当前核心类型 —— PocketMine-MP 一律走 PHP，其他核心一律走 JVM。
@@ -280,11 +611,9 @@ data class McConfig(
     val installedCores: List<InstalledCore> = emptyList(),
     /** 当前选用启动的核心名称（对应 InstalledCore.name），null 表示未选择 */
     val activeCoreName: String? = null,
-    /** @deprecated 旧版兼容字段，由 installedCores 替代 */
-    val downloadedCore: ServerCore? = null,
-    /** @deprecated 旧版兼容字段 */
-    val downloadedVersion: String? = null,
-    // ── 高级启动选项 ──────────────────────────────────────────
+    // 注：旧版兼容字段 downloadedCore / downloadedVersion 已删除。它们由 installedCores
+    // 取代且无任何读写方，旧配置文件里的残留键由 Json(ignoreUnknownKeys = true) 自动忽略。
+    // ── 自定义启动命令（启动设置抽屉） ─────────────────────────
     /** 完全自定义启动命令开关：开启后直接执行整条命令，忽略自动拼接 */
     val advancedCustomCommandEnabled: Boolean = false,
     /** 完全自定义启动命令（整条 Java 启动指令） */
@@ -313,8 +642,68 @@ data class McConfig(
     /** MCP HTTP 监听端口 */
     val mcpPort: Int = 8931,
     /** MCP 访问令牌（Bearer 鉴权），首次启用时自动生成 */
-    val mcpToken: String = ""
-)
+    val mcpToken: String = "",
+    /**
+     * 是否允许局域网访问 MCP 端口；false 时只监听 127.0.0.1（默认，更安全）。
+     *
+     * 默认关闭是有意的：MCP 端点可执行 run_termux_command 等特权操作，
+     * 而局域网（尤其是公共 Wi-Fi）并不总是可信，旧版本无条件绑 0.0.0.0
+     * 等于把端口暴露给同网段任意主机。需要手机以外的 AI 助手接入时，
+     * 用户须显式开启。字段带默认值，老配置反序列化不受影响。
+     */
+    val mcpAllowLan: Boolean = false
+) {
+    /**
+     * 当前选用的运行环境 = 来源 + 版本。
+     *
+     * 只在需要「区分来源」的地方用它；纯粹的版本比较（比如按 MC 版本推荐 Java）
+     * 仍然用 [selectedJavaVersion]，因为那是版本能力问题、与来源无关。
+     */
+    val selectedJavaRuntime: JavaRuntime
+        get() = JavaRuntime(selectedJavaVendor, selectedJavaVersion)
+
+    /**
+     * 当前来源的 JDK 是否支持 IPv6 监听。
+     *
+     * 三种来源各不相同：
+     * - [JavaVendor.Fcl]：那套 JRE 的 `libnet.so` 编译期就跳过了 IPv6 接口检查，自带支持。
+     * - [JavaVendor.Termux]：bionic JDK 本身判定「本机无 IPv6」，
+     *   要靠 `libipv6fix`（[JvmFlavor.PatchedJdk]）这个 `LD_PRELOAD` 兼容层绕过。
+     * - [JavaVendor.Proot]：来宾里是 glibc loader，加载不了按 bionic 构建的兼容层。
+     *
+     * ## Termux + Java 8 必须先判容器
+     *
+     * 「Termux + Java 8」其实跑在 proot 容器里（与 `PRoot + focal` 是同一个容器），
+     * 因此它也属于 glibc 世界、同样挂不上兼容层。
+     * 早先这里只按 `jvmFlavor` 判断，于是用户选了 Termux + Java 8 + PatchedJdk 时
+     * 会得到 `true` —— 而实际启动时兼容层根本没被加载，结果是
+     * Allay 被写成 `enablev6: true`，服务端起来时抛
+     * `UnsupportedAddressTypeException`。判定必须与真实链路一致。
+     */
+    val ipv6ListenAvailable: Boolean
+        get() {
+            // 先判「是否走来宾容器」：容器内一律不支持，与 jvmFlavor 无关
+            if (isProotGuestRuntime(selectedJavaVendor, selectedJavaVersion)) return false
+            return when (selectedJavaVendor) {
+                JavaVendor.Fcl -> true
+                JavaVendor.Termux -> jvmFlavor == JvmFlavor.PatchedJdk
+                // 来宾里是 glibc 的 java，兼容层是按 bionic 构建的 LD_PRELOAD 库，
+                // 在 guest 内根本加载不了 ⇒ 与 Termux 不挂兼容层时同样不支持 `server-ip=::`。
+                // 如实返回 false，让 UI 的提示与启动日志一致，而不是给出一个乐观的谎。
+                JavaVendor.Proot -> false
+            }
+        }
+
+    /**
+     * 当前 PRoot 选择对应的容器画像（仅 [JavaVendor.Proot] 有意义）。
+     *
+     * @return 组合合法时返回画像；所选发行版**不提供**该 Java 版本时返回 null。
+     *   调用方（启动校验、UI、诊断）拿到 null 必须给出明确提示，
+     *   而不是静默换一个版本 —— 用户选的和他得到的必须是同一个东西。
+     */
+    val prootProfile: ProotContainerProfile?
+        get() = prootDistro.profileFor(selectedJavaVersion)
+}
 
 /**
  * 服务器实时状态（运行时内存态，由 Service 推送）

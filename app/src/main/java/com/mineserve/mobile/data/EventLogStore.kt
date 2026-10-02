@@ -62,7 +62,23 @@ object EventLogStore {
 
     private fun persist(context: Context, dirName: String, list: List<WidgetEvent>) {
         runCatching {
-            eventFile(context, dirName).writeText(json.encodeToString(list))
+            val file = eventFile(context, dirName)
+            val text = json.encodeToString(list)
+            // 临时文件 + rename 覆盖：writeText 直接截断覆盖，若写一半被杀进程会留下
+            // 截断的 JSON，下次 loadLocked 解析失败静默返回空列表，整份历史丢失。
+            val temp = File.createTempFile("${file.name}.", ".tmp", file.parentFile)
+            try {
+                temp.writeText(text)
+                if (!temp.renameTo(file)) {
+                    // 个别文件系统上 rename 到已存在文件会失败：退化为直接写（仍尽量让
+                    // 新数据落盘），失败时保留旧文件，不主动删除。
+                    file.writeText(text)
+                }
+            } catch (_: Exception) {
+                // 写临时文件失败时保留旧文件，绝不把有效数据弄丢
+            } finally {
+                if (temp.exists()) temp.delete()
+            }
         }
     }
 

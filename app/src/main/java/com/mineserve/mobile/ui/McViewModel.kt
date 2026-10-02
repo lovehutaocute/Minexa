@@ -15,13 +15,18 @@ import android.net.Uri
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.PhpVersion
+import com.mineserve.mobile.data.ProotDistro
+import com.mineserve.mobile.data.isProotGuestRuntime
 import com.mineserve.mobile.data.RuntimeKind
+import com.mineserve.mobile.data.JavaRuntime
+import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.MinecraftVersionNormalizer
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.ServerState
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.runtime.ConsoleLineParser
+import com.mineserve.mobile.runtime.NativeLibraryBundler
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
@@ -44,6 +49,8 @@ import com.mineserve.mobile.server.PowerNukkitXConfigManager
 import com.mineserve.mobile.server.PowerNukkitXLayout
 import com.mineserve.mobile.server.ServerImporter
 import com.mineserve.mobile.server.TunnelManager
+import com.mineserve.mobile.server.WorldManager
+import com.mineserve.mobile.server.Worlds
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -54,10 +61,12 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -159,6 +168,21 @@ class McViewModel(
     val lastRunLog: StateFlow<String> = _lastRunLog.asStateFlow()
     @Volatile private var terminalHistoryLoading = false
 
+    /**
+     * 界面是否处于前台可见。
+     *
+     * 原先用 `StateFlow.subscriptionCount <= 0` 当作「UI 不可见」来降频，但订阅方用的是
+     * `collectAsState`（非生命周期感知）：Activity 停止后 Compose 组合不销毁、订阅数恒 > 0，
+     * 于是注释里宣称的「后台降为 2s」永不生效，待机耗电偏高。
+     * 这里改为显式标志位，由 McApp 通过生命周期事件推送真实前台/后台状态。
+     */
+    @Volatile private var uiVisible = true
+
+    /** 由 McApp 在 Activity 前台/后台切换时调用，供日志刷新循环据此降频。 */
+    fun setUiVisible(visible: Boolean) {
+        uiVisible = visible
+    }
+
     /** 事件通知等级：0=关闭 1=仅重要 2=全部（含玩家上下线）。 */
     private val _eventNotifyLevel = MutableStateFlow(ServerEventNotifier.level(app))
     val eventNotifyLevel: StateFlow<Int> = _eventNotifyLevel.asStateFlow()
@@ -190,7 +214,7 @@ class McViewModel(
     fun createTerminalSession() {
         val next = (_terminalSessions.value.count { it.type == TerminalSessionType.Termux } + 1)
         val id = "termux-${System.nanoTime()}"
-        _terminalSessions.value = _terminalSessions.value + TerminalSession(id, "Termux $next", TerminalSessionType.Termux)
+        _terminalSessions.update { it + TerminalSession(id, "Termux $next", TerminalSessionType.Termux) }
         _activeTerminalSessionId.value = id
     }
 
@@ -204,15 +228,23 @@ class McViewModel(
     fun closeTerminalSession(id: String) {
         val session = _terminalSessions.value.firstOrNull { it.id == id } ?: return
         if (session.type == TerminalSessionType.Minecraft) return
-        val remaining = _terminalSessions.value.filterNot { it.id == id }
-        if (remaining.none { it.type == TerminalSessionType.Termux }) {
-            val fallback = TerminalSession("termux-${System.nanoTime()}", "Termux 1", TerminalSessionType.Termux)
-            _terminalSessions.value = remaining + fallback
-            _activeTerminalSessionId.value = fallback.id
-        } else {
-            _terminalSessions.value = remaining
-            if (_activeTerminalSessionId.value == id) _activeTerminalSessionId.value = remaining.first().id
+        // 用 update 原子读改写：终端刷新协程（Dispatchers.Default）会对同一 StateFlow 做 map 写回，
+        // 原先「读 remaining → 整条写回」的跨线程读改写会互相覆盖，导致新建会话整条消失或本轮输出被丢。
+        var nextActive: String? = null
+        _terminalSessions.update { list ->
+            val remaining = list.filterNot { it.id == id }
+            if (remaining.none { it.type == TerminalSessionType.Termux }) {
+                val fallback = TerminalSession("termux-${System.nanoTime()}", "Termux 1", TerminalSessionType.Termux)
+                nextActive = fallback.id
+                remaining + fallback
+            } else {
+                if (_activeTerminalSessionId.value == id) nextActive = remaining.first().id
+                remaining
+            }
         }
+        // 回收该会话的输出缓冲：此前只有 clearTerminalSession 会清，反复新建/关闭会让条目永久残留
+        synchronized(terminalOutputBuffers) { terminalOutputBuffers.remove(id) }
+        nextActive?.let { _activeTerminalSessionId.value = it }
     }
 
     fun executeTerminalCommand(id: String, command: String) {
@@ -303,7 +335,9 @@ class McViewModel(
     }
 
     private fun updateTerminalSession(id: String, transform: (TerminalSession) -> TerminalSession) {
-        _terminalSessions.value = _terminalSessions.value.map { if (it.id == id) transform(it) else it }
+        // update 原子读改写：调用方既有 Dispatchers.Default 的行刷新循环，也有主线程的会话增删，
+        // 直接 `value = value.map{}` 会跨线程丢更新（新建的会话整条消失 / 本轮终端输出被丢弃）。
+        _terminalSessions.update { list -> list.map { if (it.id == id) transform(it) else it } }
     }
 
     private val terminalOutputBuffers = mutableMapOf<String, LogBuffer<String>>()
@@ -482,8 +516,23 @@ class McViewModel(
     private val _javaOperation = MutableStateFlow<String?>(null)
     val javaOperation: StateFlow<String?> = _javaOperation.asStateFlow()
 
-    private val _installedJava = MutableStateFlow<Set<JavaVersion>>(emptySet())
-    val installedJava: StateFlow<Set<JavaVersion>> = _installedJava.asStateFlow()
+    /**
+     * 正在安装的那一项运行环境（来源 + 版本），用于把进度圈钉在对应的版本行上。
+     *
+     * 进度是长任务（FCL 那套要下 37–62MB），只给一句全局文案的话，
+     * 用户无从判断「现在到底在下哪一套」。
+     */
+    private val _javaInFlight = MutableStateFlow<JavaRuntime?>(null)
+    val javaInFlight: StateFlow<JavaRuntime?> = _javaInFlight.asStateFlow()
+
+    /**
+     * 已安装的运行环境集合。
+     *
+     * 用 [JavaRuntime]（来源 + 版本）而不是裸版本号：Termux 的 Java 17 与 FCL 的
+     * Java 17 是两份不同的文件，只按版本号记会把两者混成一个。
+     */
+    private val _installedJava = MutableStateFlow<Set<JavaRuntime>>(emptySet())
+    val installedJava: StateFlow<Set<JavaRuntime>> = _installedJava.asStateFlow()
 
     /** 局域网 IP（IPv4，非 loopback），用于 Network Tab 展示和一键复制 */
     private val _lanIp = MutableStateFlow("--")
@@ -615,6 +664,11 @@ class McViewModel(
             if (archive.packageName != context.packageName) {
                 throw IllegalStateException(str(R.string.err_apk_pkg_mismatch))
             }
+            // 签名要比对：下载源全是第三方 GitHub 反代，包名对了还不够。
+            // 同签名才是"我们自己发的那个更新"，不同签名一律拒绝。
+            if (!AppUpdateService.verifySignature(context, file)) {
+                throw IllegalStateException(str(R.string.err_apk_sig_mismatch))
+            }
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
                 !context.packageManager.canRequestPackageInstalls()) {
                 context.startActivity(
@@ -697,13 +751,29 @@ class McViewModel(
     private val _lastStatusRefreshAtMs = MutableStateFlow(0L)
     val lastStatusRefreshAtMs: StateFlow<Long> = _lastStatusRefreshAtMs.asStateFlow()
 
-    private var cachedResourceDir: String? = null
-    private var cachedDirectoryBytes: Long? = null
-    private var cachedDirectoryBytesAtMs = 0L
-    private var cachedMemoryAtMs = 0L
-    private var cachedMemoryMb = 0L
-    private var cachedJavaAvailable: Boolean? = null
-    private var cachedJavaAvailableAtMs = 0L
+    // 采样缓存的读写可能发生在不同线程（周期采集 / 手动刷新各是一条协程），
+    // 标 @Volatile 保证可见性，避免一边写入、另一边长期读到旧值导致数值来回跳。
+    @Volatile private var cachedResourceDir: String? = null
+    @Volatile private var cachedDirectoryBytes: Long? = null
+    @Volatile private var cachedDirectoryBytesAtMs = 0L
+    @Volatile private var cachedMemoryAtMs = 0L
+    @Volatile private var cachedMemoryMb = 0L
+    @Volatile private var cachedJavaAvailable: Boolean? = null
+    @Volatile private var cachedJavaAvailableAtMs = 0L
+
+    /**
+     * 采集串行化锁。
+     *
+     * 周期采集（每 15s）与手动刷新（[refreshServerStatus]）可能并发调用
+     * [collectServerResourcesOnce]，而采集内部有 `walkTopDown` 全目录求和，
+     * 并发执行会把同一目录扫两遍、两个协程互相覆盖上面的采样缓存。
+     * 用 tryLock 语义：已在采集就直接跳过本轮，不做重复工作。
+     *
+     * @return 是否真的采集了。跳过时必须让调用方知道——以前返回 Unit，
+     *         [refreshServerStatus] 抢不到锁照样置 `_lastStatusRefreshAtMs`，
+     *         UI 显示「刚刚更新」但拿到的还是上一次的旧数据。
+     */
+    private val resourceCollectionMutex = Mutex()
 
     /** 使所有采样缓存失效，让下一次采集拿到真实的最新值。 */
     private fun invalidateResourceCaches() {
@@ -718,8 +788,14 @@ class McViewModel(
             // Defer the first recursive server-directory scan until the first screen settles.
             delay(15_000)
             while (true) {
-                withContext(Dispatchers.IO) { collectServerResourcesOnce() }
-                delay(15_000)
+                // 界面不在前台时降频，并且**跳过最昂贵的服务端目录遍历**
+                // （walkTopDown 递归求和世界文件，动辄几万个小文件）：锁屏/切后台后
+                // 还在每 15 秒扫一遍既耗电，又会和正在写区块的 MC 抢 IO。
+                // 其余采样（/proc 内存与 CPU、StatFs）很廉价且悬浮窗/通知/组件要用，
+                // 所以后台仍然保留，只是放慢到 1 分钟。
+                val visible = uiVisible
+                withContext(Dispatchers.IO) { collectServerResourcesOnce(includeDirectorySize = visible) }
+                delay(if (visible) 15_000 else 60_000)
             }
         }
     }
@@ -742,21 +818,26 @@ class McViewModel(
         if (!_statusRefreshInFlight.compareAndSet(false, true)) return
         _isRefreshingStatus.value = true
         viewModelScope.launch(Dispatchers.IO) {
+            var sampled = false
             try {
                 invalidateResourceCaches()
-                collectServerResourcesOnce(force = true)
-                // 运行中的服务器异步回复 list/tps，由现有解析器更新在线人数与 TPS。
-                val rt = repo.termuxRuntime
-                if (rt.isMcRunning()) {
-                    rt.sendCommand("list")
-                    if (isActiveCorePaper()) {
-                        rt.sendCommand("tps")
+                sampled = collectServerResourcesOnce(force = true)
+                if (sampled) {
+                    // 运行中的服务器异步回复 list/tps，由现有解析器更新在线人数与 TPS。
+                    val rt = repo.termuxRuntime
+                    if (rt.isMcRunning()) {
+                        rt.sendCommand("list")
+                        if (isActiveCorePaper()) {
+                            rt.sendCommand("tps")
+                        }
                     }
                 }
             } finally {
                 _statusRefreshInFlight.set(false)
-                _lastStatusRefreshAtMs.value = System.currentTimeMillis()
                 _isRefreshingStatus.value = false
+                // 本轮没采到（并发锁被占 / 探针失败）就不记录「刚刚更新」——
+                // 否则 UI 显示刚刷新过、拿到的却还是上一次的旧快照。
+                if (sampled) _lastStatusRefreshAtMs.value = System.currentTimeMillis()
             }
         }
     }
@@ -768,7 +849,14 @@ class McViewModel(
      *        手动刷新走这条路：即使用户在缓存窗口内点击，UI 也必定收到新快照，
      *        并且能通过 [ServerResourceStats.sampledAtMs] 观察到刷新确实生效了。
      */
-    private fun collectServerResourcesOnce(force: Boolean = false) {
+    /**
+     * @param includeDirectorySize 是否允许执行服务端目录的递归求和（最昂贵的一步）。
+     *        界面不在前台时传 false：缓存命中（同一目录）就沿用旧值，
+     *        缓存不可用则返回 null（未知）而不是去扫一遍。
+     */
+    private fun collectServerResourcesOnce(force: Boolean = false, includeDirectorySize: Boolean = true): Boolean {
+        // 已在采集则跳过本轮：并发采集会重复全目录扫描并互相覆盖采样缓存。
+        if (!resourceCollectionMutex.tryLock()) return false
         try {
             val cfg = config.value
             val active = cfg.installedCores.find { it.name == cfg.activeCoreName }
@@ -777,12 +865,21 @@ class McViewModel(
             val now = System.currentTimeMillis()
             val running = repo.termuxRuntime.isMcRunning()
             val directoryBytes = dir?.takeIf { running && it.exists() }?.let { serverDir ->
-                if (cachedResourceDir != serverDir.path || now - cachedDirectoryBytesAtMs >= 60_000L) {
-                    cachedResourceDir = serverDir.path
-                    cachedDirectoryBytes = serverDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-                    cachedDirectoryBytesAtMs = now
+                val sameDir = cachedResourceDir == serverDir.path
+                val stale = now - cachedDirectoryBytesAtMs >= 60_000L
+                when {
+                    // 允许扫描且（换了目录 或 缓存过期）：真正遍历一次
+                    includeDirectorySize && (!sameDir || stale) -> {
+                        cachedResourceDir = serverDir.path
+                        cachedDirectoryBytes = serverDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                        cachedDirectoryBytesAtMs = now
+                        cachedDirectoryBytes
+                    }
+                    // 同目录的缓存可直接沿用（后台路径主要走这里）
+                    sameDir -> cachedDirectoryBytes
+                    // 后台且无可用缓存：宁可显示未知，也不去扫盘
+                    else -> null
                 }
-                cachedDirectoryBytes
             }
             // 进程内存采样遍历 /proc，降频到 30s（运行中才需要），窗口内沿用旧值。
             if (running && now - cachedMemoryAtMs >= 30_000L) {
@@ -793,7 +890,7 @@ class McViewModel(
             // 服务端进程自身 CPU（支持多线程超过 100%），不可用或未运行时为 null。
             val cpu = if (running) repo.termuxRuntime.mcProcessCpuPercent() else null
             if (running && now - cachedJavaAvailableAtMs >= 60_000L) {
-                cachedJavaAvailable = repo.termuxRuntime.isJavaInstalled(cfg.selectedJavaVersion)
+                cachedJavaAvailable = repo.termuxRuntime.isJavaInstalled(cfg.selectedJavaVersion, cfg.selectedJavaVendor)
                 cachedJavaAvailableAtMs = now
             }
             val javaAvailable = cachedJavaAvailable ?: true
@@ -827,8 +924,12 @@ class McViewModel(
                     state.copy(usedMemoryMb = effectiveMemory ?: 0L, cpuPercent = cpu)
                 }
             }
+            return true
         } catch (e: Exception) {
             // Keep the last known snapshot when Android or PRoot denies a probe.
+            return false
+        } finally {
+            resourceCollectionMutex.unlock()
         }
     }
 
@@ -900,11 +1001,39 @@ class McViewModel(
             if (runtimeReady) str(R.string.diag_check_runtime_ok) else str(R.string.diag_check_runtime_bad),
             if (runtimeReady) DiagnosticStatus.Pass else DiagnosticStatus.Failed, !runtimeReady
         )
-        val javaCheck = runtime.javaRuntimeDiagnostic(cfg.selectedJavaVersion)
+        val javaCheck = runtime.javaRuntimeDiagnostic(cfg.selectedJavaVersion, cfg.selectedJavaVendor)
         checks += DiagnosticCheck(
             "java", str(R.string.diag_check_java, cfg.selectedJavaVersion.displayName), javaCheck.second,
             if (javaCheck.first) DiagnosticStatus.Pass else DiagnosticStatus.Failed, !javaCheck.first
         )
+        // PRoot 容器分层状态：把「rootfs 没下好」与「容器好了但 Java 没装」区分开。
+        // 只报一句「未安装」会把两种代价完全不同的情况混为一谈 ——
+        // 前者要重新跑一次几百兆的下载，后者只需重装一个 apt 包。
+        ProotDistro.entries.forEach { distro ->
+            val state = runtime.prootContainerState(distro)
+            val title = str(R.string.diag_check_proot_container, distro.displayName)
+            if (!state.rootfsPresent && !state.readyMarkerPresent) {
+                // 完全没碰过这个发行版：不算问题，避免刷出两条无意义的红色告警
+                checks += DiagnosticCheck(
+                    "proot-${distro.name}", title,
+                    str(R.string.diag_proot_none),
+                    DiagnosticStatus.NotApplicable
+                )
+            } else {
+                // installedVersions 非空时 joinToString 必然非空，无需再兜 "—"
+                val versions = state.installedVersions.joinToString(" / ") { it.displayName }
+                val (detail, status) = when {
+                    !state.shellUsable -> str(R.string.diag_proot_shell_broken) to DiagnosticStatus.Failed
+                    state.installedVersions.isEmpty() -> str(R.string.diag_proot_ready_empty) to DiagnosticStatus.Warning
+                    else -> str(R.string.diag_proot_ready_installed, versions) to DiagnosticStatus.Pass
+                }
+                checks += DiagnosticCheck(
+                    "proot-${distro.name}", title, detail, status,
+                    // 只有「解压不完整」值得走一键修复；缺 Java 属于用户选择，不该替他装
+                    repairable = !state.shellUsable && state.rootfsPresent
+                )
+            }
+        }
         if (active?.core == ServerCore.NeoForge && cfg.selectedJavaVersion != JavaVersion.Java8) {
             checks += DiagnosticCheck(
                 "native-jna", str(R.string.diag_check_native),
@@ -912,7 +1041,12 @@ class McViewModel(
                 DiagnosticStatus.Warning
             )
         }
-        val prootRequired = cfg.selectedJavaVersion == JavaVersion.Java8
+        // proot 是所有来宾容器链路的必需命令：Termux 的 Java 8 与 Proot 的全部版本
+        // 都要靠它启动。早先这里只判 `Termux && Java8`，于是选中「PRoot 容器」来源时
+        // prootRequired 为 false —— 诊断会报告「无需 proot」并标为 NotApplicable，
+        // 而 proot 正是这条链路赖以启动的东西。容器起不来时这条会把用户引向错误方向。
+        // 统一走路由谓词，将来新增来宾组合也不会漏判。
+        val prootRequired = isProotGuestRuntime(cfg.selectedJavaVendor, cfg.selectedJavaVersion)
         val downloaderRequired = active?.core?.needsInstaller == true
         val requiredCommandsReady = (!prootRequired || runtime.isCommandInstalled("proot")) &&
             (!downloaderRequired || runtime.isCommandInstalled("wget"))
@@ -947,7 +1081,10 @@ class McViewModel(
                 if (dirReady && jar?.isFile == true) DiagnosticStatus.Pass else DiagnosticStatus.Failed
             )
             val fontNeeded = runtime.needsFontRuntime(active.core)
-            val fontsReady = fontNeeded && runtime.fontRuntimeReady(cfg.selectedJavaVersion)
+            // 用接收 vendor 的版本：Proot / Termux Java 8 的字体在容器内，
+            // 只看宿主文件会把「容器缺字体」误报成「已就绪」。
+            val fontsReady = fontNeeded &&
+                runtime.fontRuntimeDiagnostic(cfg.selectedJavaVendor, cfg.selectedJavaVersion)
             checks += DiagnosticCheck(
                 "fonts", str(R.string.diag_check_fonts),
                 when {
@@ -1263,19 +1400,20 @@ class McViewModel(
     /**
      * 修改配置。
      *
-     * 竞态的根治：读改写由 [ServerRepository.updateConfig] 以原子方式完成，
+     * 竞态的根治：读改写与落盘排队合并为 [ServerRepository.updateAndSaveConfig]，
      * 基准是仓库内的权威内存态，而不是 DataStore 流的最新发射值。
      * 因此连续快速修改会正确叠加，不再依赖"上次修改是否还在 debounce 窗口内"这一时间假设
      * （旧实现用 800ms pendingConfig 窗口绕过该问题，窗口边界仍是脆弱假设）。
+     *
+     * 注意这里**不能**拆成「先 updateConfig 拿到快照，再异步 saveConfig(快照)」：
+     * 落盘入队发生在另一个调度器上，中间插进来的另一次修改会先入队，
+     * CONFLATED 通道最终保留的可能反而是更旧的那份。
      */
     fun updateConfig(transform: (McConfig) -> McConfig) {
-        val updated = repo.updateConfig(transform)
-        viewModelScope.launch {
-            try {
-                repo.saveConfig(updated)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s191, e.message))
-            }
+        try {
+            repo.updateAndSaveConfig(transform)
+        } catch (e: Exception) {
+            _errorFlow.tryEmit(str(R.string.s191, e.message))
         }
     }
 
@@ -1396,9 +1534,10 @@ class McViewModel(
     }
 
     fun refreshJava() {
-        if (!isBootstrapped.value) return
+        // 刻意不检查 isBootstrapped：FCL 来源的 JRE 与 Termux 环境无关，
+        // 环境还没初始化时它也可能已经装好了（装了就该显示出来）。
         viewModelScope.launch(Dispatchers.IO) {
-            _installedJava.value = repo.termuxRuntime.installedJavaVersions()
+            _installedJava.value = repo.termuxRuntime.installedJavaRuntimes()
         }
     }
 
@@ -1412,9 +1551,9 @@ class McViewModel(
         }
     }
 
-    fun setJavaVersion(version: JavaVersion) = updateConfig {
-        it.copy(selectedJavaVersion = version)
-    }
+    // 运行环境的选中统一走 setJavaRuntime（来源 + 版本一起写），
+    // 不再提供「只改版本、来源沿用」的入口 —— 那会写出「FCL 来源 + Java 8」
+    // 这种上游根本不存在的组合。
 
     // ── PocketMine-MP 专用 PHP 运行时 ─────────────────────────────
     //
@@ -1521,18 +1660,81 @@ class McViewModel(
     }
 
     /**
+     * 切换运行环境（来源 + 版本），见 [JavaRuntime]。
+     *
+     * 只影响下一次启动时用哪套 JDK、挂不挂兼容层；不改动任何已装 JDK，对**正在运行**
+     * 的服务端也没有影响（config 只在启动那一刻读一次），UI 侧只是在运行中禁用入口，
+     * 避免用户误以为切换会立刻生效。
+     *
+     * 来源与版本必须一次写入：分两次 set 会因为 config 落盘的 300ms debounce 撞在一起，
+     * 第二次读到的还是旧快照（与 [applyRuntimeSelection] 注释里那个竞态同源）。
+     */
+    fun setJavaRuntime(runtime: JavaRuntime) = updateConfig { cfg ->
+        // Proot 来源的版本必须落在**当前发行版**提供的范围内。界面上点不到
+        // 置灰项（见 JavaRuntimeGroupList），这里是第二道保险：
+        // 写进 config 的组合一旦装不上，用户要到启动失败时才会发现。
+        val version = if (runtime.vendor == JavaVendor.Proot) {
+            runtime.version.takeIf { it in cfg.prootDistro.availableJavaVersions }
+                ?: cfg.prootDistro.availableJavaVersions.firstOrNull()
+                ?: runtime.version
+        } else {
+            runtime.version
+        }
+        cfg.copy(selectedJavaVendor = runtime.vendor, selectedJavaVersion = version)
+    }
+
+    /**
+     * 兼容层依赖的 `libipv6fix.so` 是否真的随 APK 打包。
+     *
+     * 预加载库不落盘到 Termux 目录，只能看 nativeLibraryDir 下有没有这个文件。
+     * Termux 来源的 IPv6 能力完全取决于它 —— 启动日志里那行「兼容层已注入」
+     * 与这里的判断是同一件事，缺库时不会静默变成「什么都没发生」。
+     */
+    val ipv6CompatReady: Boolean
+        get() = File(
+            app.applicationInfo.nativeLibraryDir,
+            NativeLibraryBundler.IPV6_FIX_LIB
+        ).isFile
+
+    /**
      * 一次性写入运行模式与对应版本。
      *
-     * **必须用这个方法来设置运行环境**：`setRuntimeKind` 与 `setJavaVersion`/`setPhpVersion`
+     * **必须用这个方法来设置运行环境**：`setRuntimeKind` 与 `setJavaRuntime`/`setPhpVersion`
      * 是两次独立的 read-modify-write，而 config 的落盘带 300ms debounce，
      * 第二次调用读到的 config.value 仍是旧快照，会把第一次写入的 runtimeKind 覆盖掉
      * （表现为「切到 PHP 后按钮又变回 Java」）。这里合并为单次 copy，杜绝竞态。
+     *
+     * @param prootDistro 仅在选择 Proot 来源时有意义；为 null 表示沿用当前发行版。
+     *   发行版与版本必须一起校验：focal 不提供 Java 21、jammy 不提供 Java 8，
+     *   分开写会出现「先切成 focal，版本还停在 21」这种中间态。
      */
-    fun applyRuntimeSelection(kind: RuntimeKind, javaVersion: JavaVersion, phpVersion: PhpVersion) {
+    fun applyRuntimeSelection(
+        kind: RuntimeKind,
+        javaRuntime: JavaRuntime,
+        phpVersion: PhpVersion,
+        prootDistro: ProotDistro? = null
+    ) {
         updateConfig { cfg ->
+            val vendor = javaRuntime.vendor
+            val distro = prootDistro ?: cfg.prootDistro
+            // Proot 来源的可用版本由**发行版**决定，而不是来源的并集：
+            // 并集里同时有 8（仅 focal）与 21（仅 jammy），照并集放行会写出
+            // 一个该发行版装不上的版本，用户点安装才看到 apt 报「找不到软件包」。
+            val allowed = if (vendor == JavaVendor.Proot) {
+                distro.availableJavaVersions
+            } else {
+                vendor.versions
+            }
+            // 版本必须落在允许列表内，否则会出现「FCL 来源 + Java 8」这种
+            // 不存在的组合（FCL 只发布 17/21/25）。
+            val version = javaRuntime.version.takeIf { it in allowed }
+                ?: allowed.firstOrNull()
+                ?: JavaRuntime.Default.version
             cfg.copy(
                 runtimeKind = kind,
-                selectedJavaVersion = javaVersion.takeIf { it in JavaVersion.entries } ?: JavaVersion.Java17,
+                selectedJavaVendor = vendor,
+                selectedJavaVersion = version,
+                prootDistro = distro,
                 selectedPhpVersion = phpVersion.takeIf { it in PhpVersion.entries } ?: PhpVersion.Default
             )
         }
@@ -1558,46 +1760,96 @@ class McViewModel(
     fun setJavaCardAtBottom(atBottom: Boolean) =
         updateConfig { it.copy(javaCardAtBottom = atBottom) }
 
-    fun installJava(version: JavaVersion) {
-        if (!isBootstrapped.value || _isInstalling.value) return
+    /**
+     * 安装运行环境。
+     *
+     * 刻意不要求 Termux 环境已初始化：FCL 来源的 JRE 是 Android 原生二进制，
+     * 与 Termux 前缀无关，环境没装好时也完全可以先把它下载下来（Termux 来源的
+     * 安装会自己在运行时里抛「环境未初始化」）。
+     *
+     * 装完直接把它设为当前选用 —— 用户点安装就是为了用它，装完还要再点一次
+     * 选中是没必要的往返；启动前本就会校验 java 是否找得到，所以不存在
+     * 「选中了一个装不上的东西」的风险。
+     */
+    fun installJava(runtime: JavaRuntime) {
+        if (_isInstalling.value) return
         _isInstalling.value = true
-        _javaOperation.value = str(R.string.msg_java_op_installing, version.displayName)
+        _javaInFlight.value = runtime
+        _javaOperation.value = str(R.string.msg_java_op_installing, runtime.displayName)
         viewModelScope.launch {
             try {
-                if (repo.termuxRuntime.installJava(version)) {
-                    if (version == JavaVersion.Java8) {
-                        repo.saveConfig(config.value.copy(selectedJavaVersion = JavaVersion.Java8))
+                val ok = repo.termuxRuntime.installJava(
+                    version = runtime.version,
+                    vendor = runtime.vendor,
+                    // PRoot 来源必须带上当前发行版：装哪个发行版里的 JDK
+                    // 由用户的选择决定，不能用默认值顶替。
+                    distro = config.value.prootDistro,
+                    onProgress = { percent ->
+                        // FCL 按下载字节数回调；PRoot 按阶段回调（rootfs 下载解压 0–60、
+                        // 容器内 apt 安装 60–100）。两者都是数分钟级的长任务，
+                        // 不显示进度会让用户以为卡死了。Termux 宿主 apt 无细粒度进度。
+                        _javaOperation.value =
+                            str(R.string.msg_java_op_installing, runtime.displayName) + " $percent%"
+                    }
+                )
+                if (ok) {
+                    // 用原子读改写并落盘：安装耗时长，期间用户其他配置修改不能被这份旧快照冲掉
+                    repo.updateAndSaveConfig {
+                        it.copy(selectedJavaVendor = runtime.vendor, selectedJavaVersion = runtime.version)
                     }
                     refreshJava()
-                    _messageFlow.tryEmit(str(R.string.msg_java_installed, version.displayName))
-                } else _errorFlow.tryEmit(str(R.string.err_java_install_fail, version.displayName))
+                    _messageFlow.tryEmit(str(R.string.msg_java_installed, runtime.displayName))
+                } else _errorFlow.tryEmit(str(R.string.err_java_install_fail, runtime.displayName))
             } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.msg_java_install_fail2)) }
             finally {
+                _javaInFlight.value = null
                 _javaOperation.value = null
                 _isInstalling.value = false
             }
         }
     }
 
-    fun clearAndReinstallJava() {
-        if (!isBootstrapped.value || _isInstalling.value) return
+    /**
+     * 重装**指定的这一份**运行环境：先删掉它，再重新安装。
+     *
+     * 刻意按 (来源, 版本) 精确重装，而不是沿用旧 UI 那个「清空全部 Java 再装回」
+     * 的粗粒度路径 —— 现在有两套来源、五加三共八种组合，一次重装把别的版本一起
+     * 删掉，与依赖页那句「操作作用于所选版本」的提示自相矛盾，也白白浪费用户
+     * 已经下好的 37–62MB。Termux 那套仍然要求环境已初始化；FCL 那套与 Termux
+     * 前缀无关，环境没装好也能重装。
+     */
+    fun reinstallJava(runtime: JavaRuntime) {
+        if (_isInstalling.value) return
+        if (runtime.vendor == JavaVendor.Termux && !isBootstrapped.value) return
         if (repo.termuxRuntime.isMcRunning()) {
             _errorFlow.tryEmit(str(R.string.err_java_running))
             return
         }
+        if (runtime !in _installedJava.value) {
+            // 没有可删的旧文件，直接走安装
+            installJava(runtime)
+            return
+        }
         _isInstalling.value = true
+        _javaInFlight.value = runtime
         _javaOperation.value = str(R.string.msg_java_op_reinstall)
         viewModelScope.launch {
+            var removed = false
             try {
-                if (repo.termuxRuntime.clearAndReinstallJava()) {
-                    refreshJava()
-                    _messageFlow.tryEmit(str(R.string.msg_java_reinstalled))
-                } else _errorFlow.tryEmit(str(R.string.err_java_reinstall_fail))
-            } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.msg_java_reinstall_fail2)) }
-            finally {
-                _javaOperation.value = null
+                removed = withContext(Dispatchers.IO) {
+                    repo.termuxRuntime.deleteJava(runtime.version, runtime.vendor)
+                }
+                if (removed) refreshJava()
+                else _errorFlow.tryEmit(str(R.string.err_java_reinstall_fail))
+            } catch (e: Exception) {
+                _errorFlow.tryEmit(e.message ?: str(R.string.msg_java_reinstall_fail2))
+            } finally {
+                // 先解除删除阶段的占用，installJava 会把三个状态重新置位
                 _isInstalling.value = false
+                _javaInFlight.value = null
+                _javaOperation.value = null
             }
+            if (removed) installJava(runtime)
         }
     }
 
@@ -1605,18 +1857,57 @@ class McViewModel(
     fun ftpRootDir(): java.io.File = repo.termuxRuntime.serversDir.parentFile
         ?: java.io.File(app.filesDir, "home")
 
-    /** 卸载指定 Java 版本（直接删除文件） */
-    fun deleteJava(version: JavaVersion) {
-        if (!isBootstrapped.value || _isInstalling.value) return
-        _javaOperation.value = str(R.string.msg_java_op_deleting, version.displayName)
+    /** 卸载指定运行环境（Proot 走容器内 apt purge，只删该版本；其余来源删文件） */
+    fun deleteJava(runtime: JavaRuntime) {
+        if (_isInstalling.value) return
+        _javaOperation.value = str(R.string.msg_java_op_deleting, runtime.displayName)
         viewModelScope.launch {
             try {
-                val ok = withContext(Dispatchers.IO) { repo.termuxRuntime.deleteJava(version) }
+                val ok = withContext(Dispatchers.IO) {
+                    repo.termuxRuntime.deleteJava(runtime.version, runtime.vendor)
+                }
                 refreshJava()
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_java_deleted, version.displayName))
-                else _errorFlow.tryEmit(str(R.string.err_java_delete_fail, version.displayName))
+                if (ok) _messageFlow.tryEmit(str(R.string.msg_java_deleted, runtime.displayName))
+                else _errorFlow.tryEmit(str(R.string.err_java_delete_fail, runtime.displayName))
             } catch (e: Exception) {
-                _errorFlow.tryEmit(e.message ?: str(R.string.err_java_delete_fail, version.displayName))
+                _errorFlow.tryEmit(e.message ?: str(R.string.err_java_delete_fail, runtime.displayName))
+            } finally {
+                _javaOperation.value = null
+            }
+        }
+    }
+
+    /** 容器占用空间（字节），供删除确认弹窗显示「可回收多少」。 */
+    fun prootContainerSizeBytes(distro: ProotDistro): Long =
+        repo.termuxRuntime.prootContainerSizeBytes(distro)
+
+    /**
+     * 删除整个 PRoot 容器（连同容器内已装的全部 Java 版本）。
+     *
+     * 与 [deleteJava] 是**两个不同粒度**的操作，所以入口也分开：
+     * - [deleteJava]：卸载某一个 Java 版本，容器与其余版本保留（apt purge）
+     * - 本方法：回收整个容器（直接删 rootfs），用于磁盘空间吃紧时一次性清干净
+     *
+     * 若混成一个按钮，用户点「卸载 Java 17」却把 Java 8/11 一起清掉，
+     * 那是数据静默丢失级别的问题。
+     */
+    fun deleteProotContainer(distro: ProotDistro) {
+        if (_isInstalling.value) return
+        if (repo.termuxRuntime.isMcRunning()) {
+            _errorFlow.tryEmit(str(R.string.err_java_running))
+            return
+        }
+        _javaOperation.value = str(R.string.msg_java_op_deleting, distro.displayName)
+        viewModelScope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) {
+                    repo.termuxRuntime.deleteProotContainer(distro)
+                }
+                refreshJava()
+                if (ok) _messageFlow.tryEmit(str(R.string.msg_proot_container_deleted, distro.displayName))
+                else _errorFlow.tryEmit(str(R.string.err_proot_container_delete_fail, distro.displayName))
+            } catch (e: Exception) {
+                _errorFlow.tryEmit(e.message ?: str(R.string.err_proot_container_delete_fail, distro.displayName))
             } finally {
                 _javaOperation.value = null
             }
@@ -1662,12 +1953,16 @@ class McViewModel(
         ) else it.copy(selectedCore = core)
     }
 
-    fun setMcVersion(version: String) = updateConfig {
-        val normalized = MinecraftVersionNormalizer.forCore(it.selectedCore, version)
-        if (normalized != version.trim()) {
-            _messageFlow.tryEmit(str(R.string.msg_version_corrected, it.selectedCore.displayName, version.trim(), normalized))
+    fun setMcVersion(version: String) {
+        val trimmed = version.trim()
+        val core = config.value.selectedCore
+        val normalized = MinecraftVersionNormalizer.forCore(core, trimmed)
+        updateConfig { it.copy(mcVersion = normalized) }
+        // 版本纠正提示移到 updateConfig 之后：底层 _config.updateAndGet 是 CAS 循环，
+        // transform 失败会被重放，副作用写在里面会在并发写配置时重复弹窗，也破坏重放语义。
+        if (normalized != trimmed) {
+            _messageFlow.tryEmit(str(R.string.msg_version_corrected, core.displayName, trimmed, normalized))
         }
-        it.copy(mcVersion = normalized)
     }
 
     fun setLocalPort(port: Int) = updateConfig { it.copy(localPort = port) }
@@ -1675,6 +1970,9 @@ class McViewModel(
     fun setTunnelType(type: TunnelType) = updateConfig { it.copy(tunnelType = type) }
     fun setMaxHeap(mb: Int) = updateConfig { it.copy(maxHeapMb = mb) }
     fun setAutoRestart(v: Boolean) = updateConfig { it.copy(autoRestartOnCrash = v) }
+
+    /** 跳过「启动中」阶段进度展示（见 [McConfig.skipStartupProgress]）。 */
+    fun setSkipStartupProgress(v: Boolean) = updateConfig { it.copy(skipStartupProgress = v) }
 
     // ── 定时开/停服与停止备份 ───────────────────────────────────
 
@@ -1694,17 +1992,15 @@ class McViewModel(
 
     /** 变更定时计划时同步保存并重注册下一次闹钟。 */
     private fun updateScheduleConfig(transform: (McConfig) -> McConfig) {
-        // 基于仓库权威内存态读改写，不用 UI 侧 config.value（可能是陈旧快照，
+        // 基于仓库权威内存态读改写并原子入队，不用 UI 侧 config.value（可能是陈旧快照，
         // 写回会覆盖用户此间做的其他修改）。ScheduleManager 用的是落盘后的最终值。
-        val updated = repo.updateConfig(transform)
-        com.mineserve.mobile.data.ScheduleManager.register(app, updated)
-        viewModelScope.launch {
-            try {
-                repo.saveConfig(updated)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s191, e.message))
-            }
+        val updated = try {
+            repo.updateAndSaveConfig(transform)
+        } catch (e: Exception) {
+            _errorFlow.tryEmit(str(R.string.s191, e.message))
+            return
         }
+        com.mineserve.mobile.data.ScheduleManager.register(app, updated)
     }
     fun setKeepWifiLock(v: Boolean) = updateConfig { it.copy(keepWifiLock = v) }
     fun setKeepCpuWakelock(v: Boolean) = updateConfig { it.copy(keepCpuWakelock = v) }
@@ -1715,7 +2011,8 @@ class McViewModel(
             val effective = if (mirror == com.mineserve.mobile.data.AptMirror.Official) {
                 com.mineserve.mobile.data.AptMirror.Tuna
             } else mirror
-            repo.saveConfig(config.value.copy(aptMirror = effective))
+            // 原子读改写 + 落盘，不用 config.value 陈旧快照整份写回（会覆盖并发的其他修改）
+            repo.updateAndSaveConfig { it.copy(aptMirror = effective) }
             withContext(Dispatchers.IO) { repo.termuxRuntime.setAptMirror(effective) }
         }
     fun setDownloadMirror(mirror: com.mineserve.mobile.data.DownloadMirror) =
@@ -1765,6 +2062,21 @@ class McViewModel(
         }
     }
 
+    /**
+     * 「停止」请求是否仍在飞行中。
+     *
+     * 优雅停止可能要等十几秒（服务端要落盘），期间界面必须能区分
+     * 「还没停完」与「停完了但仍显示运行」。旧实现把这个状态放在 Composable 的
+     * 局部 `remember` 里，靠 isRunning 翻转来复位；现在停止可能**失败**（超时不强杀），
+     * isRunning 不翻转，局部态会永远卡住 —— 因此上提到 VM。
+     */
+    private val _stopInFlight = MutableStateFlow(false)
+    val stopInFlight: StateFlow<Boolean> = _stopInFlight.asStateFlow()
+
+    /** 「强制停止」请求是否仍在飞行中（强杀很快，仅用于禁用重复点击）。 */
+    private val _forceStopInFlight = MutableStateFlow(false)
+    val forceStopInFlight: StateFlow<Boolean> = _forceStopInFlight.asStateFlow()
+
     fun startServer() {
         if (!isBootstrapped.value) {
             _errorFlow.tryEmit(str(R.string.s192))
@@ -1791,8 +2103,12 @@ class McViewModel(
                     )
                 }
                 _messageFlow.tryEmit(str(R.string.s196))
-                controller.start(startConfig)
-                startKeepAliveService()
+                controller.start(startConfig, userInitiated = true)
+                // 准备阶段被用户取消时 start() 会直接返回（此时状态已被复位为未运行），
+                // 不能再把保活服务拉起来——否则会出现「没在跑却常驻前台服务」。
+                if (repo.serverState.value.isRunning) {
+                    startKeepAliveService()
+                }
             } catch (e: Exception) {
                 repo.updateServerState {
                     it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Failed)
@@ -1804,10 +2120,23 @@ class McViewModel(
         }
     }
 
+    /**
+     * 停止服务器（优雅停止，不强杀）。
+     *
+     * 停止期间 `stopInFlight = true`，界面显示「停止中…」；若服务端在宽限期内
+     * 仍未退出，则**保持运行态**并提示用户可改用「强制停止」——
+     * 是否要承担未落盘数据的风险由用户决定（见 [forceStopServer]）。
+     */
     fun stopServer() {
+        if (_stopInFlight.value) return
+        _stopInFlight.value = true
         viewModelScope.launch {
             try {
-                controller.stop()
+                val stopped = controller.stopGracefully()
+                if (!stopped) {
+                    _errorFlow.tryEmit(str(R.string.dash_stop_timeout_hint))
+                    return@launch
+                }
                 _messageFlow.tryEmit(str(R.string.s198))
                 if (config.value.stopAutoBackup) {
                     val dirName = activeDirName() ?: return@launch
@@ -1820,6 +2149,31 @@ class McViewModel(
                 }
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s199, e.message))
+            } finally {
+                _stopInFlight.value = false
+            }
+        }
+    }
+
+    /**
+     * 强制停止服务器：立即结束进程，不等待世界落盘。
+     *
+     * 调用方必须先拿到用户的显式确认（UI 上是警告弹窗）。这里不再做二次询问，
+     * 因为「用户已经点过确认」这件事只有 UI 知道。
+     */
+    fun forceStopServer() {
+        if (_forceStopInFlight.value) return
+        _forceStopInFlight.value = true
+        viewModelScope.launch {
+            try {
+                controller.forceStop()
+                _messageFlow.tryEmit(str(R.string.dash_force_stop_done))
+            } catch (e: Exception) {
+                _errorFlow.tryEmit(str(R.string.s199, e.message))
+            } finally {
+                _forceStopInFlight.value = false
+                // 强杀也会让正在等待的优雅停止立刻结束（进程没了），复位以免界面卡在「停止中…」
+                _stopInFlight.value = false
             }
         }
     }
@@ -1970,6 +2324,8 @@ class McViewModel(
 
     /** 切换模组启用状态 */
     fun toggleModEnabled(fileName: String) {
+        // VM 侧兜底：UI 前台虽已拦截，但其他调用入口不能绕过——运行中改 mods 目录会导致本轮加载状态错乱
+        if (!requireServerStopped("启用或停用模组")) return
         val dirName = activeDirName() ?: return
         viewModelScope.launch {
             try {
@@ -1983,6 +2339,7 @@ class McViewModel(
 
     /** 删除模组 */
     fun deleteMod(fileName: String) {
+        if (!requireServerStopped("删除模组")) return
         val dirName = activeDirName() ?: return
         viewModelScope.launch {
             try {
@@ -2107,14 +2464,28 @@ class McViewModel(
     private val _isLoadingMoreMods = MutableStateFlow(false)
     val isLoadingMoreMods: StateFlow<Boolean> = _isLoadingMoreMods.asStateFlow()
 
+    /**
+     * 模组搜索的代际号。
+     *
+     * 搜索请求是异步的，用户快速改关键字/加载器时会发出多次请求，而**响应到达顺序
+     * 不保证与发出顺序一致**（网络抖动、后一次请求更小更先返回）。没有代际校验时，
+     * 晚到的旧响应会覆盖新结果——列表显示的内容与实际筛选条件不符。
+     * 每次新搜索/加载更多都递增，回写前比对，只有最新一代才允许写入。
+     */
+    private var modrinthModSearchToken = 0L
+
     /** 搜索 Modrinth 模组（多加载器 + 版本筛选 + 排序） */
     fun searchModrinthMods(query: String, loaders: List<String>, sort: String, mcVersion: String) {
         lastModrinthModQuery = ModrinthQueryArgs(query, loaders, sort, mcVersion)
+        val token = ++modrinthModSearchToken
         viewModelScope.launch {
-            _modrinthResults.value = withContext(Dispatchers.IO) {
+            val hits = withContext(Dispatchers.IO) {
                 pluginManager.searchModrinth(query, loaders, sort, projectType = "mod", mcVersion = mcVersion)
             }
-            if (_modrinthResults.value.isEmpty()) {
+            // 已被更新的一次搜索取代：本次结果整体丢弃，不覆盖新列表。
+            if (token != modrinthModSearchToken) return@launch
+            _modrinthResults.value = hits
+            if (hits.isEmpty()) {
                 _messageFlow.tryEmit(str(R.string.s223))
             }
         }
@@ -2127,6 +2498,7 @@ class McViewModel(
             return
         }
         if (_isLoadingMoreMods.value) return
+        val token = ++modrinthModSearchToken
         viewModelScope.launch {
             _isLoadingMoreMods.value = true
             try {
@@ -2134,6 +2506,8 @@ class McViewModel(
                 val more = withContext(Dispatchers.IO) {
                     pluginManager.searchModrinth(args.query, args.loaders, args.sort, projectType = "mod", mcVersion = args.mcVersion, offset = offset)
                 }
+                // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
+                if (token != modrinthModSearchToken) return@launch
                 if (more.isEmpty()) {
                     _messageFlow.tryEmit("没有更多结果")
                 } else {
@@ -2168,20 +2542,20 @@ class McViewModel(
                 val fileName = "${hit.slug}.jar"
                 withContext(Dispatchers.IO) {
                     // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                    _pluginDownloadProgress.value = _pluginDownloadProgress.value + (hit.slug to PluginDownloadProgress(
+                    _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
                         pluginId = hit.slug, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                    ))
+                    )) }
                     pluginManager.installModFromUrl(url, fileName, dirName) { d, t, s ->
-                        _pluginDownloadProgress.value = _pluginDownloadProgress.value + (hit.slug to PluginDownloadProgress(
+                        _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
                             pluginId = hit.slug, downloadedBytes = d, totalBytes = t, speedBytesPerSec = s
-                        ))
+                        )) }
                     }
                 }
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - hit.slug
+                _pluginDownloadProgress.update { it - hit.slug }
                 _messageFlow.tryEmit(str(R.string.s225, hit.title))
                 refreshMods()
             } catch (e: Exception) {
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - hit.slug
+                _pluginDownloadProgress.update { it - hit.slug }
                 _errorFlow.tryEmit(str(R.string.s226, hit.title, e.message))
             }
         }
@@ -2223,14 +2597,21 @@ class McViewModel(
     private val _isLoadingMorePlugins = MutableStateFlow(false)
     val isLoadingMorePlugins: StateFlow<Boolean> = _isLoadingMorePlugins.asStateFlow()
 
+    /** 插件搜索的代际号；理由同 [modrinthModSearchToken]。 */
+    private var modrinthPluginSearchToken = 0L
+
     /** 插件页搜索 Modrinth 插件（project_type=plugin，布局与模组页统一） */
     fun searchModrinthPlugin(query: String, loaders: List<String>, sort: String, mcVersion: String) {
         lastModrinthPluginQuery = ModrinthQueryArgs(query, loaders, sort, mcVersion)
+        val token = ++modrinthPluginSearchToken
         viewModelScope.launch {
-            _pluginModrinthResults.value = withContext(Dispatchers.IO) {
+            val hits = withContext(Dispatchers.IO) {
                 pluginManager.searchModrinth(query, loaders, sort, projectType = "plugin", mcVersion = mcVersion)
             }
-            if (_pluginModrinthResults.value.isEmpty()) {
+            // 已被更新的一次搜索取代：丢弃本次结果，避免旧响应覆盖新列表。
+            if (token != modrinthPluginSearchToken) return@launch
+            _pluginModrinthResults.value = hits
+            if (hits.isEmpty()) {
                 _messageFlow.tryEmit(str(R.string.s223))
             }
         }
@@ -2243,6 +2624,7 @@ class McViewModel(
             return
         }
         if (_isLoadingMorePlugins.value) return
+        val token = ++modrinthPluginSearchToken
         viewModelScope.launch {
             _isLoadingMorePlugins.value = true
             try {
@@ -2250,6 +2632,8 @@ class McViewModel(
                 val more = withContext(Dispatchers.IO) {
                     pluginManager.searchModrinth(args.query, args.loaders, args.sort, projectType = "plugin", mcVersion = args.mcVersion, offset = offset)
                 }
+                // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
+                if (token != modrinthPluginSearchToken) return@launch
                 if (more.isEmpty()) {
                     _messageFlow.tryEmit("没有更多结果")
                 } else {
@@ -2280,20 +2664,20 @@ class McViewModel(
                 val fileName = "${hit.slug}.jar"
                 withContext(Dispatchers.IO) {
                     // 下载开始前先放占位进度，保证进度弹窗一定显示
-                    _pluginDownloadProgress.value = _pluginDownloadProgress.value + (hit.slug to PluginDownloadProgress(
+                    _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
                         pluginId = hit.slug, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                    ))
+                    )) }
                     pluginManager.installFromUrl(url, fileName, dirName) { d, t, s ->
-                        _pluginDownloadProgress.value = _pluginDownloadProgress.value + (hit.slug to PluginDownloadProgress(
+                        _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
                             pluginId = hit.slug, downloadedBytes = d, totalBytes = t, speedBytesPerSec = s
-                        ))
+                        )) }
                     }
                 }
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - hit.slug
+                _pluginDownloadProgress.update { it - hit.slug }
                 _messageFlow.tryEmit(str(R.string.s229, hit.title))
                 refreshInstalledPlugins()
             } catch (e: Exception) {
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - hit.slug
+                _pluginDownloadProgress.update { it - hit.slug }
                 _errorFlow.tryEmit(str(R.string.s230, hit.title, e.message))
             }
         }
@@ -2325,26 +2709,26 @@ class McViewModel(
                     curated.downloadUrl
                 }
                 // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value + (curated.id to PluginDownloadProgress(
+                _pluginDownloadProgress.update { it + (curated.id to PluginDownloadProgress(
                     pluginId = curated.id, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                ))
+                )) }
                 pluginManager.installFromUrl(
                     resolvedUrl,
                     curated.targetFileName,
                     dirName
                 ) { downloaded, total, speed ->
-                    _pluginDownloadProgress.value = _pluginDownloadProgress.value + (curated.id to PluginDownloadProgress(
+                    _pluginDownloadProgress.update { it + (curated.id to PluginDownloadProgress(
                         pluginId = curated.id,
                         downloadedBytes = downloaded,
                         totalBytes = total,
                         speedBytesPerSec = speed
-                    ))
+                    )) }
                 }
                 _messageFlow.tryEmit(str(R.string.s229, curated.name))
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - curated.id
+                _pluginDownloadProgress.update { it - curated.id }
                 refreshInstalledPlugins()
             } catch (e: Exception) {
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - curated.id
+                _pluginDownloadProgress.update { it - curated.id }
                 _errorFlow.tryEmit(str(R.string.s230, curated.name, e.message))
             }
         }
@@ -2373,6 +2757,8 @@ class McViewModel(
 
     /** 删除插件 */
     fun deletePlugin(fileName: String, alsoRemoveDataDir: Boolean = false) {
+        // VM 侧兜底：运行中删除插件（尤其含 removeDataDir）会与正在加载的插件文件竞争
+        if (!requireServerStopped("删除插件")) return
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -2395,6 +2781,8 @@ class McViewModel(
 
     /** 切换插件启用/禁用 */
     fun togglePluginEnabled(fileName: String) {
+        // VM 侧兜底：运行中重命名 jar 可能让服务端读到半截文件
+        if (!requireServerStopped("启用或停用插件")) return
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -2491,22 +2879,22 @@ class McViewModel(
         viewModelScope.launch {
             try {
                 // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value + (URL_DOWNLOAD_ID to PluginDownloadProgress(
+                _pluginDownloadProgress.update { it + (URL_DOWNLOAD_ID to PluginDownloadProgress(
                     pluginId = URL_DOWNLOAD_ID, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                ))
+                )) }
                 pluginManager.installFromUrl(url, customFileName, dirName) { downloaded, total, speed ->
-                    _pluginDownloadProgress.value = _pluginDownloadProgress.value + (URL_DOWNLOAD_ID to PluginDownloadProgress(
+                    _pluginDownloadProgress.update { it + (URL_DOWNLOAD_ID to PluginDownloadProgress(
                         pluginId = URL_DOWNLOAD_ID,
                         downloadedBytes = downloaded,
                         totalBytes = total,
                         speedBytesPerSec = speed
-                    ))
+                    )) }
                 }
                 _messageFlow.tryEmit(str(R.string.s246, customFileName))
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - URL_DOWNLOAD_ID
+                _pluginDownloadProgress.update { it - URL_DOWNLOAD_ID }
                 refreshInstalledPlugins()
             } catch (e: Exception) {
-                _pluginDownloadProgress.value = _pluginDownloadProgress.value - URL_DOWNLOAD_ID
+                _pluginDownloadProgress.update { it - URL_DOWNLOAD_ID }
                 _errorFlow.tryEmit(str(R.string.s247, e.message))
             }
         }
@@ -2993,6 +3381,8 @@ class McViewModel(
 
     /** 删除快照 */
     fun deleteSnapshot(name: String) {
+        // 兜底：运行中删除快照会毁掉「出事可回滚」的备份，与服务端活动期解耦更安全
+        if (!requireServerStopped("删除快照")) return
         viewModelScope.launch {
             try {
                 val ok = withContext(Dispatchers.IO) { backupManager.deleteSnapshot(name) }
@@ -3061,6 +3451,10 @@ class McViewModel(
             _errorFlow.tryEmit(str(R.string.s192))
             return
         }
+        // PowerNukkitX 的配置落在 pnx.yml，而服务端退出时会整份回写该文件，
+        // 运行期间的修改必然被覆盖；PowerNukkitXConfigManager.write 也会主动拒绝运行中写入。
+        // 在这里提前拦截是为了给出明确原因，而不是让用户看到笼统的「保存失败」。
+        if (isPowerNukkitXActive() && !requireServerStopped("修改 PowerNukkitX 配置")) return
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s249))
             return
@@ -3228,13 +3622,24 @@ class McViewModel(
         _playerHistory.value = _playerHistory.value.map { replacements[it] ?: it }
         val snapshot = _playerHistory.value
         viewModelScope.launch(Dispatchers.IO) { historyMutex.withLock {
-            val file = playerHistoryFile(); file.parentFile?.mkdirs(); file.writeText(historyJson.encodeToString(snapshot))
+            try {
+                val file = playerHistoryFile(); file.parentFile?.mkdirs(); file.writeText(historyJson.encodeToString(snapshot))
+            } catch (e: Exception) {
+                // 写入失败不阻断运行（与 recordPlayerEvent 一致）：viewModelScope 无 CoroutineExceptionHandler，
+                // 磁盘满/目录不可写时异常逸出协程会直接崩溃 App。
+            }
         } }
     }
 
     fun clearPlayerHistory() {
         _playerHistory.value = emptyList()
-        viewModelScope.launch(Dispatchers.IO) { historyMutex.withLock { playerHistoryFile().delete() } }
+        viewModelScope.launch(Dispatchers.IO) { historyMutex.withLock {
+            try {
+                playerHistoryFile().delete()
+            } catch (e: Exception) {
+                // 删除失败不阻断运行
+            }
+        } }
     }
 
     fun exportPlayerHistory(uri: android.net.Uri) = viewModelScope.launch {
@@ -3437,6 +3842,205 @@ class McViewModel(
         if (name.isBlank() || amount <= 0) return
         val sent = playerManager.giveXp(name, amount)
         afterCmd(sent, str(R.string.msg_xp_given, name, amount), refresh = false)
+    }
+
+    // ── 世界（存档）管理 ────────────────────────────────────────────
+
+    private val worldManager: WorldManager by lazy { WorldManager(repo.termuxRuntime) }
+
+    /** 世界导入包体积上限。导入会先整体落到 cacheDir，不设上限会把设备存储填满。 */
+    private val maxWorldImportBytes = 2L * 1024 * 1024 * 1024
+
+    /**
+     * 世界目录相关操作的前置校验：服务端运行中时不允许碰存档目录。
+     *
+     * 运行中删改世界目录会得到部分删除的存档或损坏的 level.dat，而且不可逆；
+     * 读取（导出）也会打出撕裂的快照，正好让「出事后用来恢复的备份」失去价值。
+     *
+     * @return true 表示可以继续执行
+     */
+    private fun requireServerStopped(action: String): Boolean {
+        if (!repo.serverState.value.isRunning) return true
+        _errorFlow.tryEmit("请先停止服务端，再$action")
+        return false
+    }
+
+    private val _worlds = MutableStateFlow<List<Worlds.WorldInfo>>(emptyList())
+    val worlds: StateFlow<List<Worlds.WorldInfo>> = _worlds.asStateFlow()
+
+    private val _worldsLoading = MutableStateFlow(false)
+    val worldsLoading: StateFlow<Boolean> = _worldsLoading.asStateFlow()
+
+    /** 当前 level-name 指向的世界名（可能尚未生成对应目录）。 */
+    private val _activeWorldName = MutableStateFlow("")
+    val activeWorldName: StateFlow<String> = _activeWorldName.asStateFlow()
+
+    /** 加载世界列表（含各世界占用大小）。大小统计较慢，放在 IO 线程。 */
+    fun loadWorlds() {
+        if (!isBootstrapped.value) return
+        val dirName = activeDirName() ?: return
+        viewModelScope.launch {
+            _worldsLoading.value = true
+            try {
+                val list = withContext(Dispatchers.IO) { worldManager.listWorlds(dirName) }
+                _worlds.value = list
+                _activeWorldName.value = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("读取世界列表失败：${e.message}")
+            } finally {
+                _worldsLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * 切换当前使用的世界（写入 level-name）。
+     *
+     * 服务端运行中时改动不会立刻生效，需要重启，这里明确提示而不是静默写入。
+     */
+    fun setActiveWorld(name: String) {
+        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
+        val dirName = activeDirName() ?: return
+        viewModelScope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) { worldManager.setLevelName(dirName, name) }
+                if (ok) {
+                    _activeWorldName.value = name
+                    _messageFlow.tryEmit(
+                        if (repo.serverState.value.isRunning) "已切换到世界「$name」，重启服务端后生效"
+                        else "已切换到世界「$name」"
+                    )
+                    loadWorlds()
+                } else {
+                    // setLevelName 现在能区分「写不进去」与「目标实例正在运行」，别再一律
+                    // 报成配置不可写——用户会去翻存储权限，而真正原因可能只是要停服。
+                    _errorFlow.tryEmit(
+                        if (repo.termuxRuntime.isMcRunningIn(dirName)) {
+                            str(R.string.world_switch_blocked_running)
+                        } else {
+                            str(R.string.world_switch_failed)
+                        }
+                    )
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("切换世界失败：${e.message}")
+            }
+        }
+    }
+
+    /** 清空 level-seed，让服务端下次生成地图时使用随机种子。 */
+    fun clearWorldSeed() {
+        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
+        val dirName = activeDirName() ?: return
+        viewModelScope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) { worldManager.clearLevelSeed(dirName) }
+                if (ok) _messageFlow.tryEmit("已清空世界种子，下次生成地图时使用随机种子")
+                else _errorFlow.tryEmit("清空种子失败：当前服务端类型不支持该设置")
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("清空种子失败：${e.message}")
+            }
+        }
+    }
+
+    /** 导出世界到用户选择的位置（先打包到导出目录，再复制到 SAF 目标）。 */
+    fun exportWorldToUri(worldName: String, uri: Uri) {
+        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped("导出世界")) return
+        viewModelScope.launch {
+            try {
+                val path = worldManager.exportWorld(dirName, worldName)
+                if (path == null) {
+                    _errorFlow.tryEmit("导出失败：世界目录不存在或存储不可写")
+                    return@launch
+                }
+                exportPathToUri(java.io.File(path), uri)
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("导出失败：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 从用户选择的压缩包导入世界。
+     *
+     * 先复制到 cache 再解压：SAF 的 InputStream 只能顺序读一次，而解压需要随机读取
+     * 条目头部（[Worlds.inspectZip] 会独立打开一次）。
+     */
+    fun importWorldFromUri(uri: Uri, preferredName: String) {
+        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped("导入世界")) return
+        viewModelScope.launch {
+            var temp: java.io.File? = null
+            try {
+                temp = withContext(Dispatchers.IO) {
+                    val f = java.io.File(app.cacheDir, "world_import_${System.currentTimeMillis()}.zip")
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        f.outputStream().use { output ->
+                            // 边拷边计数：先全量落盘再判断大小，设备已经被填满了
+                            val buf = ByteArray(64 * 1024)
+                            var total = 0L
+                            while (true) {
+                                val read = input.read(buf)
+                                if (read < 0) break
+                                total += read
+                                if (total > maxWorldImportBytes) {
+                                    throw RuntimeException("压缩包超过 2 GB，已中止导入")
+                                }
+                                output.write(buf, 0, read)
+                            }
+                        }
+                    } ?: throw RuntimeException("无法读取所选文件")
+                    f
+                }
+                val imported = withContext(Dispatchers.IO) {
+                    worldManager.importWorld(dirName, temp, preferredName)
+                }
+                if (imported != null) {
+                    _messageFlow.tryEmit("世界已导入为「$imported」")
+                    loadWorlds()
+                } else {
+                    _errorFlow.tryEmit("导入失败：压缩包内没有找到世界（缺少 level.dat / region / db）")
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("导入失败：${e.message}")
+            } finally {
+                // NonCancellable：协程已取消时 finally 里的 withContext 会立刻抛出取消异常，
+                // 直接调用会让临时 zip 残留在 cacheDir 里。
+                withContext(NonCancellable + Dispatchers.IO) { temp?.delete() }
+            }
+        }
+    }
+
+    /**
+     * 重置世界：先自动导出一份安全备份，再删除目录，让服务端下次启动重新生成。
+     *
+     * 备份失败时不会删除任何文件（由 [WorldManager.resetWorld] 保证），这里按
+     * backupFailed -> success 的顺序判断，避免把「没删成」提示成「已重置」，
+     * 也避免把「已删除但没备份」提示成「已中止」。
+     */
+    fun resetWorld(worldName: String) {
+        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped("重置世界")) return
+        viewModelScope.launch {
+            try {
+                val result = worldManager.resetWorld(dirName, worldName, backupFirst = true)
+                val backupPath = result.backupPath
+                when {
+                    result.backupFailed -> _errorFlow.tryEmit("未能在删除前创建安全备份，已中止重置（存档未改动）")
+                    !result.success || backupPath == null -> _errorFlow.tryEmit("重置失败：世界目录不存在或无法删除")
+                    else -> _messageFlow.tryEmit(
+                        "世界「$worldName」已重置，备份保存在 ${java.io.File(backupPath).parentFile?.absolutePath ?: "导出目录"}"
+                    )
+                }
+                loadWorlds()
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("重置失败：${e.message}")
+            }
+        }
     }
 
     // ── 崩溃报告 ────────────────────────────────────────────────────
@@ -3781,6 +4385,8 @@ class McViewModel(
      * 继续清理登记信息。
      */
     fun deleteCore(name: String) {
+        // 兜底：下面是对含世界存档的目录做整目录 deleteRecursively()，运行中执行会得到部分删除的存档且不可逆
+        if (!requireServerStopped("删除服务器核心")) return
         viewModelScope.launch {
             try {
                 val cfg = repo.currentConfig()
@@ -4043,6 +4649,21 @@ class McViewModel(
         viewModelScope.launch {
             config.map { it.activeCoreName }.distinctUntilChanged().collect { loadPlayerHistory() }
         }
+        // 把「当前 Java 来源 + PRoot 发行版」投影到运行时。
+        //
+        // 运行时是启动链路（含 MCP、桌面组件、定时任务等拿不到 McConfig 的调用方）
+        // 唯一的判定依据，因此这份同步必须跟着 config 走；只在这里写一次，
+        // 避免每个调用点各自从 config 里取一遍（那种分散读取正是「换个入口行为就变了」
+        // 的来源）。用 distinctUntilChanged 避免无谓写入。
+        viewModelScope.launch {
+            config
+                .map { it.selectedJavaVendor to it.prootDistro }
+                .distinctUntilChanged()
+                .collect { (vendor, distro) ->
+                    repo.termuxRuntime.selectedProotVendor = vendor
+                    repo.termuxRuntime.selectedProotDistro = distro
+                }
+        }
         viewModelScope.launch {
             var wasRunning = false
             serverState.collect { state ->
@@ -4073,12 +4694,14 @@ class McViewModel(
         // Process only newly received lines. Older terminal rows keep their identity across UI flushes.
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
-                // 无 UI 订阅时（后台/无页面）长睡，控制台可见时以帧友好的频率刷新。
-                if (_consoleLines.subscriptionCount.value <= 0 &&
-                    _consolePreviewLines.subscriptionCount.value <= 0 &&
-                    _terminalConsoleLines.subscriptionCount.value <= 0
+                // 无 UI 订阅（后台/无页面），或界面不可见（Activity 已停止但 collectAsState 不销毁、订阅数仍 >0）
+                // 时长时间睡眠；控制台可见时以帧友好的频率刷新。
+                if (!uiVisible ||
+                    (_consoleLines.subscriptionCount.value <= 0 &&
+                        _consolePreviewLines.subscriptionCount.value <= 0 &&
+                        _terminalConsoleLines.subscriptionCount.value <= 0)
                 ) {
-                    delay(2000)
+                    delay(IDLE_LOG_FLUSH_MS)
                     continue
                 }
                 delay(200)
@@ -4117,10 +4740,10 @@ class McViewModel(
         }
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
-                // 空闲降频：LogsScreen 不在前台时没有订阅者，此时每 200ms 醒一次纯属浪费
-                // （App 退到后台仍每秒唤醒 5~10 次，是待机耗电的主要来源）。
+                // 空闲降频：LogsScreen 不在前台、或 Activity 已停止（collectAsState 不销毁订阅数仍 >0）时，
+                // 每 200ms 醒一次纯属浪费（App 退到后台仍每秒唤醒 5~10 次，是待机耗电的主要来源）。
                 // 注意这里只延长"发布"的间隔，buffer 仍在持续接收，不会丢日志。
-                if (_termuxLines.subscriptionCount.value <= 0) {
+                if (!uiVisible || _termuxLines.subscriptionCount.value <= 0) {
                     delay(IDLE_LOG_FLUSH_MS)
                     continue
                 }
@@ -4134,10 +4757,10 @@ class McViewModel(
         }
         viewModelScope.launch(Dispatchers.Default) {
             while (true) {
-                // 同上：终端会话面板不可见时降频。
+                // 同上：终端会话面板不可见时降频；界面不在前台（uiVisible=false）同样降频。
                 val terminalVisible = _terminalSessions.subscriptionCount.value > 0 ||
                     _activeTerminalSessionId.subscriptionCount.value > 0
-                if (!terminalVisible) {
+                if (!uiVisible || !terminalVisible) {
                     delay(IDLE_LOG_FLUSH_MS)
                     continue
                 }

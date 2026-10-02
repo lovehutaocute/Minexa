@@ -56,6 +56,9 @@ class McForegroundService : Service() {
     // ponytail: one active server process, so one service-wide backup lock is enough.
     @Volatile private var autoBackupRunning = false
     @Volatile private var cachedDirName: String? = null
+    /** 是否已调用过 startForeground（幂等护栏，见 [ensureForeground]） */
+    @Volatile private var foregroundStarted = false
+    private val watchdogStarted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val chatRegex = Regex("<([A-Za-z0-9_]{1,16})>\\s*(.+)$")
     private val joinRegex = Regex(":\\s*([A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?joined the game")
     private val leaveRegex = Regex(":\\s*([A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?left the game")
@@ -147,9 +150,33 @@ class McForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startForegroundInternal()
-            ACTION_REFRESH_KEEP_ALIVE -> scope.launch { syncOverlayFromConfig() }
-            ACTION_REFRESH_STATUS -> scope.launch { refreshServerStatusNow() }
+            ACTION_START -> ensureForeground()
+            ACTION_REFRESH_KEEP_ALIVE -> {
+                // 这两个 action（尤其 REFRESH_STATUS）也是经 startForegroundService 进来的：
+                // 任何一条进来后 5 秒内没调 startForeground，系统会抛 RemoteServiceException
+                // 并杀掉 App 进程 —— 连带杀掉正在跑的 MC。所以必须先抬到前台再做正事。
+                ensureForeground()
+                scope.launch { syncOverlayFromConfig() }
+            }
+            ACTION_REFRESH_STATUS -> {
+                ensureForeground()
+                scope.launch { refreshServerStatusNow() }
+            }
+            ACTION_WIDGET_ACTION -> {
+                // 桌面组件/定时闹钟的长任务统一在这里执行。
+                //
+                // 为什么不能让 BroadcastReceiver 自己 goAsync() 跑完：启动服务端（含下载、
+                // apt 安装）、打包世界备份都是分钟级操作，而 BroadcastReceiver 的
+                // PendingResult 有硬性时限（前台 10s / 后台 60s），超时系统会判定 ANR
+                // 并杀掉 App 进程——正在运行的 MC 会跟着一起死。
+                // 交给前台服务后既没有时限，也顺带拿到了前台保活。
+                ensureForeground()
+                val action = intent.getStringExtra(EXTRA_WIDGET_ACTION)
+                val scheduleAction = intent.getStringExtra(EXTRA_SCHEDULE_ACTION)
+                scope.launch {
+                    runWidgetOrScheduleAction(action, scheduleAction)
+                }
+            }
             ACTION_STOP -> {
                 scope.launch {
                     termux.stopMc()
@@ -160,14 +187,23 @@ class McForegroundService : Service() {
             }
             else -> {
                 // null intent（系统重启）或其他 action：仍需启动前台通知
-                startForegroundInternal()
+                ensureForeground()
             }
         }
         // START_STICKY：进程被杀后系统会在资源充足时尝试重启 Service
         return START_STICKY
     }
 
-    private fun startForegroundInternal() {
+    /**
+     * 抬到前台（幂等）。
+     *
+     * 为什么不直接延用旧的单次调用：`ACTION_REFRESH_STATUS` 这类 action 同样走
+     * `startForegroundService`，而它过去从不调 `startForeground`——targetSdk ≥ 26 时
+     * 系统判定「5 秒内未进前台」，在 App 进程里抛 RemoteServiceException 把它整个杀掉，
+     * 正在跑的 MC 随之一起没。做成幂等后任意 action 先进来都会补齐这一步。
+     */
+    private fun ensureForeground() {
+        if (foregroundStarted) return
         val notif = buildNotification(getString(R.string.notif_title_running), getString(R.string.notif_text_running))
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
             // Android 14+ 必须显式传入 FGS 类型
@@ -177,6 +213,7 @@ class McForegroundService : Service() {
         } else {
             startForeground(NOTIF_ID, notif)
         }
+        foregroundStarted = true
         // 配置读取（DataStore）移到 IO 线程，避免主线程磁盘 I/O
         scope.launch { acquireLocks() }
         // 启动 socket 监听 + 健康 watchdog
@@ -192,6 +229,44 @@ class McForegroundService : Service() {
         StatusOverlay.hide(this)
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
+    }
+
+    /**
+     * 在服务的作用域内执行组件动作 / 定时任务。
+     *
+     * 这些动作都是分钟级的（启动服务端含下载与 apt 安装、打包世界备份、
+     * 定时开停服），绝不能留在 BroadcastReceiver 的 goAsync 里跑——见
+     * [ACTION_WIDGET_ACTION] 的说明。这里失败一律只记日志 + 发事件通知，
+     * 不让异常冒出去杀掉服务进程。
+     */
+    private suspend fun runWidgetOrScheduleAction(widgetAction: String?, scheduleAction: String?) {
+        val app = McApplication.get(this)
+        try {
+            if (widgetAction != null) {
+                com.mineserve.mobile.widget.WidgetActionReceiver.dispatchWidgetAction(this, widgetAction)
+            } else if (scheduleAction != null) {
+                com.mineserve.mobile.widget.WidgetActionReceiver.dispatchScheduleAction(this, scheduleAction)
+                // 触发后按最新配置重注册下一次（配置可能已被修改）。
+                // 放在动作之后：与用户操作路径一致，且此时读到的就是最新配置。
+                runCatching {
+                    com.mineserve.mobile.data.ScheduleManager.register(
+                        this, app.repository.configFlow.first()
+                    )
+                }
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "组件动作执行失败: $widgetAction$scheduleAction", e)
+            runCatching {
+                com.mineserve.mobile.data.ServerEventNotifier.notify(
+                    app,
+                    app.getString(R.string.notif_schedule_start_fail_title),
+                    app.getString(R.string.notif_schedule_start_fail_text, e.message ?: ""),
+                    com.mineserve.mobile.data.ServerEventNotifier.ID_SCHEDULE_FAIL, 1
+                )
+            }
+        }
     }
 
     /**
@@ -257,6 +332,8 @@ class McForegroundService : Service() {
      * 每 60 秒发送 list 命令获取玩家数，Paper 核心发送 tps 命令获取 TPS。
      */
     private fun startWatchdog() {
+        // 只跑一条 watchdog：每条重复启动都会多一个「每 30 秒 list/tps」的轮询源。
+        if (!watchdogStarted.compareAndSet(false, true)) return
         scope.launch {
             var tick = 0
             while (true) {
@@ -322,6 +399,8 @@ class McForegroundService : Service() {
         val key = "last_${active.dirName}_${config.autoBackupType.name}"
         if (System.currentTimeMillis() - prefs.getLong(key, 0L) < intervalMs) return
         autoBackupRunning = true
+        // 连续失败计数：失败日志降频（仅首次失败打控制台），避免外部目录不可写时刷屏
+        val failKey = "fail_${active.dirName}_${config.autoBackupType.name}"
         scope.launch {
             try {
                 val typeName = config.autoBackupType.displayName
@@ -341,15 +420,33 @@ class McForegroundService : Service() {
                         config.maxSnapshots
                     )
                 }
+                // 无论成败都推进节流时间戳：原先只在成功时写入，失败路径每个 watchdog
+                // tick（约 60s）都会完整重跑一次打包，造成周期性 IO 峰值。
+                prefs.edit().putLong(key, System.currentTimeMillis()).apply()
                 if (path != null) {
-                    prefs.edit().putLong(key, System.currentTimeMillis()).apply()
+                    prefs.edit().putInt(failKey, 0).apply()
                     termux.emitLog("[backup] 自动备份完成: ${java.io.File(path).name}")
-                } else termux.emitLog("[backup] 自动备份失败：外部目录不可写或没有可备份的数据")
+                } else {
+                    reportAutoBackupFailure(prefs, failKey, "外部目录不可写或没有可备份的数据")
+                }
             } catch (e: Exception) {
-                termux.emitLog("[backup] 自动备份失败: ${e.message}")
+                prefs.edit().putLong(key, System.currentTimeMillis()).apply()
+                reportAutoBackupFailure(prefs, failKey, e.message ?: "未知错误")
             } finally {
                 autoBackupRunning = false
             }
+        }
+    }
+
+    /** 记录一次自动备份失败；仅首次失败打控制台，后续降频到 logcat，避免日志刷屏。 */
+    private fun reportAutoBackupFailure(prefs: android.content.SharedPreferences, failKey: String, reason: String) {
+        val fails = prefs.getInt(failKey, 0) + 1
+        prefs.edit().putInt(failKey, fails).apply()
+        val message = "[backup] 自动备份失败: $reason"
+        if (fails == 1) {
+            termux.emitLog(message)
+        } else {
+            Log.w(TAG, "$message（连续第 $fails 次，已降频）")
         }
     }
 
@@ -461,10 +558,50 @@ class McForegroundService : Service() {
         const val ACTION_STOP = "com.mineserve.mobile.action.STOP"
         const val ACTION_REFRESH_KEEP_ALIVE = "com.mineserve.mobile.action.REFRESH_KEEP_ALIVE"
         const val ACTION_REFRESH_STATUS = "com.mineserve.mobile.action.REFRESH_STATUS"
+        /** 执行一个桌面组件动作（组件/闹钟 Receiver 把长任务转交到这里）。 */
+        const val ACTION_WIDGET_ACTION = "com.mineserve.mobile.action.WIDGET_ACTION"
+        /** 要执行的组件动作名（[com.mineserve.mobile.widget.WidgetActionReceiver] 的 ACTION_*）。 */
+        const val EXTRA_WIDGET_ACTION = "widget_action"
+        /** 定时任务动作名（[com.mineserve.mobile.data.ScheduleManager] 的 ACTION_*）。 */
+        const val EXTRA_SCHEDULE_ACTION = "schedule_action"
         private const val TAG = "McForegroundService"
 
         /** 服务是否在运行（供保活检查） */
         @Volatile
         var isRunning: Boolean = false
+
+        /**
+         * 把一个桌面组件动作交给前台服务执行。
+         *
+         * 组件 Receiver 的 onReceive 必须立刻返回：这些动作是分钟级的，
+         * 留在广播回调（含 goAsync 的 PendingResult）里会被系统判定超时并杀进程。
+         */
+        fun enqueueWidgetAction(context: Context, action: String) {
+            val intent = Intent(context, McForegroundService::class.java)
+                .setAction(ACTION_WIDGET_ACTION)
+                .putExtra(EXTRA_WIDGET_ACTION, action)
+            startServiceSafely(context, intent)
+        }
+
+        /** 把一个定时任务动作交给前台服务执行（理由同 [enqueueWidgetAction]）。 */
+        fun enqueueScheduleAction(context: Context, scheduleAction: String) {
+            val intent = Intent(context, McForegroundService::class.java)
+                .setAction(ACTION_WIDGET_ACTION)
+                .putExtra(EXTRA_SCHEDULE_ACTION, scheduleAction)
+            startServiceSafely(context, intent)
+        }
+
+        /**
+         * 拉起服务：已在前台就 startService，否则 startForegroundService。
+         * 厂商限制导致抛异常时只记日志，不让广播/闹钟回调崩溃。
+         */
+        private fun startServiceSafely(context: Context, intent: Intent) {
+            try {
+                if (isRunning) context.startService(intent)
+                else context.startForegroundService(intent)
+            } catch (e: Exception) {
+                Log.w(TAG, "无法启动前台服务执行动作: ${e.message}")
+            }
+        }
     }
 }

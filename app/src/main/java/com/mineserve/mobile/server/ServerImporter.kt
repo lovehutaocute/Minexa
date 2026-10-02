@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import android.provider.OpenableColumns
+import android.util.Log
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.runtime.TermuxRuntime
 import io.airlift.compress.zstd.ZstdInputStream
@@ -44,6 +45,8 @@ import java.util.zip.ZipFile
  * 导入完成后调用 [ServerCoreDetector] 自动识别核心类型与版本。
  */
 class ServerImporter(private val context: Context, private val termux: TermuxRuntime) {
+
+    private val TAG = "ServerImporter"
 
     data class ImportedServer(
         val dirName: String,
@@ -402,8 +405,9 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
         target.parentFile?.mkdirs()
         var last: Exception? = null
         for (url in urls) {
+            var conn: HttpURLConnection? = null
             try {
-                val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                conn = (URL(url).openConnection() as HttpURLConnection).apply {
                     connectTimeout = 15_000
                     readTimeout = 60_000
                     setRequestProperty("User-Agent", "MineServeMobile/1.1")
@@ -411,7 +415,6 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
                 conn.connect()
                 if (conn.responseCode !in 200..299) throw IOException("HTTP ${conn.responseCode}")
                 conn.inputStream.use { input -> target.outputStream().use { output -> input.copyTo(output) } }
-                conn.disconnect()
                 if (expectedSha1 != null && sha1(target) != expectedSha1.lowercase(Locale.US)) {
                     target.delete()
                     throw IOException("整合包文件校验失败: ${target.name}")
@@ -419,13 +422,28 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
                 return
             } catch (e: Exception) {
                 last = e
+            } finally {
+                // 原先只在成功路径 disconnect，HTTP 非 2xx / 网络异常 / SHA-1 不匹配都会走
+                // catch 而不释放连接，弱网下 socket 泄漏导致后续下载持续超时。
+                conn?.disconnect()
             }
         }
         throw IOException("整合包文件下载失败: ${target.name}", last)
     }
 
-    private fun sha1(file: File): String = MessageDigest.getInstance("SHA-1").digest(file.readBytes())
-        .joinToString("") { "%02x".format(it) }
+    /** 流式计算 SHA-1：整合包常见 100~500MB 文件，readBytes() 全量载入会在低内存机 OOM。 */
+    private fun sha1(file: File): String {
+        val digest = MessageDigest.getInstance("SHA-1")
+        FileInputStream(file).use { input ->
+            val buffer = ByteArray(64 * 1024)
+            while (true) {
+                val read = input.read(buffer)
+                if (read <= 0) break
+                digest.update(buffer, 0, read)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
 
     /** 查询所选文件的原始文件名 */
     private fun queryDisplayName(uri: Uri): String? =
@@ -547,6 +565,18 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
 
     // ── 解压（含剥离与防路径穿越） ─────────────────────────────────
 
+    /**
+     * 解压预算常量。
+     *
+     * 上限取「比任何真实服务端都宽裕、但压不垮 /data」的量级：
+     * 现代模组整合包解压后可达 10+ GiB，所以给 32 GiB；
+     * 条目数上限对应大量小文件（模组包常见几十万文件）。
+     */
+    internal companion object {
+        internal const val MAX_TOTAL_BYTES = 32L * 1024 * 1024 * 1024
+        internal const val MAX_ENTRIES = 400_000L
+    }
+
     private fun extractArchive(
         file: File,
         format: ArchiveFormat,
@@ -557,12 +587,21 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
     ) {
         dest.mkdirs()
         val counter = ProgressCounter(onProgress, total)
-        when (format) {
-            ArchiveFormat.ZIP -> extractZip(file, dest, stripPrefix, counter)
-            ArchiveFormat.TAR, ArchiveFormat.TAR_GZ, ArchiveFormat.TAR_XZ, ArchiveFormat.TAR_BZ2,
-            ArchiveFormat.TAR_ZST, ArchiveFormat.TAR_LZ4 ->
-                extractTar(file, format, dest, stripPrefix, counter)
-            ArchiveFormat.SEVEN_Z -> extractSevenZ(file, dest, stripPrefix, counter)
+        try {
+            when (format) {
+                ArchiveFormat.ZIP -> extractZip(file, dest, stripPrefix, counter)
+                ArchiveFormat.TAR, ArchiveFormat.TAR_GZ, ArchiveFormat.TAR_XZ, ArchiveFormat.TAR_BZ2,
+                ArchiveFormat.TAR_ZST, ArchiveFormat.TAR_LZ4 ->
+                    extractTar(file, format, dest, stripPrefix, counter)
+                ArchiveFormat.SEVEN_Z -> extractSevenZ(file, dest, stripPrefix, counter)
+            }
+        } catch (e: Exception) {
+            // 预算超限/解压出错时，已写出的部分必须清掉：
+            // 否则会在 servers/ 下留下半个「服务器实例」，用户下次导入还要先手动删。
+            // 只清理 dest 自身（调用方每次都用全新的空目录），不做递归向上删除。
+            Log.e(TAG, "解压失败，清理已写出的部分: ${dest.absolutePath}", e)
+            dest.deleteRecursively()
+            throw e
         }
     }
 
@@ -596,11 +635,40 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
         }
     }
 
+    /**
+     * 解压时的资源预算。
+     *
+     * 这三条只有 canonical 前缀校验（防目录穿越），但**没有体积/条目上限**：
+     * 一个几百 KB 的压缩炸弹就能把 `copyTo` 一路写到 `/data` 撑爆，
+     * 而 App 与被托管的服务端共用同一分区——磁盘写满会让配置落盘、世界保存全部失败。
+     * 这里给出一条明确的预算，超限即中止（已解出的内容由调用方负责清理）。
+     */
+    internal class ExtractBudget {
+        var entries = 0L
+        var bytes = 0L
+
+        fun addEntry() {
+            entries++
+            if (entries > MAX_ENTRIES) {
+                throw IOException("压缩包条目数超过上限 $MAX_ENTRIES，已中止导入（疑似压缩炸弹）")
+            }
+        }
+
+        fun addBytes(n: Long) {
+            bytes += n
+            if (bytes > MAX_TOTAL_BYTES) {
+                throw IOException("解压体积超过上限 ${MAX_TOTAL_BYTES / (1024L * 1024 * 1024)} GiB，已中止导入")
+            }
+        }
+    }
+
     private fun extractZip(file: File, dest: File, stripPrefix: String?, counter: ProgressCounter? = null) {
         val canonicalDest = dest.canonicalPath + File.separator
+        val budget = ExtractBudget()
         ZipInputStream(BufferedInputStream(FileInputStream(file), 64 * 1024)).use { zis ->
             var entry = zis.nextEntry
             while (entry != null) {
+                budget.addEntry()
                 val raw = entry.name.replace('\\', '/')
                 val rel = ServerImportLayout.strippedPath(raw, stripPrefix)
                 if (rel != null && !ServerImportLayout.isJunkEntry(raw)) {
@@ -611,7 +679,15 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
                             outFile.mkdirs()
                         } else {
                             outFile.parentFile?.mkdirs()
-                            FileOutputStream(outFile).use { out -> zis.copyTo(out) }
+                            FileOutputStream(outFile).use { out ->
+                                val buf = ByteArray(64 * 1024)
+                                while (true) {
+                                    val n = zis.read(buf)
+                                    if (n < 0) break
+                                    budget.addBytes(n.toLong())
+                                    out.write(buf, 0, n)
+                                }
+                            }
                         }
                     }
                 }
@@ -623,9 +699,11 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
 
     private fun extractTar(file: File, format: ArchiveFormat, dest: File, stripPrefix: String?, counter: ProgressCounter? = null) {
         val canonicalDest = dest.canonicalPath + File.separator
+        val budget = ExtractBudget()
         openTar(file, format).use { tar ->
             var entry = tar.nextTarEntry
             while (entry != null) {
+                budget.addEntry()
                 val raw = entry.name.replace('\\', '/')
                 // 符号链接 / 硬链接一律跳过（防止链接逃逸出目标目录）
                 if (!entry.isSymbolicLink && !entry.isLink) {
@@ -638,7 +716,15 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
                                 outFile.mkdirs()
                             } else {
                                 outFile.parentFile?.mkdirs()
-                                FileOutputStream(outFile).use { out -> tar.copyTo(out) }
+                                FileOutputStream(outFile).use { out ->
+                                    val buf = ByteArray(64 * 1024)
+                                    while (true) {
+                                        val n = tar.read(buf)
+                                        if (n < 0) break
+                                        budget.addBytes(n.toLong())
+                                        out.write(buf, 0, n)
+                                    }
+                                }
                             }
                         }
                     }
@@ -652,9 +738,11 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
 
     private fun extractSevenZ(file: File, dest: File, stripPrefix: String?, counter: ProgressCounter? = null) {
         val canonicalDest = dest.canonicalPath + File.separator
+        val budget = ExtractBudget()
         SevenZFile(file).use { sz ->
             var entry = sz.nextEntry
             while (entry != null) {
+                budget.addEntry()
                 val raw = entry.name.replace('\\', '/')
                 if (!entry.isAntiItem) {
                 val rel = ServerImportLayout.strippedPath(raw, stripPrefix)
@@ -670,6 +758,7 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
                                 while (true) {
                                     val n = sz.read(buffer)
                                     if (n < 0) break
+                                    budget.addBytes(n.toLong())
                                     out.write(buffer, 0, n)
                                 }
                             }

@@ -45,10 +45,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.R
-import com.mineserve.mobile.data.JavaVersion
+import com.mineserve.mobile.data.JavaRuntime
+import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.StepStatus
 import com.mineserve.mobile.ui.BackBar
+import com.mineserve.mobile.ui.JavaRuntimeGroupList
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.StepRow
@@ -177,7 +179,9 @@ private fun ActionButtonsRow(
     installEnabled: Boolean,
     onUninstall: () -> Unit,
     onReinstall: () -> Unit,
-    onInstall: () -> Unit
+    onInstall: () -> Unit,
+    // 重装按钮文案可按模块定制（如 PHP 的重装实际只执行删除，需如实描述行为）
+    reinstallLabelRes: Int = R.string.env_reinstall
 ) {
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
@@ -191,7 +195,7 @@ private fun ActionButtonsRow(
             enabled = reinstallEnabled,
             shape = RoundedCornerShape(10.dp),
             modifier = Modifier.weight(1f)
-        ) { Text(stringResource(R.string.env_reinstall), color = Indigo, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+        ) { Text(stringResource(reinstallLabelRes), color = Indigo, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         Button(
             onClick = onInstall,
             enabled = installEnabled,
@@ -214,55 +218,121 @@ private fun OperationBadge(operation: String?) {
 
 // ── Java 版本管理 ─────────────────────────────────────────────
 
+/**
+ * Java 运行环境管理。
+ *
+ * 两套来源（Termux JDK / FCL JDK）各成一个分组，组内只显示纯版本号 ——
+ * 版本号在两侧大量重合（17/21/25 都有），靠分组标题区分来源，
+ * 列表本身与概览页「运行环境」弹窗共用 [JavaRuntimeGroupList]，
+ * 两处不会各自长出一份清单。
+ *
+ * 「卸载 / 重装 / 安装」三键作用于**当前选中的那一份**（来源 + 版本），
+ * 不是「全部 Java」。装完/删完的进度圈钉在对应的版本行上。
+ */
 @Composable
 private fun JavaModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> Unit) {
     val installed by vm.installedJava.collectAsState()
     val operation by vm.javaOperation.collectAsState()
+    val inFlight by vm.javaInFlight.collectAsState()
+    val serverState by vm.serverState.collectAsState()
     val config by vm.config.collectAsState()
-    val selected = config.selectedJavaVersion
+    val selected = config.selectedJavaRuntime
     val busy = operation != null
+    // 与依赖页其余模块一致：服务器运行中不允许改动运行时文件
+    val running = serverState.isRunning
+    val javaReinstallConfirmText = stringResource(R.string.env_java_reinstall_confirm)
+    val javaUninstallConfirmText = stringResource(
+        R.string.env_java_uninstall_confirm,
+        selected.displayName
+    )
+
+    // 进页刷新一次：FCL 来源的 JRE 不依赖 Termux 环境，环境未就绪时也可能已经装好了
+    LaunchedEffect(Unit) { vm.refreshJava() }
 
     McCard(title = stringResource(R.string.env_tab_java)) {
         Text(stringResource(R.string.env_java_hint), color = Muted, fontSize = 11.sp)
         Spacer(Modifier.height(8.dp))
+        if (running) {
+            Text(stringResource(R.string.env_java_running_block), color = Coral, fontSize = 11.sp)
+            Spacer(Modifier.height(6.dp))
+        }
         OperationBadge(operation)
-        JavaVersion.values().forEach { version ->
-            val isInstalled = version in installed
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { if (!busy) vm.setJavaVersion(version) }
-                    .padding(vertical = 5.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        version.displayName + if (version == selected) "（${stringResource(R.string.env_java_selected)}）" else "",
-                        fontSize = 13.sp,
-                        fontWeight = if (version == selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (version == selected) Indigo else androidx.compose.ui.graphics.Color.Unspecified
-                    )
+        // 三个来源默认全部折叠：共 11 条版本行，全展开会把下面「卸载 / 重装 / 安装」
+        // 三键顶出屏幕，而这三个按钮才是本板块的主要操作。
+        // 展开状态是纯界面状态，因此放在这里而不是 ViewModel。
+        var expandedVendors by remember { mutableStateOf(emptySet<JavaVendor>()) }
+        JavaRuntimeGroupList(
+            installed = installed,
+            selected = selected,
+            onSelect = { vm.setJavaRuntime(it) },
+            enabled = !busy && !running,
+            inFlight = inFlight,
+            expandedVendors = expandedVendors,
+            onToggleVendor = { vendor ->
+                expandedVendors = if (vendor in expandedVendors) {
+                    expandedVendors - vendor
+                } else {
+                    expandedVendors + vendor
                 }
+            },
+            // PRoot 分类要靠它判断哪些版本当前发行版提供不了（置灰）
+            prootDistro = config.prootDistro,
+            // 换发行版必须与版本一次写入：focal 与 jammy 的可用版本不同，
+            // 沿用旧版本会写出该发行版装不上的组合。
+            onDistroChange = { distro ->
+                vm.applyRuntimeSelection(
+                    kind = config.runtimeKind,
+                    javaRuntime = JavaRuntime(JavaVendor.Proot, selected.version),
+                    phpVersion = config.selectedPhpVersion,
+                    prootDistro = distro
+                )
+            }
+        )
+        Spacer(Modifier.height(10.dp))
+        ActionButtonsRow(
+            uninstallEnabled = !busy && !running && selected in installed,
+            reinstallEnabled = !busy && !running && selected in installed,
+            installEnabled = !busy && !running && selected !in installed,
+            onUninstall = {
+                requestConfirm(javaUninstallConfirmText) { vm.deleteJava(selected) }
+            },
+            onReinstall = {
+                // 按 (来源, 版本) 精确重装：只删这一份，不影响另一个来源与其他版本
+                requestConfirm(javaReinstallConfirmText) { vm.reinstallJava(selected) }
+            },
+            onInstall = { vm.installJava(selected) }
+        )
+
+        // 「删除容器」是比「卸载某个 Java 版本」更粗粒度的回收操作，因此单独一行。
+        //
+        // 只在 PRoot 来源显示，且独立于所选版本 —— 因为容器是**发行版级**的：
+        // 它装着该发行版下已安装的全部 JDK。把它混进上面那三个按钮，
+        // 用户点「卸载 Java 17」就会连带清掉 Java 8/11，属于静默数据丢失。
+        if (selected.vendor == JavaVendor.Proot) {
+            val distro = config.prootDistro
+            val sizeText = remember(distro, installed) {
+                formatBytes(vm.prootContainerSizeBytes(distro))
+            }
+            val confirmText = stringResource(
+                R.string.env_proot_delete_container_confirm,
+                distro.displayName,
+                sizeText
+            )
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { requestConfirm(confirmText) { vm.deleteProotContainer(distro) } },
+                enabled = !busy && !running,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
                 Text(
-                    if (isInstalled) stringResource(R.string.dash_java_installed) else stringResource(R.string.dash_java_not_installed),
-                    color = if (isInstalled) Mint else Muted,
-                    fontSize = 11.sp
+                    stringResource(R.string.env_proot_delete_container_action),
+                    color = Coral,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
                 )
             }
         }
-        Spacer(Modifier.height(10.dp))
-        ActionButtonsRow(
-            uninstallEnabled = !busy && selected in installed,
-            reinstallEnabled = !busy && installed.isNotEmpty(),
-            installEnabled = !busy && selected !in installed,
-            onUninstall = {
-                requestConfirm(
-                    "将直接删除 ${selected.displayName} 的文件，不影响其他 Java 版本与存档。此操作不可撤销。"
-                ) { vm.deleteJava(selected) }
-            },
-            onReinstall = { vm.clearAndReinstallJava() },
-            onInstall = { vm.installJava(selected) }
-        )
     }
 }
 
@@ -275,6 +345,7 @@ private fun DependenciesModule(vm: McViewModel, requestConfirm: (String, () -> U
     val installSpeed by vm.installSpeed.collectAsState()
     val serverState by vm.serverState.collectAsState()
     val depsUninstallConfirmText = stringResource(R.string.env_deps_uninstall_confirm)
+    val depsReinstallConfirmText = stringResource(R.string.env_deps_reinstall_confirm)
     val steps = serverState.installSteps.filter { it.step != com.mineserve.mobile.data.InstallStep.Jdk }
     val anyInstalled = steps.any { it.status == StepStatus.Done }
 
@@ -319,7 +390,10 @@ private fun DependenciesModule(vm: McViewModel, requestConfirm: (String, () -> U
                     vm.deleteDependencies()
                 }
             },
-            onReinstall = { vm.reinstallDependencies() },
+            onReinstall = {
+                // reinstallDependencies 会先删除现有依赖文件，需二次确认
+                requestConfirm(depsReinstallConfirmText) { vm.reinstallDependencies() }
+            },
             onInstall = { vm.installDependencies() }
         )
     }
@@ -478,9 +552,11 @@ private fun PhpModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> U
                 requestConfirm(phpUninstallConfirm) { vm.deletePhp(selectedPhpVersion) }
             },
             onReinstall = {
+                // 实际行为与「卸载」相同（仅删除，下次启动自动重装），按钮文案如实描述该行为
                 requestConfirm(phpUninstallConfirm) { vm.deletePhp(selectedPhpVersion) }
             },
-            onInstall = { vm.installPhp(selectedPhpVersion) }
+            onInstall = { vm.installPhp(selectedPhpVersion) },
+            reinstallLabelRes = R.string.env_php_delete_action
         )
     }
 }
@@ -551,4 +627,17 @@ private fun formatSpeed(bytesPerSec: Long): String = when {
     bytesPerSec >= 1024 * 1024 -> "%.1f MB/s".format(bytesPerSec / (1024.0 * 1024.0))
     bytesPerSec >= 1024 -> "%.0f KB/s".format(bytesPerSec / 1024.0)
     else -> "$bytesPerSec B/s"
+}
+
+/**
+ * 把字节数格式化成给用户看的容量文案。
+ *
+ * 容器是 300–600MB 量级，所以 MB 起步即可；小于 1MB 时不要显示成「0.0 MB」——
+ * 那会让用户以为容器是空的，进而怀疑删除按钮是不是没作用。
+ */
+private fun formatBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024 * 1024 -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024 -> "%.0f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "%.0f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }

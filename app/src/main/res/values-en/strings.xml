@@ -9,203 +9,27 @@
     <string name="tab_dashboard" formatted="false">Overview</string>
     <string name="tab_download" formatted="false">Download</string>
     <string name="tab_players" formatted="false">Players</string>
-    <string name="tab_plugins" formatted="false">Plugins &amp; Mods</string>
     <string name="tab_files" formatted="false">Files</string>
-    <string name="tab_network" formatted="false">Network</string>
-    <string name="tab_backup" formatted="false">Worlds &amp; Backup</string>
-    <string name="tab_config" formatted="false">Configuration</string>
     <string name="tab_settings" formatted="false">Settings</string>
 
-    <string name="s1" formatted="false">Boot auto-start: launching foreground keep-alive service</string>
-    <string name="s2" formatted="false">Boot auto-start failed: %1$s</string>
     <string name="s3" formatted="false">Crash time: %1$s</string>
     <string name="s4" formatted="false">Thread: %1$s</string>
     <string name="s5" formatted="false">Exception: %1$s: %2$s</string>
-    <string name="s6" formatted="false">[crash] Last crash log:\n%1$s</string>
     <string name="s7" formatted="false">Unknown error</string>
     <string name="s8" formatted="false">Initialization failed, please check your network and retry</string>
-    <string name="s9" formatted="false">Self-hosted server, full-featured, supports custom ports</string>
-    <string name="s10" formatted="false">Self-hosted server, simplest protocol, runs purely on phone without downloading binaries</string>
-    <string name="s11" formatted="false">Auto (mirror preferred)</string>
-    <string name="s12" formatted="false">GitHub Direct</string>
-    <string name="s13" formatted="false">Tsinghua Mirror (TUNA)</string>
-    <string name="s14" formatted="false">Alibaba Cloud Mirror</string>
-    <string name="s15" formatted="false">USTC Mirror</string>
-    <string name="s16" formatted="false">Nanjing University Mirror</string>
-    <string name="s17" formatted="false">Termux Official</string>
-    <string name="s18" formatted="false">JDK 17 Runtime</string>
-    <string name="s19" formatted="false">Wget Download Tool</string>
-    <string name="s20" formatted="false">Frp Tunnel</string>
-    <string name="s21" formatted="false">Rclone Remote Mount</string>
-    <string name="s22" formatted="false">PRoot Compatibility Layer</string>
-    <string name="s23" formatted="false">Performance-optimized version, compatible with most plugins</string>
-    <string name="s24" formatted="false">Starting to delete Termux runtime…</string>
-    <string name="s25" formatted="false">Termux runtime deleted</string>
-    <string name="s26" formatted="false">Termux environment ready</string>
-    <string name="s27" formatted="false">Supplementing configuration (not generated during old version initialization)…</string>
-    <string name="s28" formatted="false">Starting to download Termux runtime</string>
-    <string name="s29" formatted="false">Cached rootfs is corrupted, re-downloading</string>
-    <string name="s30" formatted="false">Cached rootfs already exists, skipping download</string>
-    <string name="s31" formatted="false">Clearing last failed extraction…</string>
-    <string name="s32" formatted="false">Starting extraction…</string>
-    <string name="s33" formatted="false">Extraction complete</string>
-    <string name="s34" formatted="false">Error: bin/bash does not exist! Extraction failed</string>
-    <string name="s35" formatted="false">bin/ directory contents: %1$s</string>
-    <string name="s36" formatted="false">bin/ directory does not exist</string>
-    <string name="s37" formatted="false">rootDir contents: %1$s</string>
-    <string name="s38" formatted="false">bin/bash does not exist after extraction</string>
-    <string name="s39" formatted="false">bash file size: %1$s bytes</string>
-    <string name="s40" formatted="false">bash ELF magic: %1$s</string>
-    <string name="s41" formatted="false">Invalid!</string>
-    <string name="s42" formatted="false">Initializing configuration…</string>
-    <string name="s43" formatted="false">Termux environment initialization complete</string>
-    <string name="s44" formatted="false">Initialization failed: %1$s</string>
-    <string name="s45" formatted="false">ZIP extraction complete: %1$s files, %2$s entries</string>
-    <string name="s46" formatted="false">First 20 entries: %1$s</string>
-    <string name="s47" formatted="false">Processing symbolic links (SYMLINKS.txt)…</string>
-    <string name="s48" formatted="false">Symlink failed: %1$s → %2$s: %3$s</string>
-    <string name="s49" formatted="false">Created %1$s symlinks, %2$s failed</string>
-    <string name="s50" formatted="false">Warning: SYMLINKS.txt does not exist!</string>
-    <string name="s51" formatted="false">Downloading Termux runtime (~30MB)…</string>
-    <string name="s52" formatted="false">Mirror %1$s</string>
-    <string name="s53" formatted="false">Trying %1$s: %2$s…</string>
-    <string name="s54" formatted="false">Verifying file integrity…</string>
-    <string name="s55" formatted="false">SHA256 verification failed</string>
-    <string name="s56" formatted="false">Verification passed</string>
-    <string name="s57" formatted="false">%1$s failed: %2$s</string>
-    <string name="s58" formatted="false">All mirror sources failed to download: %1$s</string>
-    <string name="s59" formatted="false">Found incorrect directory from old version extraction, starting repair…</string>
-    <string name="s60" formatted="false">Incorrect directory repaired</string>
-    <string name="s61" formatted="false">Failed to repair incorrect directory: %1$s</string>
-    <string name="s62" formatted="false">Creating compatibility symlink: %1$s -&gt; %2$s</string>
-    <string name="s63" formatted="false">Failed to create compatibility symlink: %1$s</string>
-    <string name="s64" formatted="false">Merging Android system CA certificates…</string>
-    <string name="s65" formatted="false">CA certificates merged: %1$s bytes</string>
-    <string name="s66" formatted="false">CA certificate merge failed: %1$s</string>
-    <string name="s67" formatted="false">Warning: Android CA certificate directory does not exist: %1$s</string>
-    <string name="s68" formatted="false">Downloaded %1$s%% (%2$sMB)</string>
-    <string name="s69" formatted="false">Downloaded %1$sMB</string>
     <string name="s70" formatted="false">Downloading Linux filesystem</string>
     <string name="s71" formatted="false">Extracting filesystem</string>
     <string name="s72" formatted="false">Initializing configuration</string>
     <string name="s73" formatted="false">Done</string>
-    <string name="s74" formatted="false">[bootstrap] Environment ready, skipping dependency installation</string>
-    <string name="s75" formatted="false">[bootstrap] Installing dependency packages (JDK-25/wget)…</string>
-    <string name="s76" formatted="false">[bootstrap] Warning: openjdk installation directory not found, skipping symlink repair</string>
-    <string name="s77" formatted="false">[bootstrap] Warning: %1$s does not exist</string>
-    <string name="s78" formatted="false">[bootstrap] Warning: Exception creating %1$s wrapper: %2$s</string>
-    <string name="s79" formatted="false">[bootstrap] Warning: batch chmod failed: %1$s</string>
-    <string name="s80" formatted="false">[bootstrap] openjdk-17 wrapper script created: %1$s commands ready</string>
-    <string name="s81" formatted="false">[startMc] Error: java not found, openjdk may not be installed. Please delete the Termux environment and reinitialize</string>
-    <string name="s82" formatted="false">[startMc] java path: %1$s</string>
-    <string name="s83" formatted="false">[startMc] Error: java not found, please check if openjdk-17 is installed</string>
-    <string name="s84" formatted="false">createSnapshot: world directory does not exist</string>
-    <string name="s85" formatted="false">Snapshot created: %1$s (%2$s bytes)</string>
-    <string name="s86" formatted="false">cleanupOldSnapshots: Delete failed %1$s</string>
-    <string name="s87" formatted="false">cleanupOldSnapshots: Delete exception %1$s: %2$s</string>
-    <string name="s88" formatted="false">cleanupOldSnapshots: Cleaned up %1$s old snapshots (%2$s retained)</string>
-    <string name="s89" formatted="false">MineServeMobile Crash Report</string>
-    <string name="s90" formatted="false">Time: %1$s</string>
-    <string name="s91" formatted="false">Exit code: %1$s</string>
-    <string name="s92" formatted="false">Process status: Abnormal exit</string>
-    <string name="s93" formatted="false">--- Recent logs (last 200 lines) ---</string>
-    <string name="s94" formatted="false">(Failed to read latest.log: %1$s)</string>
-    <string name="s95" formatted="false">(latest.log does not exist)</string>
-    <string name="s96" formatted="false">--- MC Native Crash Report ---</string>
-    <string name="s97" formatted="false">(Source: %1$s)</string>
-    <string name="s98" formatted="false">(Failed to read native crash report: %1$s)</string>
-    <string name="s99" formatted="false">(No MC native crash report)</string>
-    <string name="s100" formatted="false">Termux environment not initialized, please wait for initialization to complete</string>
-    <string name="s101" formatted="false">[install] Running %1$s installer, first-time installation requires downloading dependencies, please wait…</string>
-    <string name="s102" formatted="false">NeoForge installer execution failed (exit=%1$s)</string>
-    <string name="s103" formatted="false">Quilt installer execution failed (exit=%1$s)</string>
-    <string name="s104" formatted="false">[install] %1$s installation complete</string>
-    <string name="s105" formatted="false">[download] Starting download %1$s %2$s</string>
-    <string name="s106" formatted="false">[download] Save path: %1$s</string>
-    <string name="s107" formatted="false">[download] Attempt %1$s failed: HTTP %2$s</string>
-    <string name="s108" formatted="false">[download] Progress: %1$s (%2$sMB / %3$sMB, %4$sMB/s)</string>
-    <string name="s109" formatted="false">Downloaded file too small (%1$s bytes), download may have failed</string>
-    <string name="s110" formatted="false">[download] Download complete: %1$sMB</string>
-    <string name="s111" formatted="false">[download] Attempt %1$s failed: %2$s</string>
-    <string name="s112" formatted="false">[download] Retrying in %1$sms…</string>
-    <string name="s113" formatted="false">Download failed (retried 3 times): %1$s</string>
-    <string name="s114" formatted="false">Dependency installation failed, please install dependencies before starting the server</string>
-    <string name="s115" formatted="false">No server core selected to start, please download or select one in the \"Download\" tab first</string>
-    <string name="s116" formatted="false">server.jar for core %1$s does not exist, please re-download</string>
-    <string name="s117" formatted="false">server.jar does not exist, please download the server core in the \"Download\" tab first</string>
-    <string name="s118" formatted="false">NeoForge launch files missing, please re-download and install the core</string>
-    <string name="s119" formatted="false">Quilt launch files missing, please re-download and install the core</string>
-    <string name="s120" formatted="false">Crash report saved: %1$s</string>
-    <string name="s121" formatted="false">[crash] Abnormal exit detected (exit=%1$s), crash report saved: %2$s</string>
-    <string name="s122" formatted="false">Failed to capture crash report: %1$s</string>
-    <string name="s123" formatted="false">Auto-restarting after crash… (attempt %1$s/%2$s)</string>
-    <string name="s124" formatted="false">Crash restart failed: %1$s</string>
-    <string name="s125" formatted="false">Maximum retry count reached (%1$s), stopping restart</string>
-    <string name="s126" formatted="false">Featured</string>
     <string name="s127" formatted="false">Local</string>
     <string name="s128" formatted="false">Downloaded file too small or empty (%1$s bytes), URL may be invalid</string>
     <string name="s129" formatted="false">Unable to open file Uri: %1$s</string>
     <string name="s130" formatted="false">File too small, upload may have failed</string>
     <string name="s131" formatted="false">Unknown</string>
-    <string name="s132" formatted="false">tag_name field not found</string>
-    <string name="s133" formatted="false">HTTP %1$s download failed: %2$s</string>
-    <string name="s134" formatted="false">%1$s backend not yet implemented</string>
-    <string name="s135" formatted="false">[tunnel] Error: %1$s backend not yet implemented</string>
-    <string name="s136" formatted="false">[tunnel] %1$s startup failed: %2$s</string>
-    <string name="s137" formatted="false">[tunnel] frpc not installed, downloading from GitHub…</string>
-    <string name="s138" formatted="false">[tunnel] frpc already installed, skipping</string>
-    <string name="s139" formatted="false">[tunnel] Installing frp via apt…</string>
-    <string name="s140" formatted="false">[tunnel] Trying to download frpc: %1$s…</string>
-    <string name="s141" formatted="false">[tunnel] frpc download complete: %1$s</string>
-    <string name="s142" formatted="false">[tunnel] %1$s download failed: %2$s</string>
-    <string name="s143" formatted="false">[tunnel] GitHub download failed, trying apt installation…</string>
-    <string name="s144" formatted="false">Please enter the bore server address</string>
-    <string name="s145" formatted="false">[bore] Connecting to %1$s:%2$s …</string>
-    <string name="s146" formatted="false">Connecting to bore server…</string>
-    <string name="s147" formatted="false">[bore] Hello sent (localPort=%1$s)</string>
-    <string name="s148" formatted="false">bore server no response</string>
-    <string name="s149" formatted="false">bore server returned error: %1$s</string>
-    <string name="s150" formatted="false">[bore] Tunnel established, public address: %1$s</string>
-    <string name="s151" formatted="false">[bore] Incoming connection: %1$s</string>
-    <string name="s152" formatted="false">[bore] Server error: %1$s</string>
-    <string name="s153" formatted="false">bore connection disconnected</string>
-    <string name="s154" formatted="false">[bore] Startup failed: %1$s</string>
-    <string name="s155" formatted="false">[bore] Tunnel stopped</string>
-    <string name="s156" formatted="false">[bore] Failed to handle connection %1$s: %2$s</string>
-    <string name="s157" formatted="false">Please paste the complete frpc.toml configuration text or import a configuration file</string>
-    <string name="s158" formatted="false">frpc configuration written (%1$s characters)</string>
-    <string name="s159" formatted="false">autoTLS field automatically removed (incompatible with older frpc versions)</string>
-    <string name="s160" formatted="false">frpc version is too old and does not support fields in the configuration (e.g. autoTLS). Automatically downloading the latest frpc version, please retry.</string>
-    <string name="s161" formatted="false">Unable to connect to frp server, please check if serverAddr and serverPort in the configuration are correct</string>
-    <string name="s162" formatted="false">Authentication failed: Token does not match the server</string>
-    <string name="s163" formatted="false">Port already in use, please change remotePort</string>
-    <string name="s164" formatted="false">Connection timed out, please check if the server address is reachable</string>
-    <string name="s165" formatted="false">Preparing %1$s…</string>
-    <string name="s166" formatted="false">%1$s binary not available</string>
-    <string name="s167" formatted="false">Startup command: %1$s</string>
-    <string name="s168" formatted="false">Startup failed: %1$s</string>
-    <string name="s169" formatted="false">%1$s stopped</string>
-    <string name="s170" formatted="false">Obtained public address: %1$s</string>
-    <string name="s171" formatted="false">Tunnel process exited (code=%1$s)</string>
-    <string name="s172" formatted="false">Monitor exception: %1$s</string>
-    <string name="s173" formatted="false">No public address obtained within %1$sms, timed out</string>
-    <string name="s174" formatted="false">Startup timed out, network may be unreachable or configuration may be incorrect</string>
-    <string name="s175" formatted="false">Tunnel process exited (code=%1$s)</string>
-    <string name="s176" formatted="false">MC server running</string>
-    <string name="s177" formatted="false">Tap to view real-time status</string>
-    <string name="s178" formatted="false">Overview</string>
-    <string name="s179" formatted="false">Download</string>
-    <string name="s180" formatted="false">Players</string>
-    <string name="s181" formatted="false">Plugins &amp; Mods</string>
-    <string name="s182" formatted="false">Files</string>
-    <string name="s183" formatted="false">Network</string>
-    <string name="s184" formatted="false">Backup</string>
-    <string name="s185" formatted="false">Config</string>
     <string name="s186" formatted="false">Settings</string>
     <string name="s187" formatted="false">Unable to get LAN IP, please confirm WiFi is connected</string>
     <string name="s188" formatted="false">Copied: %1$s</string>
     <string name="s189" formatted="false">Joined</string>
-    <string name="s190" formatted="false">Left</string>
     <string name="s191" formatted="false">Configuration save failed: %1$s</string>
     <string name="s192" formatted="false">Termux environment is still initializing, please wait…</string>
     <string name="s193" formatted="false">Dependency installation complete</string>
@@ -216,8 +40,6 @@
     <string name="s198" formatted="false">Server stop command sent</string>
     <string name="s199" formatted="false">Server stop failed: %1$s</string>
     <string name="s200" formatted="false">Tunnel is starting, please wait…</string>
-    <string name="s201" formatted="false">Tunnel started, public address: %1$s</string>
-    <string name="s202" formatted="false">Tunnel started</string>
     <string name="s203" formatted="false">Tunnel is starting, please check the logs…</string>
     <string name="s204" formatted="false">Tunnel start failed: %1$s</string>
     <string name="s205" formatted="false">Tunnel command sent</string>
@@ -235,29 +57,22 @@
     <string name="s217" formatted="false">Failed to delete mod: %1$s</string>
     <string name="s218" formatted="false">Mod upload complete: %1$s</string>
     <string name="s219" formatted="false">Mod upload failed: %1$s</string>
-    <string name="s220" formatted="false">Unable to parse latest version download URL</string>
     <string name="s221" formatted="false">%1$s installation complete</string>
     <string name="s222" formatted="false">%1$s installation failed: %2$s</string>
     <string name="s223" formatted="false">No matching mods found, please try other keywords or filters</string>
-    <string name="s224" formatted="false">This mod does not support the current MC version/loader</string>
     <string name="s225" formatted="false">%1$s installation complete</string>
     <string name="s226" formatted="false">%1$s installation failed: %2$s</string>
     <string name="s227" formatted="false">%1$s is downloading, please wait</string>
-    <string name="s228" formatted="false">Unable to parse %1$s latest version download URL</string>
     <string name="s229" formatted="false">%1$s installation complete</string>
     <string name="s230" formatted="false">%1$s installation failed: %2$s</string>
     <string name="s231" formatted="false">Plugin %1$s uploaded successfully</string>
     <string name="s232" formatted="false">Plugin upload failed: %1$s</string>
-    <string name="s233" formatted="false">%1$s deleted (including data directory)</string>
-    <string name="s234" formatted="false">%1$s deleted</string>
     <string name="s235" formatted="false">Delete failed: file does not exist or is in use</string>
     <string name="s236" formatted="false">Delete failed: %1$s</string>
     <string name="s237" formatted="false">Disabled</string>
     <string name="s238" formatted="false">Enabled</string>
     <string name="s239" formatted="false">Failed to toggle state: file does not exist</string>
     <string name="s240" formatted="false">Failed to toggle state: %1$s</string>
-    <string name="s241" formatted="false">Check complete: %1$s plugins have updates</string>
-    <string name="s242" formatted="false">Check complete: all featured plugins are up to date</string>
     <string name="s243" formatted="false">Update check failed: %1$s</string>
     <string name="s244" formatted="false">URL and filename cannot be empty</string>
     <string name="s245" formatted="false">A download task is already in progress, please wait</string>
@@ -270,7 +85,6 @@
     <string name="s252" formatted="false">Snapshot restore failed</string>
     <string name="s253" formatted="false">Failed to restore snapshot: %1$s</string>
     <string name="s254" formatted="false">Snapshot file does not exist</string>
-    <string name="s255" formatted="false">Unable to open export destination</string>
     <string name="s256" formatted="false">Snapshot exported: %1$s</string>
     <string name="s257" formatted="false">Export failed: %1$s</string>
     <string name="s258" formatted="false">Snapshot deleted: %1$s</string>
@@ -282,18 +96,9 @@
     <string name="s264" formatted="false">Failed to save server.properties: %1$s</string>
     <string name="s265" formatted="false">Failed to refresh player data: %1$s</string>
     <string name="s266" formatted="false">Server is not running, cannot send command</string>
-    <string name="s267" formatted="false">OP added for %1$s</string>
-    <string name="s268" formatted="false">OP set for %1$s (level %2$s)</string>
-    <string name="s269" formatted="false">OP removed for %1$s</string>
-    <string name="s270" formatted="false">%1$s added to whitelist</string>
-    <string name="s271" formatted="false">%1$s removed from whitelist</string>
     <string name="s272" formatted="false">Whitelist enabled</string>
     <string name="s273" formatted="false">Whitelist disabled</string>
     <string name="s274" formatted="false">Server is not running, cannot toggle whitelist</string>
-    <string name="s275" formatted="false">Kicked %1$s</string>
-    <string name="s276" formatted="false">Permanently banned %1$s</string>
-    <string name="s277" formatted="false">Temporarily banned %1$s (%2$s)</string>
-    <string name="s278" formatted="false">Unbanned %1$s</string>
     <string name="s279" formatted="false">Online player list requested, results will be shown in the log</string>
     <string name="s280" formatted="false">Server is not running</string>
     <string name="s281" formatted="false">Survival</string>
@@ -301,7 +106,6 @@
     <string name="s283" formatted="false">Adventure</string>
     <string name="s284" formatted="false">Spectator</string>
     <string name="s285" formatted="false">Set %1$s to %2$s mode</string>
-    <string name="s286" formatted="false">Gave %1$s %2$s experience</string>
     <string name="s287" formatted="false">Failed to load crash report: %1$s</string>
     <string name="s288" formatted="false">Failed to read crash report: file does not exist</string>
     <string name="s289" formatted="false">Failed to read crash report: %1$s</string>
@@ -313,7 +117,6 @@
     <string name="s295" formatted="false">Please enter core name</string>
     <string name="s296" formatted="false">Server core \"%1$s\" download complete</string>
     <string name="s297" formatted="false">Server core download failed: %1$s</string>
-    <string name="s298" formatted="false">Core %1$s does not exist</string>
     <string name="s299" formatted="false">Failed to delete core folder: %1$s</string>
     <string name="s300" formatted="false">Core \"%1$s\" deleted</string>
     <string name="s301" formatted="false">Failed to delete core: %1$s</string>
@@ -321,7 +124,6 @@
     <string name="s303" formatted="false">MC terminal ready, type help for available commands</string>
     <string name="s304" formatted="false">Deleted: %1$s</string>
     <string name="s305" formatted="false">Delete failed: %1$s</string>
-    <string name="s306" formatted="false">Unable to open file</string>
     <string name="s307" formatted="false">File uploaded successfully</string>
     <string name="s308" formatted="false">Upload failed: %1$s</string>
     <string name="s309" formatted="false">Export complete</string>
@@ -330,24 +132,13 @@
     <string name="s312" formatted="false">Failed to create directory (may already exist)</string>
     <string name="s313" formatted="false">Failed to create directory: %1$s</string>
     <string name="s314" formatted="false">Failed to start keep-alive service: %1$s</string>
-    <string name="s315" formatted="false">Starting server · %1$s</string>
-    <string name="s316" formatted="false">Server running · %1$s</string>
-    <string name="s317" formatted="false">Server not started</string>
     <string name="s318" formatted="false">Online</string>
-    <string name="s319" formatted="false">Memory</string>
-    <string name="s320" formatted="false">Uptime</string>
-    <string name="s321" formatted="false">Server startup typically takes 30 seconds to several minutes, see \"MC Terminal\" for logs…</string>
-    <string name="s322" formatted="false">%1$s min</string>
-    <string name="s323" formatted="false">%1$s sec</string>
     <string name="s324" formatted="false">Backup &amp; Restore</string>
-    <string name="s325" formatted="false">Create Backup</string>
-    <string name="s326" formatted="false">Pack the world directory as zip, save to home/snapshots/</string>
     <string name="s327" formatted="false">save-all sent</string>
     <string name="s328" formatted="false">Save</string>
     <string name="s329" formatted="false">Created: %1$s</string>
     <string name="s330" formatted="false">Creation failed</string>
     <string name="s331" formatted="false">New Backup</string>
-    <string name="s332" formatted="false">Backup List (%1$s)</string>
     <string name="s333" formatted="false">Refresh</string>
     <string name="s334" formatted="false">No backups yet</string>
     <string name="s335" formatted="false">Export</string>
@@ -356,16 +147,6 @@
     <string name="s338" formatted="false">Deleted %1$s</string>
     <string name="s339" formatted="false">Delete</string>
     <string name="s340" formatted="false">Cloud Panel</string>
-    <string name="s341" formatted="false">Device Status</string>
-    <string name="s342" formatted="false">Device Memory</string>
-    <string name="s343" formatted="false">Storage</string>
-    <string name="s344" formatted="false">Battery</string>
-    <string name="s345" formatted="false">%1$s%% Charging</string>
-    <string name="s346" formatted="false">Total Download</string>
-    <string name="s347" formatted="false">Total Upload</string>
-    <string name="s348" formatted="false">Download Speed</string>
-    <string name="s349" formatted="false">Upload Speed</string>
-    <string name="s350" formatted="false">▶ Open MC Terminal</string>
     <string name="s351" formatted="false">Initialize Runtime Environment</string>
     <string name="s352" formatted="false">Downloading and extracting Termux environment (%1$s%%)</string>
     <string name="s353" formatted="false">Download Termux runtime environment (approx. 50MB)</string>
@@ -382,7 +163,6 @@
     <string name="s364" formatted="false">Initializing environment…</string>
     <string name="s365" formatted="false">Installing…</string>
     <string name="s366" formatted="false">Start Installation</string>
-    <string name="s367" formatted="false">Delete Termux Runtime Environment</string>
     <string name="s368" formatted="false">Start Server</string>
     <string name="s369" formatted="false">Server core not yet downloaded</string>
     <string name="s370" formatted="false">Please switch to the \"Download\" tab to download the server core</string>
@@ -392,14 +172,11 @@
     <string name="s374" formatted="false">Switch server core: %1$s</string>
     <string name="s375" formatted="false">▼ Select Server Core</string>
     <string name="s376" formatted="false">Selected \"%1$s\"</string>
-    <string name="s377" formatted="false">Service Control</string>
     <string name="s378" formatted="false">Startup Settings</string>
     <string name="s379" formatted="false">Starting…</string>
     <string name="s380" formatted="false">Start</string>
     <string name="s381" formatted="false">Stopping…</string>
     <string name="s382" formatted="false">Stop</string>
-    <string name="s383" formatted="false">Status: Running</string>
-    <string name="s384" formatted="false">Status: Stopped</string>
     <string name="s385" formatted="false">First startup requires downloading runtime files, please wait</string>
     <string name="s386" formatted="false">Server Address</string>
     <string name="s387" formatted="false">LAN</string>
@@ -408,19 +185,11 @@
     <string name="s390" formatted="false">Installed Plugins</string>
     <string name="s391" formatted="false">No installed plugins</string>
     <string name="s392" formatted="false">%1$s plugins installed</string>
-    <string name="s393" formatted="false">Reinstalling…</string>
-    <string name="s394" formatted="false">Reinstall Dependencies</string>
     <string name="s395" formatted="false">Server Startup Settings</string>
     <string name="s396" formatted="false">Auto-restart on Crash</string>
     <string name="s397" formatted="false">Auto-restart when MC process exits abnormally (disabled by default to save power)</string>
     <string name="s398" formatted="false">JVM memory limit: %1$s MB (modify in Settings)</string>
-    <string name="s399" formatted="false">Delete Runtime Environment</string>
-    <string name="s400" formatted="false">This will delete the Termux runtime environment (dependency packages and cache). Saves and server cores (worlds, plugins, configs) will be kept. "Confirm Delete" = delete then re-initialize automatically; "Force Delete" = thorough uninstall, re-install manually. This action cannot be undone.</string>
     <string name="s401" formatted="false">Confirm Delete</string>
-    <string name="force_delete" formatted="false">Force Delete</string>
-    <string name="delete_deps" formatted="false">Delete Dependencies</string>
-    <string name="delete_deps_title" formatted="false">Delete Dependencies</string>
-    <string name="delete_deps_content" formatted="false">This will directly delete the Termux runtime environment and all dependency files (Java, etc.). Saves and server cores (worlds, plugins, configs) will be kept, and it will NOT re-install automatically. Re-install manually when needed. This action cannot be undone.</string>
     <string name="s402" formatted="false">Cancel</string>
     <string name="s403" formatted="false">Slow download? View solutions →</string>
     <string name="s404" formatted="false">Back</string>
@@ -463,7 +232,6 @@
     <string name="s441" formatted="false">Restart the app, the environment will automatically detect existing files and skip downloading</string>
     <string name="s442" formatted="false">How to determine current speed?</string>
     <string name="s443" formatted="false">During download, this app displays real-time download speed (e.g. 2.35 MB/s). Generally:</string>
-    <string name="s444" formatted="false">Speed Reference</string>
     <string name="s445" formatted="false">Very fast (direct connection or quality proxy)</string>
     <string name="s446" formatted="false">Fast (mirror source acceleration)</string>
     <string name="s447" formatted="false">Normal (normal domestic access)</string>
@@ -473,19 +241,9 @@
     <string name="s451" formatted="false">Installed Core List</string>
     <string name="s452" formatted="false">No server core downloaded yet</string>
     <string name="s453" formatted="false">Currently Selected</string>
-    <string name="s454" formatted="false">%1$s %2$s  ·  Folder: %3$s</string>
     <string name="s455" formatted="false">Select</string>
     <string name="s456" formatted="false">Download path: home/servers/{name}/server.jar (each core has its own directory)</string>
     <string name="s457" formatted="false">1. Select Core Type</string>
-    <string name="s458" formatted="false">PaperMC: High-performance optimized core, compatible with most plugins, recommended for production</string>
-    <string name="s459" formatted="false">Purpur: Paper fork, provides additional vanilla feature toggles, plugin compatible</string>
-    <string name="s460" formatted="false">Fabric: Lightweight mod loader, supports fast updates for the latest versions</string>
-    <string name="s461" formatted="false">Forge: Veteran mod loader, rich ecosystem, suitable for large modpacks</string>
-    <string name="s462" formatted="false">NeoForge: Forge successor, active mod ecosystem (automatically runs installer after download)</string>
-    <string name="s463" formatted="false">Quilt: Fabric fork mod loader, community-driven (automatically runs installer after download)</string>
-    <string name="s464" formatted="false">Vanilla: Minecraft official vanilla server</string>
-    <string name="s465" formatted="false">Velocity: High-performance proxy, can connect multiple backend servers (no plugin/mod support)</string>
-    <string name="s466" formatted="false">BungeeCord: Classic proxy, supports switching between sub-servers (no plugin/mod support)</string>
     <string name="s467" formatted="false">✓ Supports plugins</string>
     <string name="s468" formatted="false">✗ No plugin support</string>
     <string name="s469" formatted="false">✓ Supports mods</string>
@@ -500,7 +258,6 @@
     <string name="s478" formatted="false">Current selection: %1$s</string>
     <string name="s479" formatted="false">3. Download Server Core</string>
     <string name="s480" formatted="false">Download server JAR from official source</string>
-    <string name="s481" formatted="false">Termux environment is initializing, please wait for it to complete before downloading…</string>
     <string name="s482" formatted="false">Will download %1$s %2$s to a separate directory</string>
     <string name="s483" formatted="false">Core name (for distinguishing different cores)</string>
     <string name="s484" formatted="false">e.g. Survival-1.20.4</string>
@@ -574,7 +331,6 @@
     <string name="s552" formatted="false">Check every 15 minutes if the keep-alive service is alive, automatically restart if killed by the system (WorkManager)</string>
     <string name="s553" formatted="false">Auto-restart MC server process on abnormal exit (disabled by default to save power)</string>
     <string name="s554" formatted="false">Notes</string>
-    <string name="s555" formatted="false">The Android system imposes strict restrictions on background processes. Keep-alive capability is affected by system version and manufacturer policies.\n</string>
     <string name="s556" formatted="false">A persistent foreground service notification can significantly reduce the chance of being killed; do not restrict this app\'s background running in system settings.</string>
     <string name="s557" formatted="false">Console Log</string>
     <string name="s558" formatted="false">Copied %1$s lines of log</string>
@@ -651,7 +407,6 @@
     <string name="s629" formatted="false">Rent a cloud server from Alibaba Cloud, Tencent Cloud, or Oracle Cloud (which offers free ARM instances). The cheapest one is enough — the key is having a \"public IP\".</string>
     <string name="s630" formatted="false">Install frp server on your server</string>
     <string name="s631" formatted="false">After logging into the server, search fatedier/frp on GitHub, download the corresponding version, extract it and edit the frps.toml file:\nbindPort = 7000\nauth.method = "token"\nauth.token = "Set any password"\nThen run ./frps -c frps.toml to start the server.</string>
-    <string name="s632" formatted="false">Set any password</string>
     <string name="s633" formatted="false">Fill in the configuration on your phone</string>
     <string name="s634" formatted="false">Fill the server\'s public IP in \"frp server address\" above, port 7000, and the Token with the password you just set (must be identical to the server side).</string>
     <string name="s635" formatted="false">Just tap Start</string>
@@ -671,8 +426,6 @@
     <string name="s649" formatted="false">After startup, the status card shows the public address (serverIP:port). Copy it and send to friends to paste in MC Direct Connect.</string>
     <string name="s650" formatted="false">Pros and limitations</string>
     <string name="s651" formatted="false">Pros: Extremely lightweight (~300 lines of code), starts in seconds. Limitations: TCP only, requires self-hosted server. Suitable for users seeking low latency and a lightweight experience.</string>
-    <string name="s652" formatted="false">StarryFrp</string>
-    <string name="s653" formatted="false">SakuraFrp</string>
     <string name="s654" formatted="false">Free FRP Platforms</string>
     <string name="s655" formatted="false">Don\'t want to self-host? Register on any of the free frp platforms below to get started: fill in the node address, port, and Token provided by the platform into the frpc.toml configuration above to start.</string>
     <string name="s656" formatted="false">Open official website</string>
@@ -693,7 +446,6 @@
     <string name="s671" formatted="false">4 - Highest (full permissions)</string>
     <string name="s672" formatted="false">Player Management</string>
     <string name="s673" formatted="false">Player History</string>
-    <string name="s674" formatted="false">Copied: %1$s</string>
     <string name="s675" formatted="false">Admin kick</string>
     <string name="s676" formatted="false">Admin ban</string>
     <string name="s677" formatted="false">Player join/leave records</string>
@@ -717,11 +469,8 @@
     <string name="s695" formatted="false">Level %1$s · %2$s…</string>
     <string name="s696" formatted="false">Add OP</string>
     <string name="s697" formatted="false">Player name</string>
-    <string name="s698" formatted="false">Note: op command with level parameter requires MC 1.20.2+; older servers default to level 4</string>
     <string name="s699" formatted="false">Server not running, cannot add OP</string>
     <string name="s700" formatted="false">Add OP (Level %1$s)</string>
-    <string name="s701" formatted="false">Whitelist %1$s</string>
-    <string name="s702" formatted="false">Disabled</string>
     <string name="s703" formatted="false">Only whitelisted players can join</string>
     <string name="s704" formatted="false">All players can join (restrict after enabling)</string>
     <string name="s705" formatted="false">Search whitelisted player…</string>
@@ -759,12 +508,9 @@
     <string name="s737" formatted="false">Plugins</string>
     <string name="s738" formatted="false">Mods</string>
     <string name="s739" formatted="false">A well-established large plugin resource platform, the primary release site for most Bukkit/Spigot plugins, with both free and paid resources (all in English; slow access from China)</string>
-    <string name="s740" formatted="false">Hangar (Paper Official)</string>
     <string name="s741" formatted="false">Paper\'s official platform, aimed at Paper / Velocity / Waterfall, with a clean interface and comprehensive filtering</string>
     <string name="s742" formatted="false">BuiltByBit (formerly MC-Market)</string>
-    <string name="s743" formatted="false">A hub for commercial paid plugins, also offering free resources and complete server configuration packages</string>
     <string name="s744" formatted="false">CurseForge Bukkit section</string>
-    <string name="s745" formatted="false">A well-established resource site, slightly fewer total plugins than SpigotMC Resources</string>
     <string name="s746" formatted="false">All</string>
     <string name="s747" formatted="false">Enabled</string>
     <string name="s748" formatted="false">Disabled</string>
@@ -793,24 +539,6 @@
     <string name="s771" formatted="false">No plugins installed for the current core, go to Featured Recommendations or Local Upload to install</string>
     <string name="s772" formatted="false">Search plugin name…</string>
     <string name="s773" formatted="false">No plugins match the filter criteria</string>
-    <string name="s774" formatted="false">  ·  Disabled</string>
-    <string name="s775" formatted="false">Featured Plugin Recommendations</string>
-    <string name="s776" formatted="false">Detecting…</string>
-    <string name="s777" formatted="false">Check for Updates</string>
-    <string name="s778" formatted="false">8 built-in popular plugins, automatically download the latest version from GitHub Releases</string>
-    <string name="s779" formatted="false">✓ This core supports plugins</string>
-    <string name="s780" formatted="false">✗ This core does not support plugins</string>
-    <string name="s781" formatted="false">✓ This core supports mods</string>
-    <string name="s782" formatted="false">✗ This core does not support mods</string>
-    <string name="s783" formatted="false">Force Re-detect (Clear Cache)</string>
-    <string name="s784" formatted="false">Update Available</string>
-    <string name="s785" formatted="false">Author: %1$s</string>
-    <string name="s786" formatted="false">Latest: </string>
-    <string name="s787" formatted="false">  ·  Current: </string>
-    <string name="s788" formatted="false">Downloading, please wait…</string>
-    <string name="s789" formatted="false">Update to Latest</string>
-    <string name="s790" formatted="false">Installed (Latest)</string>
-    <string name="s791" formatted="false">Download &amp; Install</string>
     <string name="s792" formatted="false">Local Plugin Upload</string>
     <string name="s793" formatted="false">Support uploading Bukkit / Spigot / Paper server plugins (.jar format)</string>
     <string name="s794" formatted="false">Uploaded plugins are copied to the current core\'s plugins/ directory; reload or restart to take effect</string>
@@ -1027,7 +755,6 @@
     <string name="s1005" formatted="false">Requires server restart to take effect after modification (-Xmx is a JVM startup parameter)</string>
     <string name="s1006" formatted="false">Max Heap (MB)</string>
     <string name="s1007" formatted="false">Download Source Settings</string>
-    <string name="s1008" formatted="false">Termux runtime download source (~50MB), affects initialization speed</string>
     <string name="s1009" formatted="false">Termux Download Source</string>
     <string name="s1010" formatted="false">APT Software Source</string>
     <string name="s1011" formatted="false">Affects download speed of apt-installed dependencies (JDK/wget/frp/proot)</string>
@@ -1043,11 +770,9 @@
     <string name="s1021" formatted="false">Download Help</string>
     <string name="s1022" formatted="false">Slow download? View solutions</string>
     <string name="s1023" formatted="false">About</string>
-    <string name="s1024" formatted="false">MC Cloud Control Panel · v1.0.0</string>
     <string name="s1025" formatted="false">Based on Termux open-source components with secondary packaging, proot-distro for rootless operation.</string>
     <string name="s1026" formatted="false">Feedback</string>
     <string name="s1027" formatted="false">Encountered a problem or have a suggestion? Feel free to send email feedback, we will process it as soon as possible.</string>
-    <string name="s1028" formatted="false">MineServeMobile Feedback</string>
     <string name="s1029" formatted="false">Send email feedback (167245484@qq.com)</string>
     <string name="s1030" formatted="false">Delete file:\n</string>
     <!-- OP level selection -->
@@ -1090,12 +815,6 @@
     <string name="update_notif_text">Tap to view changelog and install</string>
     <string name="update_check">Check for Updates</string>
     <string name="update_current_version">Current version</string>
-    <string name="update_title">New version v%1$s available</string>
-    <string name="update_notes">What\'s New</string>
-    <string name="update_download">Download</string>
-    <string name="update_github">Update via GitHub</string>
-    <string name="update_inapp">In-app Update</string>
-    <string name="update_backup">📦 Backup World First</string>
     <string name="update_backup_done">World backed up: %1$s</string>
     <string name="update_backup_empty">No world save found, skipped backup</string>
     <string name="backup_ext_perm_title">External Backup Permission</string>
@@ -1117,9 +836,6 @@
     <string name="backup_conflict_title">Duplicate Server Detected</string>
     <string name="backup_conflict_content">Server directory "%1$s" already exists. Restoring will overwrite it (current world and configs will be lost). Overwrite?</string>
     <string name="backup_conflict_overwrite">Overwrite &amp; Restore</string>
-    <string name="update_later">Later</string>
-    <string name="update_installing">Installing…</string>
-    <string name="update_checking">Checking for updates…</string>
     <string name="update_available">New version %1$s available</string>
     <string name="update_check_failed">Check failed (network error)</string>
     <string name="mirror_switch_requested">Switch mirror requested</string>
@@ -1144,7 +860,6 @@
     <string name="hero_uptime">Uptime</string>
     <string name="hero_cpu">Server CPU</string>
     <string name="hero_refresh">Refresh status</string>
-    <string name="hero_refreshing">Refreshing…</string>
     <string name="widget_refresh_cd">Refresh status</string>
     <string name="hero_online_mode_warning">Online authentication is enabled; offline players cannot join.</string>
     <string name="s1061">Version</string>
@@ -1170,8 +885,6 @@
 <string name="ui_autostart_title">Auto-Start Guide</string>
 <string name="ui_autostart_hint">Guide to enable system auto-start permission (different entries per vendor, auto-routed by device)</string>
 <string name="ui_autostart_btn">Enable Auto-Start</string>
-<string name="ui_pixel_title">1-Pixel Keep-Alive</string>
-<string name="ui_pixel_hint">A 1×1 transparent window stays resident with the foreground service to improve survival (limited by system version and vendor policy)</string>
 <string name="cmd_time_day">Day</string>
 <string name="cmd_time_night">Night</string>
 <string name="cmd_weather_clear">Clear</string>
@@ -1191,16 +904,12 @@
     <string name="ui_server_icon">Server Icon</string>
     <string name="ui_server_icon_change">Change Icon</string>
     <string name="ui_server_icon_reset">Reset</string>
-    <string name="ui_server_icon_hint">Icon shown in the multiplayer server list (64×64, takes effect after server restart)</string>
     <string name="ui_server_icon_updated">Server icon updated. Restart the server to take effect.</string>
     <string name="ui_server_icon_reset_done">Default icon restored.</string>
-    <string name="ui_server_icon_running_warn">⚠️ After changing the icon: ① restart the server ② in the client, delete and re-add the server (or restart the game / join then leave the server)</string>
     <string name="ui_server_icon_fail">Failed to update icon: %1$s</string>
-    <string name="ui_server_icon_default">Default</string>
     <string name="mc_terminal">MC Terminal</string>
     <string name="termux_terminal">Termux Terminal</string>
     <string name="termux_hint">Type a command, e.g. ls, pkg update</string>
-    <string name="termux_busy">Running…</string>
     <string name="termux_placeholder">Type a command to start</string>
 
     <!-- Server event notifications -->
@@ -1240,15 +949,10 @@
     <string name="notif_schedule_start_fail_text">Reason: %1$s. Check the server configuration in the app.</string>
 
     <!-- Home screen widgets -->
-    <string name="widget_app_desc">Minecraft server status</string>
     <string name="widget_status_running">Server running</string>
     <string name="widget_status_stopped">Server stopped</string>
     <string name="widget_status_starting">Server starting…</string>
     <string name="widget_status_failed">Start failed</string>
-    <string name="widget_tps_label">TPS</string>
-    <string name="widget_memory_label">Memory</string>
-    <string name="widget_uptime_label">Uptime</string>
-    <string name="widget_cpu_label">CPU</string>
     <string name="widget_btn_start">Start</string>
     <string name="widget_btn_stop">Stop</string>
     <string name="widget_btn_save">Save world</string>
@@ -1320,7 +1024,8 @@
     <string name="env_confirm_title">Confirm uninstall</string>
     <string name="env_confirm_ok">Uninstall</string>
     <string name="env_java_hint">Tap a version row to switch the target; actions apply to the selected version</string>
-    <string name="env_java_selected">Selected</string>
+    <string name="env_java_not_installed">Not installed</string>
+    <string name="env_java_running_block">The server is running; stop it before changing the Java runtime</string>
     <string name="env_java_need">%1$s is required to start the server; please install it first</string>
     <string name="env_java_install_btn">Install Java</string>
     <string name="env_deps_hint">wget / frp / rclone / proot (required by the server and tunneling)</string>
@@ -1400,7 +1105,6 @@
     <string name="env_php_not_installed">Not installed</string>
     <string name="env_php_running_block">The server is running. Stop it before touching the PHP runtime.</string>
     <string name="env_php_uninstall_confirm">This deletes the PHP runtime under home/php-pmmp. PocketMine downloads it again (about 10MB) on next start. This cannot be undone.</string>
-    <string name="msg_php_installing">Downloading the PHP runtime…</string>
     <string name="msg_php_op_installing">Installing the PHP runtime</string>
     <string name="msg_php_op_deleting">Removing the PHP runtime</string>
     <string name="msg_php_installed">%1$s runtime installed</string>
@@ -1410,7 +1114,6 @@
     <string name="err_php_delete_fail">%1$s runtime removal failed</string>
 
     <!-- PHP version picker -->
-    <string name="env_php_version_picker">PHP: %1$s</string>
     <string name="env_php_version_title">Choose PHP version</string>
     <string name="env_php_version_desc">PocketMine-MP requires a specific PHP build. Only the builds listed below are available upstream.</string>
     <string name="php_note_pmmp_required">Required by PocketMine-MP 5 (bundles pmmp/ext-encoding 0.4.x)</string>
@@ -1421,13 +1124,106 @@
     <string name="dash_runtime_php">PHP</string>
     <string name="dash_php_not_installed_note">The PHP runtime is not installed yet. It will be downloaded when PocketMine starts.</string>
 
+    <!-- Server control card: Java runtime vendors -->
+    <string name="java_group_termux">Termux JDK</string>
+    <string name="java_group_fcl">Pojav JRE</string>
+    <string name="java_group_termux_note">Openjdk inside the Termux environment, installed via apt and running directly in Termux (Java 8 is not listed here; it belongs to the PRoot container below)</string>
+    <string name="java_group_fcl_note">Android-native JRE built by PojavLauncher, downloaded in-app (~37–62 MB); IPv6 supported out of the box</string>
+    <string name="java_note_proot_java8">Only Ubuntu 20.04 (focal) provides this; it is unavailable after switching the distro to 22.04</string>
+    <string name="java_group_proot">PRoot container</string>
+    <string name="java_note_proot_unavailable">Not provided by this container</string>
+    <string name="java_group_proot_note">A standard glibc Linux container (Ubuntu 20.04 / 22.04): the rootfs is downloaded in-app and the JDK is installed with apt. Does not grant root.</string>
+    <string name="java_group_selected">Selected: %1$s</string>
+    <string name="java_note_proot_container">glibc guest: no IPv6 listening, and installable versions depend on the chosen distro</string>
+    <string name="java_vendor_termux">Termux</string>
+    <string name="java_vendor_fcl">Pojav</string>
+    <string name="java_vendor_proot">PRoot</string>
+
     <!-- Runtime picker dialog -->
-    <string name="runtime_picker_title">Choose runtime</string>
-    <string name="runtime_picker_apply">OK</string>
-    <string name="runtime_picker_mismatch">Note: this core works best with the %1$s runtime. Your choice applies fully and will not be changed on start.</string>
     <string name="err_runtime_kind_mismatch">Core %1$s needs the %2$s runtime. Switch it in "Runtime" and try again.</string>
+
+    <!-- Download: delete core confirmation -->
+    <string name="dl_core_delete_title">Delete server core</string>
+    <string name="dl_core_delete_content">Delete the core &quot;%1$s&quot;? This removes its world saves, plugins and config and cannot be undone.</string>
+    <string name="dl_core_delete_running">The server is running. Stop it before deleting a core.</string>
+
+    <!-- Backup: private snapshot restore / delete confirmation -->
+    <string name="backup_snapshot_restore_title">Restore snapshot</string>
+    <string name="backup_snapshot_restore_content">Restore snapshot &quot;%1$s&quot;? The old snapshot will overwrite the current server data and cannot be undone.</string>
+    <string name="backup_snapshot_delete_title">Delete snapshot</string>
+    <string name="backup_snapshot_delete_content">Delete snapshot &quot;%1$s&quot;? This cannot be undone.</string>
+
+    <!-- Environment and dependencies: uninstall / reinstall confirmation -->
+    <string name="env_java_uninstall_confirm">This uninstalls %1$s only. The other vendor, the other Java versions and your worlds are untouched. This cannot be undone.</string>
+    <string name="env_java_reinstall_confirm">This first uninstalls the currently selected Java build, then downloads and installs it again; other versions are kept. This cannot be undone.</string>
+    <string name="env_proot_delete_container_confirm">This deletes the whole %1$s container, including every Java version installed inside it, and frees about %2$s. Your server worlds live outside the container and are untouched. This cannot be undone.</string>
+    <string name="msg_proot_container_deleted">%1$s container deleted</string>
+    <string name="err_proot_container_delete_fail">Failed to delete the %1$s container</string>
+    <string name="env_proot_delete_container_action">Delete container</string>
+
+    <!-- Diagnostics: PRoot container layer-by-layer state -->
+    <string name="diag_check_proot_container">PRoot container (%1$s)</string>
+    <string name="diag_proot_none">No PRoot container is installed</string>
+    <string name="diag_proot_rootfs_missing">The rootfs has not been downloaded or was deleted; install it from Environment &amp; dependency management</string>
+    <string name="diag_proot_shell_broken">The rootfs exists but has no usable shell (incomplete extraction or damaged files); reinstall this container</string>
+    <string name="diag_proot_ready_installed">Container is usable; installed Java: %1$s</string>
+    <string name="diag_proot_ready_empty">Container is usable, but no Java version is installed yet</string>
+    <string name="env_deps_reinstall_confirm">This first deletes the existing dependency files, then reinstalls them. This cannot be undone.</string>
+    <string name="env_php_delete_action">Delete (auto reinstall on next start)</string>
+
+    <!-- Range validation hints -->
+    <string name="set_max_heap_range_hint">Max heap must be between 256 and 65536 MB. Adjusted automatically.</string>
+    <string name="net_local_port_range_hint">Port must be between 1024 and 65535. Adjusted automatically.</string>
+    <string name="fm_new_dir_invalid_name">The name cannot contain slashes, backslashes or .., and cannot start or end with spaces.</string>
+
+    <!-- FTP: anonymous access risk warning -->
+    <string name="ftp_anonymous_risk">Risk: anonymous users can access and modify the server directory without a password. Only enable this on a trusted LAN.</string>
+
+    <!-- Plugins / mods: blocked while the server is running -->
+    <string name="pl_running_block">The server is running. Stop it before enabling/disabling or deleting plugins or mods.</string>
 
     <!-- QQ group -->
     <string name="qq_group_label">QQ Group ID</string>
     <string name="qq_copy_group">Copy</string>
+
+    <!-- World switch: distinguish "target instance running" from "config not writable" -->
+    <string name="world_switch_blocked_running">That server is running. Stop it before switching worlds.</string>
+    <string name="world_switch_failed">Failed to switch world: the configuration file is not writable.</string>
+
+    <!-- MCP: AI skill export -->
+    <string name="mcp_skill">AI Skill</string>
+    <string name="mcp_skill_desc">Export this app\'s AI manual (SKILL.md): hand it to an AI client and it can drive the servers on this phone over MCP. The file contains the endpoint and access token, so share it only with clients you trust.</string>
+    <string name="mcp_skill_export">Export SKILL.md</string>
+    <string name="mcp_skill_copy">Copy content</string>
+    <string name="mcp_skill_exported">SKILL.md exported — you can hand it to an AI client now</string>
+    <string name="mcp_skill_export_failed">Export failed: %1$s</string>
+    <string name="mcp_skill_open_failed">Cannot open the selected location</string>
+
+    <!-- Update: APK signature mismatch -->
+    <string name="err_apk_sig_mismatch">The update APK is signed differently from this app, so it was rejected (the download may have been tampered with — download it again).</string>
+    <!-- Start card: full-width start/stop bar + start-settings bottom sheet -->
+    <string name="dash_env_termux_java">Termux Java</string>
+    <string name="dash_env_fcl_java">Pojav JRE</string>
+    <string name="dash_env_proot_java">PRoot Linux container</string>
+    <string name="dash_env_php">PHP</string>
+    <string name="dash_env_version_termux_java">Termux Java version</string>
+    <string name="dash_env_version_fcl_java">Pojav JRE version</string>
+    <string name="dash_env_version_proot_java">Java version in container</string>
+    <string name="dash_env_version_php">PHP version</string>
+    <string name="dash_env_distro_label">Linux distro</string>
+    <string name="dash_env_distro_note">Determines which Java versions and packages this container can install</string>
+    <string name="dash_current_env">Current runtime</string>
+    <string name="dash_start_settings_subtitle">Changes apply to the next start and never interrupt a running server</string>
+    <string name="dash_custom_command_title">Use a custom start command</string>
+    <string name="dash_custom_command_note">When off, the app generates the start command automatically</string>
+    <string name="dash_custom_command_label">Full start command</string>
+    <string name="dash_custom_command_placeholder">java -Xmx1024M -jar server.jar nogui</string>
+    <string name="dash_skip_startup_progress">Skip startup progress</string>
+    <string name="dash_skip_startup_progress_note">Hide the startup phase progress on the overview page and show the running layout right away</string>
+    <string name="dash_force_stop">Force stop</string>
+    <string name="dash_force_stop_confirm_title">Force stop the server?</string>
+    <string name="dash_force_stop_confirm_msg">Force stop terminates the server process immediately; world data not yet written to disk may be lost. Prefer "Stop" and let it shut down normally.</string>
+    <string name="dash_force_stop_confirm_ok">Force stop</string>
+    <string name="dash_force_stop_done">Server force-stopped</string>
+    <string name="dash_stop_timeout_hint">The server is still shutting down. Tap "Force stop" to end it now (risk of losing unsaved data).</string>
 </resources>

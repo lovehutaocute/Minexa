@@ -134,4 +134,55 @@ class LaunchCommandValidationTest {
         val problems = launchCommandProblems(cmd, requireExecPrefix = false, requireLauncherMarker = false)
         assertTrue("自定义模式下的截断也必须被拦下，实际: $problems", problems.any { it.contains("执行段") })
     }
+
+    // ──────────────────────────────────────────────────────────
+    // LD_PRELOAD 片段拼装
+    // ──────────────────────────────────────────────────────────
+
+    @Test
+    fun multiplePreloadLibrariesGoIntoOneExport() {
+        // LD_PRELOAD 是普通环境变量：写两条 export 是**覆盖**，先写的会被静默丢掉。
+        // 所以「两个库」必须出现在同一条 export 里，用 ':' 分隔。
+        val fragment = preloadExportFragment(listOf("/n/libheaptagfix.so", "/n/libipv6fix.so"))
+        assertEquals("export LD_PRELOAD='/n/libheaptagfix.so:/n/libipv6fix.so'; ", fragment)
+        assertEquals(
+            "只能出现一条 export LD_PRELOAD",
+            1,
+            Regex("export LD_PRELOAD=").findAll(fragment).count()
+        )
+    }
+
+    @Test
+    fun singlePreloadLibraryStillProducesOneExport() {
+        assertEquals(
+            "export LD_PRELOAD='/n/libheaptagfix.so'; ",
+            preloadExportFragment(listOf("/n/libheaptagfix.so"))
+        )
+    }
+
+    @Test
+    fun emptyPreloadListProducesNothing() {
+        // 库缺失（降级环境）时必须返回空串而不是 `export LD_PRELOAD='';`
+        // —— 后者会让 linker 报一行错，属于无中生有的噪音。
+        assertEquals("", preloadExportFragment(emptyList()))
+        assertEquals("", preloadExportFragment(listOf("", "   ")))
+    }
+
+    @Test
+    fun duplicatePreloadLibrariesAreDeduped() {
+        assertEquals(
+            "export LD_PRELOAD='/n/libipv6fix.so'; ",
+            preloadExportFragment(listOf("/n/libipv6fix.so", "/n/libipv6fix.so"))
+        )
+    }
+
+    @Test
+    fun preloadFragmentKeepsCommandComplete() {
+        // 拼接位置就在 `cd … && exec java` 之前，漏掉 `+` 会重现 1.2.8 的
+        // 「整段执行命令消失」事故，所以这里把它塞进完整命令里再判一次。
+        val cmd = "export PATH='/x/bin'; " +
+            preloadExportFragment(listOf("/n/libheaptagfix.so", "/n/libipv6fix.so")) +
+            "cd '/srv/mc' && exec '/x/bin/java' -Xmx2048m -jar server.jar nogui"
+        assertEquals(emptyList<String>(), launchCommandProblems(cmd))
+    }
 }

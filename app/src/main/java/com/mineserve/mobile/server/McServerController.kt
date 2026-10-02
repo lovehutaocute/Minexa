@@ -6,15 +6,20 @@ import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.data.ServerEventNotifier
 import com.mineserve.mobile.data.InstallStep
 import com.mineserve.mobile.data.JavaVersion
+import com.mineserve.mobile.data.JavaVendor
+import com.mineserve.mobile.data.JvmFlavor
 import com.mineserve.mobile.data.InstalledCore
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.MultiThreadDownloader
+import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.MinecraftVersionNormalizer
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.StepStatus
 import com.mineserve.mobile.data.StartupPhase
+import com.mineserve.mobile.data.isProotGuestRuntime
+import com.mineserve.mobile.data.provides
 import com.mineserve.mobile.runtime.TermuxRuntime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -40,10 +45,24 @@ import java.util.Locale
 /**
  * MC 版本号降序比较器：按数字段逐级比较，保证 `26.2 > 1.21.11 > 1.21.4 > 1.20.6` 这类
  * 跨编号体系的排序正确（纯字符串比较会把 `1.21.4` 排到 `26.2` 前面）。
+ *
+ * 正则必须是常量：这个比较器被 `sortedWith` 使用（版本列表），排序要做 O(n log n) 次比较，
+ * 每次比较都新建两个 Regex 的话，几百个版本就是上万次正则编译。
  */
+private val VERSION_DIGITS = Regex("\\d+")
+
+/**
+ * Maven metadata / GitHub release 里的 `<version>` 取值。
+ *
+ * 提到文件级常量：这两个正则原先分别写在 `.findAll` 与 `.map` 的位置，
+ * 版本条目上百个时每次拉版本列表都会编译上百次。
+ */
+private val PNX_METADATA_VERSION = Regex("<version>\\s*([^<]+?)\\s*</version>")
+private val PNX_VERSION_PREFIX = Regex("^([0-9]+(?:\\.[0-9]+){1,3})(?:-r\\d+|-PNX)?$")
+
 internal val mcVersionComparator: Comparator<String> = Comparator { left, right ->
-    val leftParts = Regex("\\d+").findAll(left).map { it.value.toInt() }.toList()
-    val rightParts = Regex("\\d+").findAll(right).map { it.value.toInt() }.toList()
+    val leftParts = VERSION_DIGITS.findAll(left).map { it.value.toInt() }.toList()
+    val rightParts = VERSION_DIGITS.findAll(right).map { it.value.toInt() }.toList()
     leftParts.zip(rightParts).firstOrNull { it.first != it.second }
         ?.let { (a, b) -> b.compareTo(a) }
         ?: rightParts.size.compareTo(leftParts.size).takeIf { it != 0 }
@@ -82,8 +101,8 @@ internal fun selectNeoForgeVersion(minecraftVersion: String, versions: List<Stri
             candidatePrefixes.any { prefix -> clean == prefix.trimEnd('.') || clean.startsWith(prefix) }
         }
         .maxWithOrNull(Comparator { left, right ->
-            val leftParts = Regex("\\d+").findAll(left).map { it.value.toInt() }.toList()
-            val rightParts = Regex("\\d+").findAll(right).map { it.value.toInt() }.toList()
+            val leftParts = VERSION_DIGITS.findAll(left).map { it.value.toInt() }.toList()
+            val rightParts = VERSION_DIGITS.findAll(right).map { it.value.toInt() }.toList()
             leftParts.zip(rightParts).firstOrNull { it.first != it.second }
                 ?.let { (a, b) -> a.compareTo(b) }
                 ?: leftParts.size.compareTo(rightParts.size).takeIf { it != 0 }
@@ -212,14 +231,22 @@ class McServerController(
         serverDir: File,
         label: String,
         tempDir: File,
-        javaVersion: JavaVersion
+        javaVersion: JavaVersion,
+        javaVendor: JavaVendor = JavaVendor.Termux
     ): Int {
         var lastCode = 1
         repeat(3) { attempt ->
             // Installer runs before start(), so repair the selected JDK wrapper here as well.
-            if (javaVersion != JavaVersion.Java8) termux.autoRepairRuntime(javaVersion, needsFonts = false)
-            lastCode = if (javaVersion == JavaVersion.Java8) {
-                termux.runJava8Installer(jarPath, serverDir)
+            // 来宾链路没有宿主侧的 java 包装器可修，跳过（容器内的 JDK 由 apt 管）。
+            if (!isProotGuestRuntime(javaVendor, javaVersion)) {
+                termux.autoRepairRuntime(javaVersion, needsFonts = false)
+            }
+            lastCode = if (isProotGuestRuntime(javaVendor, javaVersion)) {
+                termux.runProotInstaller(
+                    jarPath,
+                    serverDir,
+                    profile = termux.resolveProotProfile(javaVendor, javaVersion)
+                )
             } else {
                 termux.execOnce(
                     "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
@@ -400,7 +427,9 @@ class McServerController(
         if (normalizedConfig.mcVersion != config.mcVersion) {
             termux.emitLog("[version] Minecraft target normalized from ${config.mcVersion} to ${normalizedConfig.mcVersion}")
         }
-        if (normalizedConfig.selectedCore.needsInstaller && !termux.isJavaInstalled(normalizedConfig.selectedJavaVersion)) {
+        if (normalizedConfig.selectedCore.needsInstaller &&
+            !termux.isJavaInstalled(normalizedConfig.selectedJavaVersion, normalizedConfig.selectedJavaVendor)
+        ) {
             throw RuntimeException("${normalizedConfig.selectedJavaVersion.displayName} is not installed. Install and verify it before running ${normalizedConfig.selectedCore.displayName} installer.")
         }
         // 目录名去重：文件夹已存在说明别的服务器已占用该目录（例如两个核心都叫「111」，
@@ -436,13 +465,29 @@ class McServerController(
                     if (code != 0) throw RuntimeException("NeoForge installer 执行失败 (exit=$code)")
                 }
                 ServerCore.Quilt -> {
-                    val code = if (normalizedConfig.selectedJavaVersion == JavaVersion.Java8) {
-                        val guestJar = "/srv/mineserve/${File(jarPath).relativeTo(serverDir).invariantSeparatorsPath}"
-                        termux.runJava8Command(
+                    // 来宾链路（PRoot）与宿主链路二选一。判定统一走
+                    // isProotGuestRuntime：以前这里只认 `selectedJavaVersion == Java8`，
+                    // 新增 Proot 来源后若不同步，会出现「启动走容器、installer 走宿主」
+                    // 的错位 —— 而 Quilt 的 installer 恰恰依赖容器内的 java。
+                    val code = if (isProotGuestRuntime(
+                            normalizedConfig.selectedJavaVendor,
+                            normalizedConfig.selectedJavaVersion
+                        )
+                    ) {
+                        val profile = termux.resolveProotProfile(
+                            normalizedConfig.selectedJavaVendor,
+                            normalizedConfig.selectedJavaVersion
+                        )
+                        val guestJar = "${TermuxRuntime.GUEST_SERVER_DIR}/${File(jarPath).relativeTo(serverDir).invariantSeparatorsPath}"
+                        termux.runProotCommand(
                             serverDir,
-                            "export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-arm64; cd /srv/mineserve && " +
-                                "exec /usr/bin/java -Djava.io.tmpdir=/tmp -jar '$guestJar' " +
-                                "install server '${normalizedConfig.mcVersion}' --install-dir=/srv/mineserve --download-server"
+                            "export JAVA_HOME=${profile.javaHomeInGuest}; " +
+                                "export PATH=\"${profile.javaHomeInGuest}/bin:\$PATH\"; " +
+                                "cd ${TermuxRuntime.GUEST_SERVER_DIR} && " +
+                                "exec ${profile.guestJavaBinaryCandidates.first()} " +
+                                "-Djava.io.tmpdir=/tmp -jar '$guestJar' " +
+                                "install server '${normalizedConfig.mcVersion}' --install-dir=${TermuxRuntime.GUEST_SERVER_DIR} --download-server",
+                            profile = profile
                         )
                     } else {
                         termux.execOnce(
@@ -1026,14 +1071,14 @@ class McServerController(
         )
         val xml = metadataUrls.asSequence().mapNotNull { url -> runCatching { fetchText(url) }.getOrNull() }.firstOrNull()
             ?: return emptyList()
-        return Regex("<version>\\s*([^<]+?)\\s*</version>")
+        return PNX_METADATA_VERSION
             .findAll(xml)
             .map { it.groupValues[1].trim() }
             .filter { it.isNotBlank() }
             .map { version ->
                 CoreVersionOption(
                     version = version,
-                    supportedGameVersion = Regex("^([0-9]+(?:\\.[0-9]+){1,3})(?:-r\\d+|-PNX)?$").find(version)?.groupValues?.get(1),
+                    supportedGameVersion = PNX_VERSION_PREFIX.find(version)?.groupValues?.get(1),
                     sourceRepository = "PowerNukkitX/PowerNukkitX-Legacy",
                     releaseTag = version,
                     assetUrl = "https://repo1.maven.org/maven2/cn/powernukkitx/powernukkitx/$version/powernukkitx-$version-shaded.jar"
@@ -1359,8 +1404,15 @@ class McServerController(
      * - 从 config.activeCoreName 找到对应的已安装核心
      * - 如果核心不存在或 jar 缺失，抛出异常
      * - 支持崩溃自动重启（config.autoRestartOnCrash）
+     *
+     * @param userInitiated true 表示由用户点击「启动」发起。只有这种启动才生成新的
+     *        代际号并在准备阶段响应「用户点了停止」；崩溃自动重启走 false，
+     *        避免把「用户此前某次停止」的历史标记当成取消依据。
      */
-    suspend fun start(config: McConfig) = withContext(Dispatchers.IO) {
+    suspend fun start(config: McConfig, userInitiated: Boolean = true) = withContext(Dispatchers.IO) {
+        // 记录本次启动的代际：准备阶段（可能数分钟）里用户若点了停止，
+        // 代际会失效，launchMc 在真正 spawn 之前就会放弃，而不是照旧把服务端拉起来。
+        val startGeneration = if (userInitiated) termux.beginStartRequest() else 0L
         // 先确保 Termux 环境已初始化
         if (!termux.isReady()) {
             throw RuntimeException("Termux 环境未初始化，请等待初始化完成")
@@ -1374,11 +1426,18 @@ class McServerController(
         } else {
             termux.fixRootfsPermissions()
         }
+        // 依赖安装/修复可能耗时很久：进入下一步前先确认用户没有取消这次启动。
+        if (userInitiated && termux.isStartCancelled(startGeneration)) {
+            termux.emitLog("[startMc] 准备阶段已收到停止请求，本次启动已取消")
+            return@withContext
+        }
         // 找到当前选用的核心
         val activeCore = config.installedCores.find { it.name == config.activeCoreName }
             ?: throw RuntimeException("未选择要启动的服务端核心，请先在「下载」Tab 下载或选择")
         // PocketMine 用 PHP 运行（PHP 在启动时按需安装），跳过 Java 检查
-        if (activeCore.core != ServerCore.PocketMine && !termux.isJavaInstalled(config.selectedJavaVersion)) {
+        if (activeCore.core != ServerCore.PocketMine &&
+            !termux.isJavaInstalled(config.selectedJavaVersion, config.selectedJavaVendor)
+        ) {
             throw RuntimeException("${config.selectedJavaVersion.displayName} 未安装，请先在 Java 管理卡片中安装")
         }
         val (launchConfig, launchCore) = migrateToAsciiServerDir(config, activeCore)
@@ -1400,7 +1459,30 @@ class McServerController(
         }
         // 启动时重置崩溃重试计数
         restartAttempts = 0
-        launchMc(launchConfig, launchCore.dirName, jarFile?.absolutePath)
+        launchMc(launchConfig, launchCore.dirName, jarFile?.absolutePath, startGeneration)
+    }
+
+    /**
+     * 真正 spawn 进程之前统一检查「本次启动是否已被用户取消」。
+     *
+     * @return true 表示已取消，调用方应立即 return，**不得**启动服务端。
+     */
+    private suspend fun abortIfStartCancelled(startGeneration: Long): Boolean {
+        if (startGeneration == 0L) {
+            // 非用户发起（崩溃自动重启 / 定时任务）：沿用原先的行为，在本轮启动前
+            // 清掉历史上的「用户已请求停止」标记 —— 否则本轮的真实崩溃会被
+            // createExitHandler 判成「用户主动停止」而漏报、也不自动重启。
+            // 用户发起的启动在 beginStartRequest() 里已经清过一次。
+            termux.clearUserStopRequest()
+            return false
+        }
+        if (!termux.isStartCancelled(startGeneration)) return false
+        termux.emitLog("[startMc] 已收到停止请求，本次启动已在拉起进程前取消")
+        // 把状态复位回「未运行」，否则 UI 会一直停在启动中。
+        repo.updateServerState {
+            it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Idle)
+        }
+        return true
     }
 
     /** Forge's ZipFileSystem cannot parse percent-encoded non-ASCII working paths on Java 25. */
@@ -1418,12 +1500,15 @@ class McServerController(
         if (!source.renameTo(target)) throw RuntimeException("无法迁移核心目录，请检查存储空间后重试")
 
         val migratedCore = activeCore.copy(dirName = migratedDirName)
-        val migratedConfig = config.copy(
-            installedCores = config.installedCores.map {
-                if (it.name == activeCore.name && it.dirName == activeCore.dirName) migratedCore else it
-            }
-        )
-        repo.saveConfig(migratedConfig)
+        // 只改 installedCores 这一个字段，基于权威内存态原子完成；
+        // 传整份 config 会把并发期间别的修改一起覆盖掉。
+        val migratedConfig = repo.updateAndSaveConfig { current ->
+            current.copy(
+                installedCores = current.installedCores.map {
+                    if (it.name == activeCore.name && it.dirName == activeCore.dirName) migratedCore else it
+                }
+            )
+        }
         termux.emitLog("[startMc] 已迁移核心目录到 ASCII 名称：$migratedDirName")
         return migratedConfig to migratedCore
     }
@@ -1482,20 +1567,25 @@ class McServerController(
         }
     }
 
-    private suspend fun launchMc(config: McConfig, dirName: String, jarPath: String?) {
+    /**
+     * @param startGeneration 本次启动的代际号（非用户发起时为 0，表示不做取消检查）
+     */
+    private suspend fun launchMc(config: McConfig, dirName: String, jarPath: String?, startGeneration: Long = 0L) {
         val serverDir = termux.serverDirFor(dirName)
         val activeCore = config.installedCores.find { it.name == config.activeCoreName }
         val coreType = activeCore?.core ?: config.selectedCore
 
         // ── 完全自定义启动命令模式 ──
         if (config.advancedCustomCommandEnabled && config.advancedCustomCommand.isNotBlank()) {
+            if (abortIfStartCancelled(startGeneration)) return
             termux.emitLog("[startMc] 使用完全自定义启动命令")
-            termux.clearUserStopRequest()
             startupDeadlineMs = System.currentTimeMillis() + 20_000L
             processStartedAtMs = System.currentTimeMillis()
             termux.startMcCustom(
                 command = config.advancedCustomCommand,
                 dirName = dirName,
+                jvmFlavor = config.jvmFlavor,
+                javaVendor = config.selectedJavaVendor,
                 onExit = createExitHandler(config, dirName, jarPath)
             )
             repo.updateServerState { markRunningIfAlive(it) }
@@ -1522,27 +1612,42 @@ class McServerController(
             val current = if (properties.exists()) properties.readText() else ""
             properties.writeText(updatePowerNukkitXProperties(current, config.localPort))
         }
-        // Allay：默认同时绑定 IPv6（::），在 Android 上会抛
-        // UnsupportedAddressTypeException 导致网络接口启动失败。
-        // 首次启动写入最小配置；已存在的配置每次启动都强制修正
-        // enablev6=false 并同步端口（兼容修复前已生成配置的目录）。
+        // Allay：默认同时绑定 IPv6（::），而 Termux 的 openjdk 判定「本机无 IPv6」
+        // ⇒ 绑定 :: 会抛 UnsupportedAddressTypeException，网络接口起不来。
+        // 所以：
+        // 但现在这条判定已被绕过（Termux 靠兼容层、FCL 那套 JRE 本身就不查），
+        // 因此只在**确实绑不上**时才强制关（见 McConfig.ipv6ListenAvailable）：
+        //   - 能绑：首次生成配置写 enablev6=true，且**不再改写**已有配置 ——
+        //     改不改由用户在 Allay 配置里自己决定；
+        //   - 绑不上：沿用老行为，写 false 并每次启动纠正。
         if (coreType == ServerCore.Allay) {
             val settings = File(serverDir, "server-settings.yml")
+            val forceDisableIpv6 = !config.ipv6ListenAvailable
             if (!settings.exists()) {
                 settings.writeText(
                     "network-settings:\n" +
                         "  ip: 0.0.0.0\n" +
                         "  port: ${config.localPort}\n" +
-                        "  enablev6: false\n"
+                        "  enablev6: ${if (forceDisableIpv6) "false" else "true"}\n"
                 )
-                termux.emitLog("[startMc] 已生成 Allay 配置（禁用 IPv6 绑定，端口 ${config.localPort}）")
+                termux.emitLog(
+                    if (forceDisableIpv6) {
+                        "[startMc] 已生成 Allay 配置（禁用 IPv6 绑定，端口 ${config.localPort}）"
+                    } else {
+                        "[startMc] 已生成 Allay 配置（当前 JVM 支持 IPv6，保留 :: 绑定，端口 ${config.localPort}）"
+                    }
+                )
             } else {
                 val current = settings.readText()
-                var updated = current.replace(Regex("enablev6: *true"), "enablev6: false")
+                var updated = if (forceDisableIpv6) {
+                    current.replace(Regex("enablev6: *true"), "enablev6: false")
+                } else {
+                    current
+                }
                 updated = updated.replace(Regex("(\n  port: *)\\d+"), "$1${config.localPort}")
                 if (updated != current) {
                     settings.writeText(updated)
-                    termux.emitLog("[startMc] 已修正 Allay 配置（禁用 IPv6 绑定，端口 ${config.localPort}）")
+                    termux.emitLog("[startMc] 已修正 Allay 配置（端口 ${config.localPort}）")
                 }
             }
         }
@@ -1563,7 +1668,8 @@ class McServerController(
             val phar = serverDir.listFiles { f -> f.isFile && f.name.endsWith(".phar", ignoreCase = true) }
                 ?.maxByOrNull { it.lastModified() }
                 ?: throw RuntimeException("未找到 PocketMine-MP.phar，请重新下载核心")
-            termux.clearUserStopRequest()
+            // PHP 可能是首次下载安装（耗时较长），spawn 之前再确认一次用户没有取消。
+            if (abortIfStartCancelled(startGeneration)) return
             startupDeadlineMs = System.currentTimeMillis() + 20_000L
             processStartedAtMs = System.currentTimeMillis()
             termux.startPhp(phpBin.absolutePath, File(phpBin.parentFile, "php.ini").absolutePath, phar.absolutePath, dirName, createExitHandler(config, dirName, phar.absolutePath))
@@ -1573,10 +1679,62 @@ class McServerController(
         // 按 MC 版本自动匹配所需 Java（如 Paper 26.1+ 要求 Java 25）：当前选择不足时自动升级并安装
         val mcVersion = activeCore?.version?.takeIf { it.isNotBlank() } ?: config.mcVersion
         val recommended = recommendedJavaForMinecraft(mcVersion, coreType)
+        // 启动用的来源 = 用户在「运行环境」里选的那个，**全程不变**。
+        // 自动匹配只调版本，见 requireVersionInVendor 的说明。
+        val launchVendor = config.selectedJavaVendor
+        /**
+         * 自动切换 Java 版本时的来源策略：**来源永远停在用户选的那一个**。
+         *
+         * 早先这里会在所选来源不提供目标版本时，回退到「第一个提供该版本的来源」。
+         * 后果是：用户在「运行环境」里明确选了 PRoot 容器，启动 Paper 26.1 时
+         * 被静默改成 **Termux + Java 25** —— 而且这个改动会 `updateAndSaveConfig`
+         * 落盘，用户的显式选择被永久覆盖，下次启动直接换了链路。
+         *
+         * 这不是「自动修复」，是把用户的显式选择当成可以推翻的建议。运行环境是
+         * 用户唯一能指定「用哪个 glibc/bionic 世界跑服务端」的入口，换掉它就等于
+         * 换掉整个运行前提（PRoot 的存在意义正是脱离 bionic）。
+         *
+         * 现在只允许在**同一来源内**调整版本；来源确实提供不了时明确报错，
+         * 把「换来源还是换版本」的决定权交还给用户。
+         */
+        fun requireVersionInVendor(version: JavaVersion, reason: String): JavaVersion {
+            val distro = config.prootDistro
+            if (launchVendor.provides(version, distro)) return version
+            val label = if (launchVendor == JavaVendor.Proot) {
+                "${launchVendor.logName} 容器的 ${distro.displayName}"
+            } else {
+                launchVendor.logName
+            }
+            val available = launchVendor.availableVersions(distro).joinToString(" / ") { it.displayName }
+            // 如果换个发行版就能装，直接把话说到底 —— 这才是这条错误最常见的解法，
+            // 而「改用其他来源」对只想留在 PRoot 里的用户并不是想要的建议。
+            val otherDistro = ProotDistro.entries.firstOrNull { distro2 ->
+                distro2 != distro && version in launchVendor.availableVersions(distro2)
+            }
+            val advice = when {
+                launchVendor == JavaVendor.Proot && otherDistro != null ->
+                    "把「${distro.shortName}」切换到「${otherDistro.shortName}」即可使用 " +
+                        "${version.displayName}（切发行版不会删除已装的其他 Java 版本）"
+                else ->
+                    "请在「运行环境」里改用其他来源，或换一个该来源支持的版本"
+            }
+            throw RuntimeException(
+                "$reason，但当前来源「$label」不提供 ${version.displayName}" +
+                    "（该来源可用：$available）。$advice；" +
+                    "为避免换掉你选择的运行链路，这里不会自动切换来源。"
+            )
+        }
         val launchJava = if (recommended != null && config.selectedJavaVersion.ordinal < recommended.ordinal) {
-            termux.emitLog("[startMc] $mcVersion 需要 Java ${recommended.displayName} 及以上（当前选择 ${config.selectedJavaVersion.displayName}），已自动切换")
-            runCatching { repo.saveConfig(config.copy(selectedJavaVersion = recommended)) }
-            recommended
+            val target = requireVersionInVendor(
+                recommended,
+                "$mcVersion 需要 Java ${recommended.displayName} 及以上"
+            )
+            termux.emitLog("[startMc] $mcVersion 需要 Java ${target.displayName} 及以上（当前选择 ${config.selectedJavaVersion.displayName}），已自动切换")
+            // 只改版本，**不动来源** —— 来源是用户的显式选择。
+            runCatching {
+                repo.updateAndSaveConfig { it.copy(selectedJavaVersion = target) }
+            }
+            target
         } else config.selectedJavaVersion
         // Forge ≤1.16 的 FML 只支持 Java 8/11。实测 Termux Bionic 版 openjdk-11（TUR）
         // 在 modlauncher 的 Worker-Bootstrap 线程上 libjvm.so 段错误（SIGSEGV），
@@ -1584,39 +1742,58 @@ class McServerController(
         val effectiveLaunchJava = if (coreType == ServerCore.Forge && isLegacyForgeMcVersion(mcVersion) &&
             launchJava != JavaVersion.Java8 && launchJava != JavaVersion.Java11
         ) {
-            val fallback = when {
-                termux.isJavaInstalled(JavaVersion.Java8) -> JavaVersion.Java8
-                termux.isJavaInstalled(JavaVersion.Java11) -> {
-                    termux.emitLog("[startMc] 警告：TUR Java 11 为 Bionic 构建，运行 Forge ≤1.16 可能触发 libjvm 段错误；建议安装 Java 8（Ubuntu）")
-                    JavaVersion.Java11
-                }
-                else -> throw RuntimeException(
+            // 候选按「用户所选来源内可装」过滤，而不是只看装没装：
+            // 来源不允许的版本即使装在别处也取不到 java。
+            val distro = config.prootDistro
+            val candidates = listOf(JavaVersion.Java8, JavaVersion.Java11)
+                .filter { launchVendor.provides(it, distro) && termux.isJavaInstalled(it, launchVendor) }
+            val fallback = candidates.firstOrNull()
+                ?: throw RuntimeException(
                     "Forge $mcVersion 需要 Java 8 或 Java 11 运行（不支持 ${launchJava.displayName}），" +
-                        "请在「Java 管理」卡片安装 Java 8（推荐，Ubuntu 环境稳定）后重试"
+                        "而当前来源「${launchVendor.logName}」" +
+                        if (launchVendor.provides(JavaVersion.Java11, distro)) {
+                            "尚未安装 Java 8 / Java 11。请在「Java 管理」卡片安装 Java 8（推荐，Ubuntu 环境稳定）后重试"
+                        } else {
+                            "不提供 Java 8 / Java 11。请在「运行环境」里改用 PRoot 容器或 Termux Java（二者都提供 Java 8/11）后重试"
+                        }
                 )
+            if (fallback == JavaVersion.Java11) {
+                termux.emitLog("[startMc] 警告：TUR Java 11 为 Bionic 构建，运行 Forge ≤1.16 可能触发 libjvm 段错误；建议安装 Java 8（Ubuntu）")
             }
             termux.emitLog("[startMc] Forge $mcVersion 不支持 ${launchJava.displayName} 运行，已自动切换 ${fallback.displayName}")
-            runCatching { repo.saveConfig(config.copy(selectedJavaVersion = fallback)) }
+            // 同样是只改版本、不改来源：以前这里无条件写 launchVendor = Termux，
+            // 会把用户选的 PRoot 容器换掉，甚至在 Java 8 已归 PRoot 后写出
+            // 「Termux + Java 8」这种列表里不存在的组合。
+            runCatching {
+                repo.updateAndSaveConfig { it.copy(selectedJavaVersion = fallback) }
+            }
             fallback
         } else launchJava
         // Allay 官方要求 Java 21+：低于 21 自动切换，未安装则明确报错
         val finalLaunchJava = if (coreType == ServerCore.Allay && effectiveLaunchJava.ordinal < JavaVersion.Java21.ordinal) {
-            if (!termux.isJavaInstalled(JavaVersion.Java21)) {
+            requireVersionInVendor(JavaVersion.Java21, "Allay 需要 Java 21 运行（当前 ${effectiveLaunchJava.displayName} 未满足）")
+            if (!termux.isJavaInstalled(JavaVersion.Java21, launchVendor)) {
                 throw RuntimeException("Allay 需要 Java 21 运行（当前 ${effectiveLaunchJava.displayName} 未满足），请先安装 Java 21 后重试")
             }
             termux.emitLog("[startMc] Allay 需要 Java 21 及以上（当前 ${effectiveLaunchJava.displayName}），已自动切换")
-            runCatching { repo.saveConfig(config.copy(selectedJavaVersion = JavaVersion.Java21)) }
+            runCatching {
+                repo.updateAndSaveConfig { it.copy(selectedJavaVersion = JavaVersion.Java21) }
+            }
             JavaVersion.Java21
         } else effectiveLaunchJava
+        // 只对 Termux 来源做运行时修复：FCL 的 JRE 是整包解压出来的完整运行时，
+        // 不存在「缺件、靠 apt 补装」这种状态，跑 apt 修复只会白折腾。
         termux.autoRepairRuntime(
             javaVersion = finalLaunchJava,
-            needsFonts = coreType == ServerCore.Forge || coreType == ServerCore.NeoForge
+            needsFonts = coreType == ServerCore.Forge || coreType == ServerCore.NeoForge,
+            vendor = launchVendor
         )
         if (coreType == ServerCore.NeoForge && config.selectedJavaVersion != JavaVersion.Java8) {
             termux.emitLog("[startMc] NeoForge 提示：Android 无 glibc 的 libc.so.6，依赖 OSHI/JNA 的模组可能崩服；已自动注入 Android 友好的 OSHI/JNA 属性")
             termux.emitLog("[startMc] ReferenceOpenHashSet 或 DistanceManager 异常属于 NeoForge/Minecraft 运行期崩溃，请以 crash-reports 的首个异常为准")
         }
         if ((coreType == ServerCore.Forge || coreType == ServerCore.NeoForge) &&
+            launchVendor == JavaVendor.Termux &&
             effectiveLaunchJava != JavaVersion.Java8 && !termux.repairFontRuntime()) {
             // Forge/NeoForge 初始化 Minecraft 字体配置；旧环境可能在安装依赖前已下载核心。
             termux.emitLog("[startMc] 字体运行库仍未通过校验；已保留无图形模式启动参数")
@@ -1650,9 +1827,9 @@ class McServerController(
         if (launchArgs == null && jarPath == null) {
             throw RuntimeException("未找到可启动的 JAR；导入内容未被修改，请检查服务器目录")
         }
-        // 新一次启动：清掉上一轮的"用户已请求停止"标记，
-        // 否则本轮的真实崩溃会被误判成正常停止而漏报。
-        termux.clearUserStopRequest()
+        // 真正 spawn 之前的最后一道取消检查：Java 自动切换、autoRepairRuntime、
+        // 字体库安装等都可能耗时很久，用户完全可能在这期间点了「停止」。
+        if (abortIfStartCancelled(startGeneration)) return
         startupDeadlineMs = System.currentTimeMillis() + 20_000L
         processStartedAtMs = System.currentTimeMillis()
         termux.startMc(
@@ -1662,6 +1839,8 @@ class McServerController(
             javaVersion = finalLaunchJava,
             launchArgs = launchArgs,
             appendNogui = coreType !in setOf(ServerCore.PowerNukkitX, ServerCore.Allay),
+            jvmFlavor = config.jvmFlavor,
+            javaVendor = launchVendor,
             onExit = createExitHandler(config, dirName, jarPath)
         )
         repo.updateServerState { markRunningIfAlive(it) }
@@ -1784,12 +1963,24 @@ class McServerController(
                         "退避 ${backoffMs / 1000}s)"
                 )
                 termux.emitLog("[restart] 服务端异常退出，${backoffMs / 1000}s 后自动重启（第 $restartAttempts/$maxRestartAttempts 次）")
+                // 记下本次异常退出的时刻：退避窗口内用户点「停止」的话，停止标记会晚于它。
+                val exitAtMs = System.currentTimeMillis()
                 Thread {
                     try {
                         Thread.sleep(backoffMs)
-                        kotlinx.coroutines.runBlocking {
-                            launchMc(config, dirName, jarPath)
-                            repo.updateServerState { markRunningIfAlive(it) }
+                        // 退避期间收到过停止请求就放弃这次重启。
+                        // 旧代码是无条件 launchMc()，而 launchMc 内部还会 clearUserStopRequest()：
+                        // 用户明确点了停止、并且已经看到"已停服"，退避到点后服务端却被重新拉起，
+                        // 停止标记也被清掉，下一轮崩溃还会再弹一次崩溃通知。
+                        val stopAt = userStopRequestedAtMs
+                        if (stopAt != 0L && stopAt >= exitAtMs) {
+                            Log.i(TAG, "退避期间收到停止请求，取消本次自动重启")
+                            termux.emitLog("[restart] 已收到停止请求，取消自动重启")
+                        } else {
+                            kotlinx.coroutines.runBlocking {
+                                launchMc(config, dirName, jarPath)
+                                repo.updateServerState { markRunningIfAlive(it) }
+                            }
                         }
                     } catch (e: Exception) {
                         Log.e(TAG, "崩溃重启失败: ${e.message}", e)
@@ -1807,6 +1998,9 @@ class McServerController(
      * top-level forge-*.jar.  The installer jar itself remains server.jar.
      */
     private suspend fun forgeLaunchArguments(serverDir: File, javaVersion: JavaVersion): String {
+        // 来宾判定统一走谓词：以前这里只有 `javaVersion == Java8` 一处判断，
+        // 新增 Proot 来源后必须同步，否则会出现「启动走容器、路径按宿主拼」。
+        val isGuest = isProotGuestRuntime(termux.selectedProotVendor, javaVersion)
         serverDir.walkTopDown()
             .firstOrNull { it.name == "unix_args.txt" }
             ?.let {
@@ -1820,19 +2014,18 @@ class McServerController(
         // installer. Search both so a completed install is recognized.
         findLegacyForgeServerJar(serverDir, javaVersion)?.let { jar ->
             termux.emitLog("[startMc] Forge 旧版启动方式: ${jar.name}")
-            // Java 8 runs after `cd /srv/mineserve` inside PRoot. Keep this
-            // target relative so Android's host path cannot resolve to a stale
-            // file outside the container bind mount.
-            return if (javaVersion == JavaVersion.Java8) {
+            // 来宾链路里服务端在 `cd /srv/mineserve` 之后启动。这里必须传**相对路径**，
+            // 否则 Android 宿主绝对路径会指向 bind 挂载之外的文件，容器内解析不到。
+            return if (isGuest) {
                 "-jar '${jar.relativeTo(serverDir).invariantSeparatorsPath}'"
             } else {
                 "-jar ${jar.absolutePath}"
             }
         }
 
-        // Java 8 downloads may leave the installer under its original forge-*.jar
-        // name. Java 17/25 keep the existing server.jar-only recovery behavior.
-        val installerCandidates = if (javaVersion == JavaVersion.Java8) {
+        // 来宾链路的下载可能把 installer 留在原始的 forge-*.jar 名字下。
+        // 宿主链路（Java 17/25）保持原有的 server.jar-only 恢复行为。
+        val installerCandidates = if (isGuest) {
             buildList {
                 add(File(serverDir, "server.jar"))
                 serverDir.listFiles()
@@ -1922,7 +2115,7 @@ class McServerController(
     private fun isForgeInstallerJar(file: File, serverDir: File, javaVersion: JavaVersion): Boolean {
         if (javaVersion == JavaVersion.Java8) {
             if (hasForgeInstallerMainClass(file)) return true
-            val guestJar = "/srv/mineserve/${file.relativeTo(serverDir).invariantSeparatorsPath}"
+            val guestJar = "${TermuxRuntime.GUEST_SERVER_DIR}/${file.relativeTo(serverDir).invariantSeparatorsPath}"
             return termux.runJava8Command(
                 serverDir,
                 "jar tf '$guestJar' 2>/dev/null | grep -q 'net/minecraftforge/installer/SimpleInstaller.class'",
@@ -1945,6 +2138,40 @@ class McServerController(
         // 标记由 TermuxRuntime.stopMc() 内部统一打上（见那里的说明），
         // 这里只需发出停止请求即可。
         termux.stopMc()
+        repo.updateServerState {
+            it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Idle)
+        }
+    }
+
+    /**
+     * 优雅停止（用户点「停止」按钮走这条）。
+     *
+     * 与 [stop] 的区别：**没有强制兜底**。发完 `stop` 一直等到服务端自己退出；
+     * 超时也不强杀，而是返回 false 并保持 `isRunning = true` ——
+     * 此时界面上仍是运行态，用户可以点「强制停止」显式承担数据风险。
+     *
+     * 这样做的原因见 [TermuxRuntime.stopMcGraceful]：旧行为 5 秒强杀会在
+     * 大世界落盘中途 SIGKILL，直接表现为「停止后存档回档」。
+     *
+     * @return true 表示服务端已退出；false 表示仍在关停中。
+     */
+    suspend fun stopGracefully(): Boolean = withContext(Dispatchers.IO) {
+        val stopped = termux.stopMcGraceful()
+        if (stopped) {
+            repo.updateServerState {
+                it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Idle)
+            }
+        }
+        stopped
+    }
+
+    /**
+     * 强制停止：立即结束进程，不等待落盘。
+     *
+     * 调用方（UI）必须已经拿到用户的显式确认 —— 这里不做任何二次询问。
+     */
+    suspend fun forceStop() = withContext(Dispatchers.IO) {
+        termux.forceStopMc()
         repo.updateServerState {
             it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Idle)
         }

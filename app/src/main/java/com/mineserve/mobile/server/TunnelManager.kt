@@ -8,6 +8,7 @@ import com.mineserve.mobile.runtime.TermuxRuntime
 import com.mineserve.mobile.server.tunnel.BinaryManager
 import com.mineserve.mobile.server.tunnel.BoreBackend
 import com.mineserve.mobile.server.tunnel.FrpBackend
+import com.mineserve.mobile.server.tunnel.MeFrpBackend
 import com.mineserve.mobile.server.tunnel.SakuraFrpBackend
 import com.mineserve.mobile.server.tunnel.TunnelBackend
 import kotlinx.coroutines.CoroutineScope
@@ -22,7 +23,7 @@ import kotlinx.coroutines.launch
 /**
  * 内网穿透统一管理器。
  *
- * 支持的穿透方式: frp / bore
+ * 支持的穿透方式: frp / bore / 各家托管 frp 平台（SakuraFrp / ME Frp）
  */
 class TunnelManager(private val termux: TermuxRuntime) {
 
@@ -33,7 +34,8 @@ class TunnelManager(private val termux: TermuxRuntime) {
     private val backends: Map<TunnelType, TunnelBackend> = mapOf(
         TunnelType.Frp to FrpBackend(termux, binaryManager),
         TunnelType.Bore to BoreBackend(),
-        TunnelType.SakuraFrp to SakuraFrpBackend(termux, binaryManager)
+        TunnelType.SakuraFrp to SakuraFrpBackend(termux, binaryManager),
+        TunnelType.MeFrp to MeFrpBackend(termux, binaryManager)
     ).onEach { (_, backend) ->
         backend.attachLog { msg -> termux.emitLog("[tunnel] $msg") }
     }
@@ -86,9 +88,15 @@ class TunnelManager(private val termux: TermuxRuntime) {
     }
 
     fun destroy() {
-        scope.cancel()
-        backends.values.forEach {
-            scope.launch { it.stop() }
+        // 先停所有 backend，再取消作用域：scope.cancel() 之后 scope.launch 会以已取消
+        // 状态启动，协程体根本不会执行，frpc/frps 子进程不会被停。用 runBlocking +
+        // NonCancellable 确保 stop() 真正执行完，再取消状态收集协程。
+        kotlinx.coroutines.runBlocking {
+            kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+                backends.values.forEach { runCatching { it.stop() } }
+            }
         }
+        activeBackend = null
+        scope.cancel()
     }
 }

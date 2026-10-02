@@ -4,7 +4,10 @@ import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,8 +25,6 @@ import java.io.BufferedWriter
 import java.io.InputStreamReader
 import java.io.OutputStreamWriter
 import java.net.Socket
-import javax.crypto.Mac
-import javax.crypto.spec.SecretKeySpec
 
 /**
  * bore 协议隧道后端（纯 Kotlin 实现，零外部依赖）。
@@ -49,7 +50,24 @@ class BoreBackend : TunnelBackend {
     private var controlSocket: Socket? = null
     private var reader: BufferedReader? = null
     private var writer: BufferedWriter? = null
-    private var isRunning = false
+
+    /** 被 stop() 的线程写、被消息循环与转发线程读，必须 @Volatile（基类同名字段亦然）。 */
+    @Volatile private var isRunning = false
+
+    /**
+     * 转发连接处理所用的独立作用域。
+     *
+     * 不能把 handleConnection 挂在 start() 的 withContext 上：withContext 返回前必须等
+     * 所有子协程完成，而 handleConnection 会 join 到转发结束，导致 backend.start() 挂起。
+     * 该作用域由 stop() 统一取消，且每次 start() 重建（cancel 后不可复用）。
+     */
+    @Volatile private var forwardScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    /** 活跃转发的 socket 与线程登记，stop() 时统一关闭/打断以解除 join。 */
+    private val forwardSockets: MutableSet<Socket> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Socket, Boolean>())
+    private val forwardThreads: MutableSet<Thread> =
+        java.util.Collections.newSetFromMap(java.util.concurrent.ConcurrentHashMap<Thread, Boolean>())
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -77,6 +95,9 @@ class BoreBackend : TunnelBackend {
             reader = BufferedReader(InputStreamReader(socket.getInputStream()))
             writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
             isRunning = true
+            // stop() 会 cancel 上一个转发作用域；这里先取消旧作用域再重建，避免残留空作用域
+            runCatching { forwardScope.cancel() }
+            forwardScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
             // 2. 发送 Hello
             sendMessage("""{"Hello":$localPort}""")
@@ -102,7 +123,8 @@ class BoreBackend : TunnelBackend {
                     msgObj.containsKey("Connection") -> {
                         val connId = msgObj["Connection"]!!.jsonPrimitive.content
                         log("[bore] 外部连接到达: $connId")
-                        launch { handleConnection(host, port, connId, localPort) }
+                        // 用独立作用域启动，不挂在 start() 的 withContext 上（否则 start 永不返回）
+                        forwardScope.launch { handleConnection(host, port, connId, localPort) }
                     }
                     msgObj.containsKey("Heartbeat") -> {
                         // ignore heartbeats
@@ -120,6 +142,8 @@ class BoreBackend : TunnelBackend {
             if (isRunning) {
                 updateState(TunnelStatus.Failed, errorMessage = "bore 连接断开")
             }
+            // 控制通道已断，既有转发也已失去意义：统一关停，避免悬挂线程继续向本机端口送流量
+            closeForwards()
             Result.success(Unit)
         } catch (e: Exception) {
             log("[bore] 启动失败: ${e.message}")
@@ -138,8 +162,20 @@ class BoreBackend : TunnelBackend {
         writer = null
         reader = null
         controlSocket = null
+        // 关停既有转发（原先只关了控制通道，转发线程仍在向本机 MC 端口送流量），
+        // 再取消转发作用域；close socket 会让 pipe 抛异常退出，从而解除 join。
+        closeForwards()
+        forwardScope.cancel()
         updateState(TunnelStatus.Stopped)
         log("[bore] 隧道已停止")
+    }
+
+    /** 关闭所有活跃转发 socket 并打断转发线程，使 handleConnection 的 join 能解除。 */
+    private fun closeForwards() {
+        forwardSockets.toList().forEach { runCatching { it.close() } }
+        forwardThreads.toList().forEach { runCatching { it.interrupt() } }
+        forwardSockets.clear()
+        forwardThreads.clear()
     }
 
     // ── 内部方法 ──────────────────────────────────────────────
@@ -157,9 +193,15 @@ class BoreBackend : TunnelBackend {
     /** 处理一个外部连接：建立新 TCP 连接 → Accept → 双向转发 */
     private suspend fun handleConnection(host: String, port: Int, connId: String, localPort: Int) {
         withContext(Dispatchers.IO) {
+            var connSocket: Socket? = null
+            var localSocket: Socket? = null
+            var t1: Thread? = null
+            var t2: Thread? = null
             try {
-                val connSocket = Socket(host, port)
-                val connWriter = BufferedWriter(OutputStreamWriter(connSocket.getOutputStream()))
+                val cs = Socket(host, port)
+                connSocket = cs
+                forwardSockets.add(cs)
+                val connWriter = BufferedWriter(OutputStreamWriter(cs.getOutputStream()))
 
                 // 发送 Accept
                 val acceptMsg = """{"Accept":"$connId"}"""
@@ -168,20 +210,31 @@ class BoreBackend : TunnelBackend {
                 connWriter.flush()
 
                 // 连接本地服务
-                val localSocket = Socket("127.0.0.1", localPort)
+                val ls = Socket("127.0.0.1", localPort)
+                localSocket = ls
+                forwardSockets.add(ls)
 
-                // 双向转发
-                val t1 = Thread { pipe(connSocket.getInputStream(), localSocket.getOutputStream(), "bore→local") }
-                val t2 = Thread { pipe(localSocket.getInputStream(), connSocket.getOutputStream(), "local→bore") }
-                t1.isDaemon = true; t2.isDaemon = true
-                t1.start(); t2.start()
+                // 双向转发（登记线程，stop() 时统一打断）
+                val thread1 = Thread { pipe(cs.getInputStream(), ls.getOutputStream(), "bore→local") }
+                val thread2 = Thread { pipe(ls.getInputStream(), cs.getOutputStream(), "local→bore") }
+                thread1.isDaemon = true; thread2.isDaemon = true
+                t1 = thread1; t2 = thread2
+                forwardThreads.add(thread1)
+                forwardThreads.add(thread2)
+                thread1.start(); thread2.start()
 
-                // 等待任一线程结束
-                t1.join()
-                connSocket.close()
-                localSocket.close()
+                // 等待任一线程结束；stop() 关闭 socket 会让 pipe 抛异常退出，从而解除 join
+                thread1.join()
             } catch (e: Exception) {
                 log("[bore] 连接 $connId 处理失败: ${e.message}")
+            } finally {
+                // 一个方向结束后另一个方向也要收尾，避免线程/socket 悬挂
+                connSocket?.let { runCatching { it.close() } }
+                localSocket?.let { runCatching { it.close() } }
+                connSocket?.let { forwardSockets.remove(it) }
+                localSocket?.let { forwardSockets.remove(it) }
+                t1?.let { forwardThreads.remove(it) }
+                t2?.let { forwardThreads.remove(it) }
             }
         }
     }
@@ -229,16 +282,6 @@ class BoreBackend : TunnelBackend {
             Pair(host, port)
         } else {
             Pair(addr, 7835)
-        }
-    }
-
-    companion object {
-        /** HMAC-SHA256 计算（预留给认证功能） */
-        @Suppress("unused")
-        private fun hmacSha256(key: ByteArray, data: ByteArray): String {
-            val mac = Mac.getInstance("HmacSHA256")
-            mac.init(SecretKeySpec(key, "HmacSHA256"))
-            return mac.doFinal(data).joinToString("") { "%02x".format(it) }
         }
     }
 }

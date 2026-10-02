@@ -1,5 +1,88 @@
 # 更新日志
 
+## 1.2.8
+
+### 修复：自动匹配 Java 时不再换掉你选的运行环境
+
+- **问题**：在「运行环境」里明确选了 PRoot 容器后，启动 Paper 26.1 这类需要 Java 25 的核心时，应用会**静默把运行环境改成 Termux + Java 25**。而且这个改动会落盘 —— 你的显式选择被永久覆盖，下次启动直接换了链路。
+- **原因**：自动匹配逻辑允许「连来源一起改」：所选来源不提供目标版本时，回退到「第一个提供该版本的来源」。而 Termux 确实提供 Java 25，所以这条替换**每次都静默成功**，不会像失败的替换那样暴露出来。
+- **为什么这是错的**：运行环境是你唯一能指定「用哪个 libc 世界跑服务端」的入口，PRoot 的存在意义正是脱离 bionic。替用户换掉它，等于换掉整个运行前提。
+- **现在的行为**：自动匹配（含版本升级、Forge ≤1.16 降级、Allay 强制 21+）**只在所选来源内调整版本**，来源全程不变。来源确实提供不了时明确报错，并把「换来源还是换版本」的决定权交还给你。
+- 判断「这个来源能不能装这个版本」统一走 `JavaVendor.provides(version, distro)`，不再只看 `vendor.versions` —— 后者是两个发行版的并集，会把 focal 装不上的 Java 21 判成可用。
+- 报错话术尽量给到底：若换个发行版就能装（focal 缺 Java 21、jammy 有），直接说明「把 Ubuntu 20.04 切换到 Ubuntu 22.04 即可使用 Java 21（切发行版不会删除已装的其他 Java 版本）」。
+- 顺带修掉一处同源问题：Forge ≤1.16 的降级路径此前**无条件**把来源改成 Termux（注释还写着「Java 8/11 只有 Termux 提供」，这在 Java 8 归入 PRoot 后已不成立）。这会在用户选 PRoot 时把来源换掉，甚至写出「Termux + Java 8」这种列表里已不存在的组合。
+- 新增 `JavaVendorStickinessTest`（7 项），钉住该策略依赖的事实：没有任何发行版提供 Java 25（因此 PRoot 下必须报错）、Termux 确实提供 Java 25（因此必须靠策略阻止而非指望它失败）、FCL 一个 Java 8/11 都没有。
+
+### 新增：依赖管理页的分组折叠与 Ubuntu 版本胶囊
+
+- 「依赖管理」页的 **Termux JDK / Pojav JRE / PRoot 容器** 三个分组现在各自可折叠展开，**默认全部折叠**。三个来源共 11 条版本行，全展开会把「卸载 / 重装 / 安装」三键顶出屏幕，而这三个按钮才是本板块的主要操作。
+- 折叠时分组标题末尾标出「**已选 Java 17**」（仅当该来源持有当前选中项）—— 那三个按钮作用于当前选中项，不标出来的话折叠状态下根本看不出它们会作用到哪一份 Java 上。展开时不显示，因为选中的那一行有高亮边框。
+- 「PRoot 容器」分组内新增 **Ubuntu 版本胶囊切换控件**：左「Ubuntu 20.04」、右「Ubuntu 22.04」，选中项为蓝色胶囊背景，切换时蓝色背景**滑动**到另一侧（260ms 缓动），而不是瞬移 —— 瞬移会让用户怀疑是否真的切换了，尤其在随后的版本列表也跟着变的时候，两个变化叠在一起很难判断因果。
+- 字体、颜色、圆角、间距全部沿用现有取值：胶囊轨道用 `FieldGray`、选中块用 `Indigo`，圆角 17dp（内块 14dp 与轨道同心），文字 12sp。
+- 切换发行版与版本**在同一次写入里完成**（`applyRuntimeSelection(..., prootDistro=)`）：两个发行版的可用版本不同，分两次写会撞上 config 落盘的 300ms 防抖，中间态还可能写出该发行版装不上的组合。
+
+### 新增：PRoot Linux 容器（第三种运行环境）
+
+- 新增 `JavaVendor.Proot`「PRoot 容器」分类，可在 App 内下载 Ubuntu rootfs（纯用户态，**不提供 Root 权限**）并用 apt 安装 glibc JDK。支持 **Ubuntu 20.04 (focal)** 与 **Ubuntu 22.04 (jammy)**。
+- 可安装版本由发行版决定，也是唯一真相来源（`ProotDistro.availableJavaVersions`）：focal 提供 Java 8/11/17，jammy 提供 Java 11/17/21；**两者都不提供 Java 25**（Ubuntu arm64 源确实没有该包，提示语固定为「该容器不提供」，不是「暂未支持」）。
+- 服务端目录以 `--bind=<host serverDir>:/srv/mineserve` 进入来宾，因此世界 / 插件 / 备份 / FTP / 文件管理全部沿用原有宿主路径，应用其余部分无需改动。
+- 新增 `ProotContainerProfile`（`data/ProotContainer.kt`）作为「发行版 × Java 版本」的路径唯一真相来源，取代此前散落在 `TermuxRuntime` 里的硬编码；新增 `ProotContainerCatalogTest`（33 项）与 `JavaVendorCapabilityTest` 守卫版本矩阵与画像推导。
+- 新增 `isProotGuestRuntime(vendor, version)` 作为唯一的路由谓词：`Proot → true`；`Termux → version == Java8`；`Fcl → false`。全部 `when (javaVersion)` 分支改为查这一个谓词，避免多处各自判断而漂移。
+
+### 修正：Java 8 归入「PRoot 容器」分类
+
+- **Java 8 不再列在「Termux JDK」下**。它在 Termux 分组里本来就跑在 proot 容器内，与「PRoot 容器」分组列出的是**同一个容器** —— 同一份运行时列两遍，用户会以为有两份而重复安装，或看不懂磁盘占用为何翻倍。现在 Java 8 只出现在它真正所属的「PRoot 容器」分组下。
+- 分组说明同步订正：Termux 分组那句「Java 8 例外，它跑在 proot 容器内」在一个已经不含 Java 8 的分组里只会让人找不着，已改为直接说明 Java 8 属于下面的 PRoot 容器。
+- PRoot 的 Java 8 版本行新增说明「**仅 Ubuntu 20.04（focal）提供此项**；发行版切到 22.04 后它不再可用」，避免用户换发行版后以为已装的 Java 8 丢了。
+- **历史配置自动归一**：老配置里的 `Termux + Java8` 在**读盘时**被改写为 `Proot + Java8` 并把 `prootDistro` 对齐到 focal（`McConfig.normalizeProotRuntime()`，放在 `ServerRepository.decodeConfigLenient` 里，与既有的 `Stun → Frp` 迁移同一处）。归一是磁盘 → 内存的唯一入口做的，`configFlow` 与 `ensureConfigLoaded` 都经过它，不会出现「界面显示的发行版」与「实际启动用的发行版」分叉。
+- **归一不改变实际运行的容器**：归一前后都是 focal + Java 8，已装环境不受影响、无需重新安装。`isProotGuestRuntime` 也仍然接受 `Termux + Java8`，作为归一之外的兜底。由 `JavaRuntimeCatalogTest` 的归一测试组钉住（合法性、指向同一容器、不误伤其他组合、幂等）。
+- `LegacyJava8Distro` 成为遗留 Java 8 发行版的**唯一常量**，`legacyJava8Profile` 与配置归一共用，避免两处各写一份 focal 后出现「配置指向 A、启动找 B」。
+
+### 新增：运行环境下拉框的「PRoot Linux 容器」选项
+
+- 启动抽屉的「运行环境」下拉框此前只有 `Termux Java` / `Pojav JRE` / `PHP` 三项，`JavaVendor.Proot` **没有对应选项**：选了 PRoot 的用户打开抽屉会看到「Termux Java」被选中，而版本列表又是 Termux 的那一份 —— 界面显示的来源与实际运行的来源不一致。现已补上独立的「PRoot Linux 容器」选项（`ENV_PROOT_JAVA`）。
+- 选中该选项时，版本行下方新增**发行版**选择（Ubuntu 20.04 / 22.04），且排在版本之前 —— 发行版决定版本列表，顺序反了会让人以为「换了发行版版本却没变」是 bug。
+- 发行版与版本**一次写入**（`applyRuntimeSelection(..., prootDistro=)`）并按新发行版重新对齐版本：focal 与 jammy 的可用版本不同，沿用旧版本会写出一个装不上的组合。
+- 下拉框里的版本列表只列**当前发行版确实提供**的版本（依赖页则是列并集再置灰，两处刻意不同，见 ARCHITECTURE）。
+- `setJavaRuntime` 也加了发行版校验作为第二道保险：写进 config 的组合一旦装不上，用户要到启动失败时才会发现。
+
+### 改进：单 JDK 卸载（apt 级）
+
+- 此前 `deleteJava` 的 Proot 分支直接删除整个 rootfs，而一个 rootfs 里可以装多个 JDK（focal 有 8/11/17）——用户在界面上只点了「卸载 Java 17」，实际却把 Java 8、11 一起清掉了，属**静默数据丢失**级别的问题。
+- 现在改为进容器 `apt-get purge` **只卸载目标版本**，rootfs 与其余 Java 版本保留（`containerJavaUninstallCommand` + `uninstallProotJava`）。
+- 刻意**不做 `autoremove`**：多版本共存时它可能拔掉其他 JDK 仍需要的公共依赖（如 `ca-certificates` / `fontconfig`），问题要到下次启动才暴露。只 purge 目标包。
+- 卸载前先跑 `dpkg --configure -a` / `apt-get -f install` 恢复半途中断的软件包事务，避免 dpkg 锁或未配置包导致卸载失败。
+- 卸载后校验**所有**已知 JRE 布局（Java 8 的包把 JRE 放在 `jre/bin/java`，只查新 layout 会漏判），未清理干净则整个操作报告失败且**不改动任何宿主文件**。
+- 新增「**删除容器**」独立入口与 `deleteProotContainer(distro)`，用于回收整个容器的磁盘空间；确认弹窗显示可回收容量。与「卸载某个 Java 版本」是两个不同粒度，因此入口分开。
+- 新增 `env_proot_delete_container_confirm` 等文案，卸载与重装确认语改为如实说明影响范围（此前「不影响另一个来源与其他 Java 版本」对 Proot 而言是**假的**）。
+
+### 修复
+
+- **修复诊断页对 PRoot 来源误报「无需 proot」**：`prootRequired` 此前只判 `Termux && Java8`，选中「PRoot 容器」来源时该检查会显示「无需 proot」并标为 `NotApplicable` —— 而 proot 正是这条链路赖以启动的东西，容器起不来时这条会把用户引向完全错误的方向。现统一由 `isProotGuestRuntime(vendor, version)` 决定。
+- **修复 Proot 来源的字体检查查错了地方**：`autoRepairRuntime` 此前只判 `javaVersion == Java8`，于是 `Proot + Java 17` 会掉进宿主修复分支 —— 对着**宿主** prefix 跑 apt 补 fontconfig、检查宿主 `etc/fonts/fonts.conf`，而来宾用的是容器里的那一套。结果是容器缺字体时报「已就绪」，或往宿主装一堆容器根本用不到的东西。现所有来宾链路（`isProotGuestRuntime`）统一走容器内检查与修复，并新增 `fontRuntimeDiagnostic(vendor, version)` 供诊断页使用；宿主侧的 `fontRuntimeReady(version)` 加了 `require` 挡住误用。
+- **修复 Termux + Java 8 的 IPv6 判定错误**：该组合实际运行在 focal 容器内（与 `Proot + focal` 是同一个容器），来宾里是 glibc loader，按 bionic 构建的 `libipv6fix` 无法加载。此前 `ipv6ListenAvailable` 只看 `jvmFlavor`，用户选 Termux + Java 8 + PatchedJdk 时会得到 `true`，进而把 Allay 写成 `enablev6: true`，启动时抛 `UnsupportedAddressTypeException`。现先判「是否走来宾容器」再判 flavor。
+- **修复 PRoot 下 `killOrphanMcProcess` 可能误杀健康服务端**：PRoot 链路下 `mcProcess` 注册的是 proot 追踪器本身，真实 java 是其子进程且 pid 不同；`killOrphanMcProcess(null)`（由 `fixUsrBin()` → `ensureAptWorking()` / `autoRepairRuntime()` / MCP `repair_runtime` 触达）在 PRoot 下会退化成 `.jar && nogui` 匹配，可能 SIGKILL 一个正常运行的服务端。现在同时用「排除 `descendantPids(trackedPid)` + 自身」与「未指定目标目录且已有追踪进程时跳过」两道守卫。
+- 孤儿进程匹配抽到 `runtime/OrphanProcessMatch.kt`（`matchesManagedServer`），同时接受宿主 serverDir 与来宾 `/srv/mineserve` 两种形式，并如实记录「`/srv/mineserve` 无法区分多实例」这一已知局限（`OrphanProcessMatchingTest`，8 项）。
+- **修复「请先停止服务端再重装 Java」文案**：该提示也用于卸载与删除容器，现改为中性的「请先停止服务端，再改动 Java 运行环境」（中英双份，`err_java_running` 此前只在 `strings_missing.xml` 里有英文）。
+
+### 诊断与安装进度
+
+- 诊断页新增**容器分层状态**检查（每个发行版一条）：把容器拆成 rootfs 是否存在 / shell 是否可用 / 就绪标记 / 已装版本列表四层报告。只报一句「未安装」会把两种代价完全不同的情况混为一谈 —— rootfs 缺失要重跑几百兆下载，而「容器好了但没装 Java」只是一次 apt 安装。仅「解压不完整」标为可一键修复。
+- `installJava(onProgress)` 现在对 PRoot 来源也回调进度，按阶段划分：rootfs 下载解压 0–60（内部再按下载 85% / 解压修复 15% 细分）、容器内 apt 安装 60–100。此前只有 FCL 会回调，容器安装全程进度圈不动，数分钟的等待会被当成卡死。
+
+### 文案与提示订正（三种 Java 来源逐条核对）
+
+- Termux 分组说明不再笼统称「由 apt 安装、IPv6 由兼容层接管」——Java 8 例外，它跑在 proot 容器里，兼容层不生效。
+- Termux 的 Java 8 标注「与 PRoot 容器分类下的 Ubuntu 20.04 是同一个容器」，避免用户误以为有两份、重复安装或误解磁盘占用。
+- 新增 `JavaVendorCapabilityTest`：把「文案声称的能力」与「代码实际的能力」逐条对齐（Termux 的 Java 8 例外、FCL 自带 IPv6、PRoot 不支持 IPv6 监听、`Proot.versions` 等于各发行版可用版本并集、FCL 包体积 37–62MB）。文案与实现分居两个文件，改一边忘一边是常态，这类不一致不会崩、只会静默说错话，因此用测试钉住。
+
+### 兼容性说明（已接受的破坏性变更）
+
+- Termux + Java 8 与 PRoot + focal 已合并为同一条逻辑路径（`legacyJava8Profile` 就是 `ProotContainerProfile(Focal, Java8)`），**不再为旧版本做零迁移兼容**：删除了 `ProotDistro.reusesLegacyJava8Paths`、`LegacyJava8` 别名，以及 `java8Rootfs` / `java8ReadyMarker` / `ubuntuJava8Home` 三个遗留访问器与独立的 `installJava8Ubuntu()`。
+- 容器路径统一按发行版命名（`focal-rootfs` / `jammy-rootfs`），不再编码 Java 版本——同一个 rootfs 本就能装任意受支持的 JDK，装完 Java 8 再装 Java 17 不必重下 rootfs。
+- **代价**：升级前已装 Java 8 的用户会看到「未安装」，需重新安装一次。旧目录 `var/lib/mineserve/java8-ubuntu-rootfs` 与旧标记 `java-8-ubuntu-ready` 不再被引用，也**不自动删除**（避免误删用户数据），用户可手动删除以回收空间。
+- **回滚注意**：旧版本 App 读到 `selectedJavaVendor = Proot` 会解析失败（枚举值未知）。
+
 ## 1.2.7
 
 修复了一些已知 bug。
@@ -24,9 +107,9 @@
 ### 依赖库打包（重要修复）
 
 - 修复「一键安装依赖库」在部分机型（如荣耀 Magic 6）上执行 `apt-get` 立即崩溃的问题：原生依赖库此前只存在于代码内的清单里，而 `app/src/main/jniLibs/` 目录实际**不存在**，一个库都没打进 APK，运行时的释放逻辑始终空转，`apt`/`dpkg` 在动态链接阶段因找不到 `libandroid-glob.so` 直接退出（外在表现为等待数秒后报错、无任何日志、无网络请求）。
-- 现已打包 19 个依赖库（约 7.7 MB）。全部取自 App 自身安装的同一份 Termux rootfs（`bootstrap-2026.05.24-r1+apt.android-7`，SHA-256 与 `BootstrapInstaller` 中硬编码的校验值一致），确保运行环境版本完全对齐。
+- 现已打包 21 个依赖库（约 7.7 MB）。除 `libtalloc.so` / `libandroid-shmem.so` 两个 deb 外，全部取自 App 自身安装的同一份 Termux rootfs（`bootstrap-2026.05.24-r1+apt.android-7`，SHA-256 与 `BootstrapInstaller` 中硬编码的校验值一致），确保运行环境版本完全对齐。
 - 依赖闭包逐一核验：`libapt-pkg` 所需的 13 个库全部在内，不引入新的缺失链；`libandroid-glob.so` 的 NEEDED 仅 `libc.so`。
-- `libtalloc.so.2` 与 `libandroid-shmem.so` 属于 proot 依赖链，官方 rootfs 内确实不存在（proot 为运行时安装），保留兜底条目不打包。
+- `libtalloc.so.2` 与 `libandroid-shmem.so` 属于 proot 依赖链，**同样打进了 APK**：此前曾以「官方 rootfs 里没有 proot」为由把这两个库排除在清单外，代价是真机上 `bin/proot.bin` 链接失败 → Ubuntu 容器起不来 → Java 8 装不上，且 apt 需要 proot 才能装 proot 的依赖，用户没有任何自救路径。两个库已从 App 同一个 Termux 源（`libtalloc` / `libandroid-shmem` 两个 deb）取到，一并打包（见 `NativeLibraryBundler.kt` 第三批清单）。
 - 第三方预编译库不再执行 strip，构建过程也不再依赖 NDK。
 - 新增 `BundledLibrariesTest` 回归测试：静态比对「打包清单 vs jniLibs 实际文件」并校验 arm64 ELF 头，此类「清单有、文件没有」的错位今后由 CI 直接拦截。
 
@@ -82,7 +165,7 @@
 
 - 下载页新增 PocketMine-MP 与 Allay 两个基岩版核心，选择按钮样式与 PowerNukkitX 一致（同款微红底色），默认 UDP 端口 19132。
 - PocketMine-MP：版本列表来自 pmmp 官方通道（仅 5.x 稳定版），下载后以 `PocketMine-MP.phar` 落盘；首次启动自动下载 PocketMine 专用 PHP 运行环境（Android aarch64 原生构建，含 chunkutils2/encoding/leveldb/pmmpthread 等全部必需扩展，多服务器共享）并以 `php PocketMine-MP.phar --no-wizard` 启动，无需 Java。注意：Termux 自带的 php 缺少必需扩展，无法用于 PocketMine。
-- Allay：版本列表来自 GitHub Releases，启动需要 Java 21 及以上（低于 21 自动切换，未安装则明确提示），以 `java -jar` 运行；首次启动前自动生成 `server-settings.yml` 并禁用 IPv6 绑定（Allay 默认同时绑定 IPv6，在 Android 上会抛 UnsupportedAddressTypeException 导致网络接口启动失败），端口随应用配置写入。
+- Allay：版本列表来自 GitHub Releases，启动需要 Java 21 及以上（低于 21 自动切换，未安装则明确提示），以 `java -jar` 运行；首次启动前自动生成 `server-settings.yml`，端口随应用配置写入。IPv6 绑定**按设备能力条件处理**（见 `McServerController.kt` 的 `config.ipv6ListenAvailable`）：当前 JVM 确实支持 IPv6 监听时，首次生成配置写 `enablev6: true`，且此后不再改写已有配置，改不改由用户在 Allay 配置里自行决定；只有在**确实绑不上** IPv6 时（Allay 默认同时绑定 `::`，Android/Termux openjdk 会抛 `UnsupportedAddressTypeException` 导致网络接口启动失败）才写 `enablev6: false` 并在每次启动时纠正。
 
 ### FTP 文件管理与 SakuraFrp
 
@@ -100,7 +183,7 @@
 ### MCP 服务
 
 - 内嵌 Model Context Protocol 服务器（Streamable HTTP）：局域网内的 AI 助手（Claude、ZCode 等 MCP 客户端）可连接手机，远程管理服务器。
-- 工具扩展至 17 个：服务器管理（状态、列表、切换活动服务器、启动/停止）、MC 控制台（发送命令、读取最多 2000 行日志）、Termux 运行环境（执行命令并返回输出与退出码，支持超时）、服务器文件管理（列目录、读写、删除、改名、建目录，沙盒限定在服务器目录内）、模组（Modrinth 搜索、安装、已装列表）。
+- 工具扩展至 57 个：服务器管理（状态、列表、切换活动服务器、启动/停止）、MC 控制台（发送命令、读取最多 2000 行日志）、Termux 运行环境（执行命令并返回输出与退出码，支持超时）、服务器文件管理（列目录、读写、删除、改名、建目录，沙盒限定在服务器目录内）、模组（Modrinth 搜索、安装、已装列表）。
 - 多服务器支持：文件、日志、模组与启动工具均接受 `server` 参数按名称/目录名定位，缺省使用活动服务器；`select_server` 切换会持久化。
 - 新增 `upload_file`（base64 上传电脑文件到手机服务器目录，大文件分块 append）与 `extract_archive`（解压 zip/tar/tar.gz/tar.bz2/tar.xz，自动跳过路径穿越与符号链接条目），支持从电脑传输模组、存档等；`import_server` 一键将上传的服务端压缩包解压注册为新服务器（自动识别核心与版本，识别不出也按「导入/未知核心」登记）。
 - 保活服务默认开启：应用启动 3 秒内自动拉起前台保活服务并注册周期检查（仍可在保活页手动关闭）。

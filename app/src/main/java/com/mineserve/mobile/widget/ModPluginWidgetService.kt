@@ -1,5 +1,7 @@
 package com.mineserve.mobile.widget
 
+import android.appwidget.AppWidgetManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -14,6 +16,8 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 import java.util.jar.JarFile
 
 /** 模组与插件组件的列表数据源（含 jar 内图标提取与缓存）。 */
@@ -29,57 +33,12 @@ class ModPluginWidgetService : RemoteViewsService() {
         override fun onCreate() {}
 
         override fun onDataSetChanged() {
-            val app = McApplication.get(context)
-            val pluginManager = PluginManager(app.termuxRuntime, app)
-            val config = runCatching { kotlinx.coroutines.runBlocking { app.repository.configFlow.first() } }.getOrNull()
-            val core = config?.installedCores?.find { it.name == config.activeCoreName }
-            val dirName = core?.dirName
-            if (dirName == null) {
-                rows = emptyList()
-                return
-            }
-            val root = app.termuxRuntime.installer.rootDir
-            val modsDir = File(root, "home/servers/$dirName/mods")
-            val pluginsDir = File(root, "home/servers/$dirName/plugins")
-
-            val list = mutableListOf<Row>()
-            val mods = runCatching { pluginManager.readMods(dirName) }.getOrDefault(emptyList())
-            if (mods.isNotEmpty()) {
-                list += Row(
-                    context.getString(R.string.widget_mod_label),
-                    context.getString(R.string.widget_mod_count, mods.size), null, ""
-                )
-                mods.forEach { mod ->
-                    list += Row(
-                        mod.baseName,
-                        statusText(mod.isEnabled),
-                        WidgetIconCache.modIcon(File(modsDir, mod.fileName)),
-                        mod.baseName.take(1).uppercase()
-                    )
-                }
-            }
-            val plugins = runCatching {
-                kotlinx.coroutines.runBlocking { pluginManager.scan(dirName) }
-            }.getOrDefault(emptyList())
-            if (plugins.isNotEmpty()) {
-                list += Row(
-                    context.getString(R.string.widget_plugin_label),
-                    context.getString(R.string.widget_plugin_count, plugins.size), null, ""
-                )
-                plugins.forEach { plugin ->
-                    list += Row(
-                        plugin.meta?.name ?: plugin.baseName,
-                        statusText(plugin.isEnabled),
-                        WidgetIconCache.pluginIcon(File(pluginsDir, plugin.fileName)),
-                        (plugin.meta?.name ?: plugin.baseName).take(1).uppercase()
-                    )
-                }
-            }
-            rows = list
+            // onDataSetChanged 由 AppWidgetManager 经 binder 回调，跑在本进程主线程；其中原先
+            // 用 runBlocking 读 DataStore 并在主线程扫 JarFile / 解压图标，jar 多时会 ANR
+            //（本进程同时托管 MC 服务端）。这里只读进程内快照，缓存由后台线程预取。
+            rows = cache?.rows ?: emptyList()
+            requestReload(context)
         }
-
-        private fun statusText(enabled: Boolean): String =
-            context.getString(if (enabled) R.string.widget_status_enabled else R.string.widget_status_disabled)
 
         override fun onDestroy() {}
         override fun getCount(): Int = rows.size
@@ -104,6 +63,119 @@ class ModPluginWidgetService : RemoteViewsService() {
         }
 
         override fun getLoadingView(): RemoteViews? = null
+
+        companion object {
+            /** 后台构建好的快照。signature 用于判断内容是否变化（Bitmap 不参与比较）。 */
+            private data class Snapshot(val signature: String, val rows: List<Row>)
+
+            @Volatile private var cache: Snapshot? = null
+            @Volatile private var loading = false
+            /** 加载进行中又有新请求：标记为 pending，当前加载结束后补跑一次，避免丢更新。 */
+            @Volatile private var pending = false
+
+            private val executor: ExecutorService =
+                Executors.newSingleThreadExecutor { r -> Thread(r, "mod-plugin-widget-load") }
+
+            /**
+             * 触发后台重建（单飞 + 尾随补跑）。缓存为空（冷启动）时立即执行；
+             * 单个线程串行构建，通知密集时合并，保证最后一次数据变化不会丢失。
+             */
+            private fun requestReload(context: Context) {
+                if (loading) {
+                    pending = true
+                    return
+                }
+                loading = true
+                val appContext = context.applicationContext
+                executor.execute {
+                    try {
+                        do {
+                            pending = false
+                            val snapshot = buildSnapshot(appContext)
+                            // 仅在内容真正变化时通知列表刷新，否则会「通知→重建→通知」自激循环。
+                            val changed = snapshot.signature != cache?.signature
+                            cache = snapshot
+                            if (changed) notifyListChanged(appContext)
+                        } while (pending)
+                    } catch (_: Throwable) {
+                    } finally {
+                        loading = false
+                        // 关闭瞬间到达的请求可能在 pending 检查之后，补触发一次即可收敛。
+                        if (pending) requestReload(appContext)
+                    }
+                }
+            }
+
+            /** 在后台线程完成配置读取、目录扫描与图标解码。 */
+            private fun buildSnapshot(context: Context): Snapshot {
+                val app = McApplication.get(context)
+                val pluginManager = PluginManager(app.termuxRuntime, app)
+                val config = runCatching {
+                    kotlinx.coroutines.runBlocking { app.repository.configFlow.first() }
+                }.getOrNull()
+                val core = config?.installedCores?.find { it.name == config.activeCoreName }
+                val dirName = core?.dirName ?: return Snapshot("", emptyList())
+                val root = app.termuxRuntime.installer.rootDir
+                val modsDir = File(root, "home/servers/$dirName/mods")
+                val pluginsDir = File(root, "home/servers/$dirName/plugins")
+
+                val list = mutableListOf<Row>()
+                val mods = runCatching { pluginManager.readMods(dirName) }.getOrDefault(emptyList())
+                if (mods.isNotEmpty()) {
+                    list += Row(
+                        context.getString(R.string.widget_mod_label),
+                        context.getString(R.string.widget_mod_count, mods.size), null, ""
+                    )
+                    mods.forEach { mod ->
+                        list += Row(
+                            mod.baseName,
+                            statusText(context, mod.isEnabled),
+                            WidgetIconCache.modIcon(File(modsDir, mod.fileName)),
+                            mod.baseName.take(1).uppercase()
+                        )
+                    }
+                }
+                val plugins = runCatching {
+                    kotlinx.coroutines.runBlocking { pluginManager.scan(dirName) }
+                }.getOrDefault(emptyList())
+                if (plugins.isNotEmpty()) {
+                    list += Row(
+                        context.getString(R.string.widget_plugin_label),
+                        context.getString(R.string.widget_plugin_count, plugins.size), null, ""
+                    )
+                    plugins.forEach { plugin ->
+                        val title = plugin.meta?.name ?: plugin.baseName
+                        list += Row(
+                            title,
+                            statusText(context, plugin.isEnabled),
+                            WidgetIconCache.pluginIcon(File(pluginsDir, plugin.fileName)),
+                            title.take(1).uppercase()
+                        )
+                    }
+                }
+                val signature = buildString {
+                    append(dirName).append('\n')
+                    list.forEach {
+                        append(it.title).append('\u0001').append(it.subtitle).append('\u0001').append(it.initial).append('\n')
+                    }
+                }
+                return Snapshot(signature, list)
+            }
+
+            private fun statusText(context: Context, enabled: Boolean): String =
+                context.getString(if (enabled) R.string.widget_status_enabled else R.string.widget_status_disabled)
+
+            private fun notifyListChanged(context: Context) {
+                runCatching {
+                    val manager = AppWidgetManager.getInstance(context)
+                    val ids = manager.getAppWidgetIds(ComponentName(context, ModPluginWidget::class.java))
+                    // getAppWidgetIds 返回 IntArray（非空类型），IntArray 上没有 isNullOrEmpty。
+                    if (ids.isNotEmpty()) {
+                        manager.notifyAppWidgetViewDataChanged(ids, R.id.widget_mod_list)
+                    }
+                }
+            }
+        }
     }
 }
 

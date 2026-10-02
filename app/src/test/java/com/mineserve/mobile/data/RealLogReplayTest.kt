@@ -114,25 +114,4 @@ class RealLogReplayTest {
         }
     }
 
-    @Test
-    fun printRealTrace() {
-        var cur = StartupPhase.PreparingEnvironment
-        println("================ 真实日志回放（进度条实际走向）================")
-        println("%-34s %-24s %6s  %s".format("日志（节选）", "识别阶段", "进度", "进度条动作"))
-        println("-".repeat(96))
-        for (l in realLog) {
-            val p = startupPhaseForLog(l)
-            val name = p?.name ?: "—"
-            val prog = (p?.progress ?: 0f) * 100
-            val action = when {
-                p == null -> "不判定"
-                p.progress > cur.progress -> { cur = p; "★ 前进" }
-                else -> "忽略(不倒退)"
-            }
-            val shown = if (l.length > 32) l.take(32) + "…" else l
-            println("%-34s %-24s %5.0f%%  %s".format(shown, name, prog, action))
-        }
-        println("-".repeat(96))
-        println("最终：${cur.name} (${(cur.progress*100).toInt()}%)")
-    }
 }

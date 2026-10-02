@@ -1,0 +1,308 @@
+{
+  "version": 1,
+  "_comment": [
+    "MineServe Mobile 崩溃日志规则表。",
+    "设计：把「识别一种崩溃 -> 给出主信息 + 建议操作」的知识从代码里抽出来，",
+    "改成数据驱动，新增/修订规则不需要改动 Kotlin 代码。",
+    "加载顺序（后者覆盖前者）：内置本文件 -> {filesDir}/error_rules/*.json（用户自定义，可用 App 内文件管理器写入）。",
+    "规则字段：",
+    "  id        必填，唯一标识。用户自定义规则同 id 时覆盖内置规则。",
+    "  level     可选，Identified | Possible | Reminder，默认 Identified。",
+    "  contains  可选，字符串数组；日志中出现任意一项即命中（不区分大小写）。",
+    "  regex     可选，正则表达式；与 contains 是「或」关系。",
+    "  label/detail/evidence/suggest  必填/可选文案。",
+    "占位符（四个文案字段内通用）：",
+    "  $1..$9    regex 的第 N 个捕获组（无 regex 或未捕获时为空串）。",
+    "  $java     classVersions 对正则第 1 个捕获组的查表结果，如 61 -> Java 17；查不到时为空串。",
+    "  $0        regex 整段匹配。"
+  ],
+  "classVersions": {
+    "45": 1,
+    "46": 2,
+    "47": 3,
+    "48": 4,
+    "49": 5,
+    "50": 6,
+    "51": 7,
+    "52": 8,
+    "53": 9,
+    "54": 10,
+    "55": 11,
+    "56": 12,
+    "57": 13,
+    "58": 14,
+    "59": 15,
+    "60": 16,
+    "61": 17,
+    "62": 18,
+    "63": 19,
+    "64": 20,
+    "65": 21,
+    "66": 22,
+    "67": 23,
+    "68": 24,
+    "69": 25,
+    "70": 26
+  },
+  "rules": [
+    {
+      "id": "java-class-version",
+      "level": "Identified",
+      "contains": [
+        "UnsupportedClassVersionError",
+        "class file version",
+        "has been compiled by a more recent version"
+      ],
+      "regex": "class file version\\s+(\\d+)",
+      "label": "Java 版本不兼容",
+      "detail": "核心、插件或模组使用了当前 Java 无法加载的 class 版本（$java）。",
+      "evidence": "检测到 class file version $1",
+      "suggest": "确认核心官方支持的 Java 范围，并把运行环境切换到对应版本（需要 $java）。"
+    },
+    {
+      "id": "java-version-required",
+      "level": "Identified",
+      "contains": [
+        "Unsupported major.minor version",
+        "requires java",
+        "requires Java",
+        "Java 17 or higher",
+        "Java 21 or higher",
+        "Java 25 or higher",
+        "Minecraft 1.20.5 requires Java 21",
+        "Java 未安装",
+        "Java not installed",
+        "Java 不支持",
+        "Java version is not supported"
+      ],
+      "regex": "Java\\s+(\\d+)\\s+or\\s+higher",
+      "label": "Java 版本要求不满足",
+      "detail": "日志明确指出当前 Java 版本低于核心或依赖的要求。",
+      "evidence": "检测到 requires Java/更高 Java 版本提示",
+      "suggest": "切换到日志和核心官方文档要求的 Java 版本后重新启动。"
+    },
+    {
+      "id": "launch-file-missing",
+      "level": "Identified",
+      "contains": [
+        "Could not find or load main class",
+        "Unable to access jarfile",
+        "unix_args.txt",
+        "quilt-server-launch.jar",
+        "server.jar 不存在",
+        "启动文件缺失"
+      ],
+      "label": "核心启动文件不完整",
+      "detail": "启动入口或 installer 生成的产物缺失。",
+      "evidence": "检测到主类、jar 或启动参数文件缺失",
+      "suggest": "确认核心安装已完成；Forge/NeoForge/Quilt 需要先成功执行 installer。"
+    },
+    {
+      "id": "classpath-mismatch",
+      "level": "Identified",
+      "contains": [
+        "NoSuchMethodError",
+        "NoClassDefFoundError",
+        "ClassNotFoundException",
+        "NoSuchFieldError",
+        "IncompatibleClassChangeError"
+      ],
+      "label": "依赖或版本不匹配",
+      "detail": "运行时找不到类、方法或字段，通常来自核心、插件、模组或库版本不一致。",
+      "evidence": "检测到类/方法/字段链接错误",
+      "suggest": "检查首个异常涉及的 jar，移除最近添加的插件/模组，并核对 Minecraft 与加载器版本。"
+    },
+    {
+      "id": "mod-mismatch",
+      "level": "Possible",
+      "contains": [
+        "mixin apply failed",
+        "mixin",
+        "mod loading has failed",
+        "loading errors encountered",
+        "failed to load mod",
+        "fabricloader"
+      ],
+      "label": "模组不匹配",
+      "detail": "模组加载或 Mixin 注入失败。",
+      "evidence": "检测到模组加载/Mixin 错误",
+      "suggest": "核对 Minecraft、Forge/NeoForge/Fabric/Quilt 和所有模组版本；逐个停用最近更新的模组。"
+    },
+    {
+      "id": "plugin-mismatch",
+      "level": "Possible",
+      "contains": [
+        "paper-plugin.yml",
+        "plugin.yml",
+        "invalid plugin",
+        "could not load plugin",
+        "failed to load plugin",
+        "Unsupported API version",
+        "插件不匹配",
+        "插件加载失败"
+      ],
+      "label": "插件不匹配或加载失败",
+      "detail": "日志包含插件加载失败、API 版本不支持或插件描述异常。",
+      "evidence": "检测到插件加载/API 错误",
+      "suggest": "检查报错前后列出的插件，下载与当前服务端核心和 Minecraft 版本匹配的版本。"
+    },
+    {
+      "id": "port-bind",
+      "level": "Identified",
+      "contains": [
+        "Address already in use",
+        "BindException",
+        "Failed to bind",
+        "FAILED TO BIND TO PORT",
+        "端口被占用",
+        "Cannot assign requested address"
+      ],
+      "regex": "Failed to bind to port\\s+(\\d+)",
+      "label": "端口无法监听",
+      "detail": "服务端无法绑定配置的地址或端口{{（端口 $1）}}，通常是端口已被占用。",
+      "evidence": "检测到 bind 失败 $1",
+      "suggest": "关闭占用该端口的旧进程，或修改 server.properties/pnx.yml 里的端口后重启{{（当前端口 $1）}}。"
+    },
+    {
+      "id": "eula-not-accepted",
+      "level": "Identified",
+      "contains": [
+        "You need to agree to the EULA",
+        "eula=false",
+        "EULA"
+      ],
+      "label": "EULA 未接受",
+      "detail": "服务端因为 EULA 状态未满足而拒绝启动。",
+      "evidence": "检测到 EULA/eula=false",
+      "suggest": "阅读对应服务端的最终用户许可协议，确认接受后再重新启动；本应用不会代替用户同意协议。"
+    },
+    {
+      "id": "runtime-permission",
+      "level": "Identified",
+      "contains": [
+        "Permission denied",
+        "permission denied",
+        "Operation not permitted",
+        "execve",
+        "PROOT_TMP_DIR"
+      ],
+      "label": "运行环境权限异常",
+      "detail": "启动脚本、临时目录或 PRoot 依赖没有可用权限。",
+      "evidence": "检测到 Permission denied/PROOT_TMP_DIR",
+      "suggest": "检查应用存储权限、临时目录可写性和运行环境诊断结果；不要删除服务器数据。"
+    },
+    {
+      "id": "network-download",
+      "level": "Possible",
+      "contains": [
+        "Could not resolve host",
+        "Temporary failure resolving",
+        "UnknownHostException",
+        "Connection timed out",
+        "download failed"
+      ],
+      "label": "依赖或资源下载失败",
+      "detail": "核心启动或安装过程需要的网络资源未能获取。",
+      "evidence": "检测到 DNS、超时或下载失败",
+      "suggest": "检查网络/VPN、镜像源和 libraries 缓存后重试。"
+    },
+    {
+      "id": "jna-native",
+      "level": "Possible",
+      "contains": [
+        "libc.so.6",
+        "com.sun.jna.Native",
+        "Did not JNA classes",
+        "udev library"
+      ],
+      "label": "Java/JNA 本地库限制",
+      "detail": "JNA/OSHI 需要的 glibc 或 udev 能力在 Android/Termux 中可能不存在。",
+      "evidence": "检测到 libc.so.6/JNA/udev",
+      "suggest": "这是运行环境兼容性提示，不等同于 Minecraft 主线程崩溃；以首个真正异常为准。"
+    },
+    {
+      "id": "out-of-memory",
+      "level": "Identified",
+      "contains": [
+        "OutOfMemoryError",
+        "Java heap space",
+        "GC overhead limit exceeded",
+        "Cannot reserve enough space"
+      ],
+      "label": "内存不足",
+      "detail": "Java 堆或系统内存不足。",
+      "evidence": "检测到 OOM/heap space",
+      "suggest": "降低视距、插件/模组数量和 -Xmx；同时检查 Android 是否终止后台进程。"
+    },
+    {
+      "id": "process-killed",
+      "level": "Identified",
+      "exitCodes": [137],
+      "contains": [
+        "SIGKILL",
+        "Killed"
+      ],
+      "label": "进程被系统终止",
+      "detail": "exit=137 或 SIGKILL 通常表示进程被系统或外部强制终止。",
+      "evidence": "检测到 exit=137/SIGKILL",
+      "suggest": "检查设备内存压力、电池优化和后台限制；不要只根据此项断定是 Java 异常。"
+    },
+    {
+      "id": "fontconfig-missing",
+      "level": "Possible",
+      "contains": [
+        "fontconfig",
+        "fc-cache",
+        "fontconfig error",
+        "Fontconfig head is null"
+      ],
+      "label": "字体运行库缺失",
+      "detail": "Forge/NeoForge 等核心的字体初始化依赖未完整安装。",
+      "evidence": "检测到 fontconfig/fc-cache",
+      "suggest": "先补齐字体运行库和缓存；无图形模式可能仍可继续，但图形相关功能会受限。"
+    },
+    {
+      "id": "jvm-create-failed",
+      "level": "Identified",
+      "contains": [
+        "Could not create the Java Virtual Machine",
+        "Error occurred during initialization of VM",
+        "Unrecognized option",
+        "Unrecognized VM option",
+        "no main manifest attribute"
+      ],
+      "label": "JVM 启动参数错误",
+      "detail": "JVM 无法按给定参数启动，常见于手写的自定义启动命令里用了当前 Java 不支持的参数。",
+      "evidence": "检测到 VM 初始化失败/无法识别的选项",
+      "suggest": "检查高级设置里的自定义启动命令与 JVM 参数，去掉当前 Java 版本不支持的选项。"
+    },
+    {
+      "id": "corrupt-core",
+      "level": "Identified",
+      "contains": [
+        "Invalid or corrupt jarfile",
+        "zip END header not found",
+        "invalid LOC header",
+        "Unexpected end of ZLIB input stream"
+      ],
+      "label": "核心文件损坏",
+      "detail": "服务端 jar 或某个依赖包下载不完整/已损坏。",
+      "evidence": "检测到 jar 损坏或 zip 结构错误",
+      "suggest": "删除并重新下载该核心（或对应的 libraries 缓存）后重试；下载中断是常见原因。"
+    },
+    {
+      "id": "world-corrupt",
+      "level": "Possible",
+      "contains": [
+        "Failed to load level",
+        "Chunk file at",
+        "is missing or corrupt",
+        "level.dat"
+      ],
+      "label": "世界存档异常",
+      "detail": "服务端读取世界存档失败，通常是 level.dat 或区块文件损坏。",
+      "evidence": "检测到世界/区块读取失败",
+      "suggest": "先从备份快照恢复该世界；若没有备份，可考虑重置世界（会丢失存档，请先确认）。"
+    }
+  ]
+}

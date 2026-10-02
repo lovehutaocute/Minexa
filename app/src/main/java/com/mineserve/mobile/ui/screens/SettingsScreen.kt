@@ -81,7 +81,20 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
             Spacer(Modifier.height(8.dp))
             DebouncedTextField(
                 value = config.maxHeapMb.toString(),
-                onValueChange = { v -> v.toIntOrNull()?.let { vm.setMaxHeap(it) } },
+                onValueChange = { v ->
+                    // 内存上限范围 256–65536 MB，超界自动收敛并提示（不静默改值）
+                    v.toIntOrNull()?.let { raw ->
+                        val mb = raw.coerceIn(256, 65536)
+                        if (mb != raw) {
+                            android.widget.Toast.makeText(
+                                context,
+                                context.getString(R.string.set_max_heap_range_hint),
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        vm.setMaxHeap(mb)
+                    }
+                },
                 sanitize = { it.filter(Char::isDigit) },
                 singleLine = true,
                 label = { Text(stringResource(R.string.s1006)) },

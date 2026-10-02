@@ -125,6 +125,50 @@ object AppUpdateService {
         url
     )
 
+    /**
+     * 校验下载到的 APK 与当前已安装应用的**签名**一致。
+     *
+     * 为什么必须做：升级通道本身就是代码执行通道，而 [downloadUrls] 里全是第三方 GitHub 反代
+     * （ghfast.top / gh-proxy.com / …），它们对内容不作任何承诺。[isApk] 只看「是 zip 且
+     * 内含 AndroidManifest.xml」，投毒者只要构造一个合法 APK 就能通过。
+     *
+     * `installApk` 那侧已经比对了包名（挡住"换个包名装成第二个应用"），签名比对补上剩下的：
+     * 同包名但不同签名时，系统 PackageInstaller 其实也会拒绝安装，但那是"装到最后一步才失败"，
+     * 用户只会看到一句含糊的失败；在这里提前判掉，能给出明确的错误并避免把 APK 交给安装器。
+     *
+     * 任一环节拿不到信息（解析失败、旧 API、无签名）都返回 false ——
+     * 装更新这种事宁可失败，也不能在无法确认来源时放行。
+     */
+    internal fun verifySignature(context: android.content.Context, apk: File): Boolean {
+        val pm = context.packageManager
+        val installed = signatureDigests(pm, context.packageName) ?: return false
+        val archive = runCatching {
+            @Suppress("DEPRECATION")
+            pm.getPackageArchiveInfo(apk.absolutePath, android.content.pm.PackageManager.GET_SIGNATURES)
+        }.getOrNull() ?: return false
+        @Suppress("DEPRECATION")
+        val candidate = archive.signatures
+            ?.mapNotNull { sig -> sig?.toByteArray()?.let { sha256Of(it) } }
+            ?.toSet()
+            .orEmpty()
+        return candidate.isNotEmpty() && candidate.any { it in installed }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun signatureDigests(pm: android.content.pm.PackageManager, packageName: String): Set<String>? {
+        val info = runCatching {
+            pm.getPackageInfo(packageName, android.content.pm.PackageManager.GET_SIGNATURES)
+        }.getOrNull() ?: return null
+        val digests = info.signatures
+            ?.mapNotNull { sig -> sig?.toByteArray()?.let { sha256Of(it) } }
+            ?.toSet()
+            .orEmpty()
+        return digests.ifEmpty { null }
+    }
+
+    private fun sha256Of(bytes: ByteArray): String =
+        java.security.MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { "%02x".format(it) }
+
     fun isApk(file: File): Boolean = file.length() > 256 * 1024 && runCatching {
         ZipFile(file).use { it.getEntry("AndroidManifest.xml") != null }
     }.getOrDefault(false)

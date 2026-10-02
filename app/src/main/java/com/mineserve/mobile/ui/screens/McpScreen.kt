@@ -3,7 +3,10 @@ package com.mineserve.mobile.ui.screens
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.net.Uri
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,6 +36,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.R
+import com.mineserve.mobile.mcp.McpSkillDoc
 import com.mineserve.mobile.mcp.McpToolCatalog
 import com.mineserve.mobile.mcp.McpServerManager
 import com.mineserve.mobile.ui.BackBar
@@ -55,6 +60,9 @@ import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * MCP（Model Context Protocol）服务设置：
@@ -98,6 +106,35 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
         Toast.makeText(context, R.string.mcp_copied, Toast.LENGTH_SHORT).show()
     }
 
+    // 默认只监听 127.0.0.1：此时局域网 IP 地址根本不通，必须如实显示回环地址，否则用户照着连必然失败。
+    val endpoint = if (config.mcpAllowLan) "http://$lanIp:${config.mcpPort}/mcp"
+        else "http://127.0.0.1:${config.mcpPort}/mcp"
+
+    // 技能文档：端点/令牌/工具清单都在导出时现算，用户拿到文件就能直接交给 AI
+    val skillDoc = remember(endpoint, config.mcpToken) { McpSkillDoc.build(endpoint, config.mcpToken) }
+    val scope = rememberCoroutineScope()
+    val skillExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/markdown")
+    ) { uri: Uri? ->
+        if (uri != null) {
+            scope.launch {
+                val failure = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val output = context.contentResolver.openOutputStream(uri)
+                            ?: throw IllegalStateException(context.getString(R.string.mcp_skill_open_failed))
+                        output.use { it.write(skillDoc.toByteArray(Charsets.UTF_8)) }
+                    }.exceptionOrNull()
+                }
+                Toast.makeText(
+                    context,
+                    if (failure == null) context.getString(R.string.mcp_skill_exported)
+                    else context.getString(R.string.mcp_skill_export_failed, failure.message ?: ""),
+                    Toast.LENGTH_LONG
+                ).show()
+            }
+        }
+    }
+
     Column(Modifier.fillMaxSize()) {
         BackBar(stringResource(R.string.mcp_title), onBack)
         Column(
@@ -135,6 +172,26 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                     )
                     Spacer(Modifier.width(6.dp))
                     Text(statusText, fontSize = 11.sp, color = Muted)
+                }
+            }
+
+            // 监听地址开关：默认只绑 127.0.0.1（更安全），需要手机以外的 AI 助手接入时才显式开放局域网。
+            // 修改后由 McpServerManager 观察到 (mcpAllowLan) 变化自动重启服务生效。
+            McCard(title = "局域网访问") {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("允许局域网访问", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            if (config.mcpAllowLan) "局域网内任何设备都可访问，请保管好令牌"
+                            else "仅本机（127.0.0.1）可访问",
+                            fontSize = 11.sp,
+                            color = Muted
+                        )
+                    }
+                    Switch(
+                        checked = config.mcpAllowLan,
+                        onCheckedChange = { allow -> vm.updateConfig { it.copy(mcpAllowLan = allow) } }
+                    )
                 }
             }
 
@@ -190,10 +247,16 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
             }
 
             McCard(title = stringResource(R.string.mcp_endpoint)) {
-                val endpoint = "http://$lanIp:${config.mcpPort}/mcp"
                 SelectionContainer {
                     Text(endpoint, fontFamily = FontFamily.Monospace, fontSize = 12.sp)
                 }
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    if (config.mcpAllowLan) "局域网内任何设备都可访问，请保管好令牌"
+                    else "仅本机可访问（默认只监听 127.0.0.1）",
+                    fontSize = 11.sp,
+                    color = Muted
+                )
                 Spacer(Modifier.height(6.dp))
                 Button(
                     onClick = { copyToClipboard(endpoint) },
@@ -204,7 +267,12 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(12.dp))
                 Text(stringResource(R.string.mcp_client_config), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 Spacer(Modifier.height(2.dp))
-                Text(stringResource(R.string.mcp_client_config_desc), fontSize = 11.sp, color = Muted)
+                Text(
+                    if (config.mcpAllowLan) stringResource(R.string.mcp_client_config_desc)
+                    else "将以下片段加入 MCP 客户端配置（仅本机可访问，地址固定为 127.0.0.1）",
+                    fontSize = 11.sp,
+                    color = Muted
+                )
                 Spacer(Modifier.height(6.dp))
                 val snippet = """{
   "mcpServers": {
@@ -223,6 +291,23 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 OutlinedButton(onClick = { copyToClipboard(snippet) }) {
                     Text(stringResource(R.string.mcp_copy))
+                }
+            }
+
+            McCard(title = stringResource(R.string.mcp_skill)) {
+                Text(stringResource(R.string.mcp_skill_desc), fontSize = 11.sp, color = Muted)
+                Spacer(Modifier.height(8.dp))
+                Row {
+                    Button(
+                        onClick = { skillExportLauncher.launch(McpSkillDoc.FILE_NAME) },
+                        colors = ButtonDefaults.buttonColors(containerColor = Indigo)
+                    ) {
+                        Text(stringResource(R.string.mcp_skill_export))
+                    }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { copyToClipboard(skillDoc) }) {
+                        Text(stringResource(R.string.mcp_skill_copy))
+                    }
                 }
             }
 

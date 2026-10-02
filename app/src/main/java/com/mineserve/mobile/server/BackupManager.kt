@@ -1,5 +1,6 @@
 package com.mineserve.mobile.server
 
+import android.util.Log
 import com.mineserve.mobile.runtime.TermuxRuntime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -46,6 +47,8 @@ class BackupManager(private val termux: TermuxRuntime) {
     )
 
     private val snapshotDir: File get() = File(termux.installer.rootDir, "home/snapshots")
+
+    private val TAG = "BackupManager"
 
     private fun worldDir(dirName: String): File =
         File(termux.installer.rootDir, "home/servers/$dirName/world")
@@ -213,41 +216,119 @@ class BackupManager(private val termux: TermuxRuntime) {
     suspend fun restoreWorldFromExternal(file: File, dirName: String): Boolean = withContext(Dispatchers.IO) {
         try {
             if (!file.exists()) return@withContext false
+            // 与 restoreServerFromExternal / restoreSnapshot 保持一致：先在原世界未动的前提下整包校验。
+            // 缺了这一步，坏 zip 或半截下载会先把旧世界挪走甚至删掉，再解压失败——
+            // 用户看到「还原失败」，数据却已经没了。
+            if (!validateZipFile(file)) {
+                Log.w(TAG, "restoreWorldFromExternal: ${file.name} 校验未通过，已拒绝还原（原世界未改动）")
+                return@withContext false
+            }
             stopServerIfRunning()
             val serverDir = serverDir(dirName)
-            // 备份旧 world
             val dims = if (PowerNukkitXLayout.isPowerNukkitX(serverDir)) {
                 listOf(PowerNukkitXLayout.worldsDirectory)
             } else listOf("world", "world_nether", "world_the_end")
-            dims.forEach { dim ->
+            // 备份旧 world。rename 失败时**不能**直接 deleteRecursively：
+            // 那等于在没能保留副本的情况下主动毁掉用户唯一的世界。
+            // 退化为「复制成 .bak 再删」，复制也不成功就中止还原，原世界保持原样。
+            val backedUp = mutableListOf<Pair<File, File>>()
+            for (dim in dims) {
                 val d = File(serverDir, dim)
-                if (d.exists()) {
-                    val bak = File(serverDir, "$dim.bak.${ts()}")
-                    if (!d.renameTo(bak)) d.deleteRecursively()
+                if (!d.exists()) continue
+                val bak = File(serverDir, "$dim.bak.${ts()}")
+                if (d.renameTo(bak)) {
+                    backedUp += d to bak
+                } else if (d.copyRecursively(bak, overwrite = true)) {
+                    if (!d.deleteRecursively()) {
+                        Log.w(TAG, "restoreWorldFromExternal: $dim 已复制备份但原目录删除失败，继续还原")
+                    }
+                } else {
+                    Log.e(TAG, "restoreWorldFromExternal: 无法备份 $dim，已中止还原（原世界保持不变）")
+                    return@withContext false
                 }
             }
-            extractZipToDir(file, serverDir)
+            val extract = runCatching { extractZipToDir(file, serverDir) }
+            val hasWorld = dims.any { dim ->
+                val d = File(serverDir, dim)
+                d.isDirectory && d.listFiles()?.isNotEmpty() == true
+            }
+            if (extract.isFailure || !hasWorld) {
+                // 解压失败、或解出来的根本不是世界：回滚到备份，不留空壳服务端目录。
+                Log.e(TAG, "restoreWorldFromExternal: 解压失败或内容不是世界，正在回滚", extract.exceptionOrNull())
+                dims.forEach { File(serverDir, it).deleteRecursively() }
+                backedUp.forEach { (original, bak) -> bak.renameTo(original) }
+                return@withContext false
+            }
             true
-        } catch (e: Exception) { false }
+        } catch (e: Exception) {
+            Log.e(TAG, "restoreWorldFromExternal: ${e.message}", e)
+            false
+        }
     }
 
     /**
      * 从外部 zip 还原整个服务器（zip 内为服务器目录相对路径）。
      * @param overwrite true 时覆盖同名目录，false 时目标存在则失败（用于重名检测）
+     *
+     * 覆盖时的顺序是「先校验 → 解压到暂存目录 → 再换入」，**全程不先删原目录**：
+     *
+     * 旧实现是 `target.deleteRecursively()` 之后直接对着 target 解压。zip 损坏、
+     * 半截下载、解压中途异常，任何一种都会让原目录已经不存在、也无法回滚，
+     * 用户只看到一句「还原失败」——数据实际已经没了。这个是不可逆的，
+     * 而 zip 恰恰是「本来就可能有问题」的东西（用户从别处拷来的）。
      */
     suspend fun restoreServerFromExternal(file: File, targetDirName: String, overwrite: Boolean): Boolean = withContext(Dispatchers.IO) {
+        // 暂存目录无论成败都要清掉，别在 rootDir/tmp 里留垃圾。
+        var staging: File? = null
         try {
             if (!file.exists()) return@withContext false
-            stopServerIfRunning()
-            val target = serverDir(targetDirName)
-            if (target.exists()) {
-                if (!overwrite) return@withContext false
-                target.deleteRecursively()
+
+            // ① 先整包校验（全条目 CRC 读一遍）。这一步在动原目录之前，失败就原样返回。
+            if (!validateZipFile(file)) {
+                Log.w(TAG, "restoreServerFromExternal: ${file.name} 校验未通过，已拒绝还原（原目录未改动）")
+                return@withContext false
             }
-            target.mkdirs()
-            extractZipToDir(file, target)
+
+            stopServerIfRunning()
+
+            val target = serverDir(targetDirName)
+            if (target.exists() && !overwrite) return@withContext false
+
+            // ② 解压到独立暂存目录。放在 rootDir/tmp 下而不是 servers/ 旁边——
+            //    servers/ 的子目录会被当作服务器实例全量列出来（McViewModel 按 isDirectory 枚举）。
+            val stageDir = File(termux.installer.rootDir, "tmp/restore-${System.currentTimeMillis()}")
+            staging = stageDir
+            stageDir.mkdirs()
+            try {
+                extractZipToDir(file, stageDir)
+            } catch (e: Exception) {
+                Log.e(TAG, "restoreServerFromExternal: 解压失败: ${e.message}", e)
+                return@withContext false // 原目录一步都没动过
+            }
+
+            // ③ 换入。先把旧目录改名暂离（同分区 rename），失败就整体放弃。
+            var rollback: File? = null
+            if (target.exists()) {
+                val old = File(termux.installer.rootDir, "tmp/restore-old-${System.currentTimeMillis()}")
+                if (!target.renameTo(old)) {
+                    Log.e(TAG, "restoreServerFromExternal: 无法暂离 ${target.name}，已中止覆盖（原目录未改动）")
+                    return@withContext false
+                }
+                rollback = old
+            }
+            if (!stageDir.renameTo(target)) {
+                Log.e(TAG, "restoreServerFromExternal: 换入失败，正在回滚")
+                rollback?.let { if (it.renameTo(target)) Log.i(TAG, "已回滚到还原前状态") }
+                return@withContext false
+            }
+            rollback?.deleteRecursively()
             true
-        } catch (e: Exception) { false }
+        } catch (e: Exception) {
+            Log.e(TAG, "restoreServerFromExternal failed: ${e.message}", e)
+            false
+        } finally {
+            runCatching { staging?.deleteRecursively() }
+        }
     }
 
     /** 解析新旧外部备份命名；无法识别的导入 ZIP 延续旧行为，按服务器备份处理。 */
@@ -290,8 +371,6 @@ class BackupManager(private val termux: TermuxRuntime) {
         return ExternalBackupInfo(BackupKind.Server, null, "default", null, modifiedTime)
     }
 
-    fun isWorldExternalBackup(name: String): Boolean = parseExternalBackup(name).kind == BackupKind.World
-
     /** 兼容新旧服务器命名，目录名含下划线时通过时间字段定位，不再按 split 推测。 */
     fun parseServerZipInfo(name: String): Pair<String, String?> {
         val info = parseExternalBackup(name)
@@ -314,9 +393,6 @@ class BackupManager(private val termux: TermuxRuntime) {
         files.drop(keepCount).forEach { (file, _) -> file.delete() }
     }
 
-    /** 旧接口：只解析目录名（保留兼容） */
-    fun parseServerDirFromZip(name: String): String? = parseServerZipInfo(name).first
-
     /** 删除外部备份文件 */
     fun deleteExternalBackup(name: String): Boolean {
         val f = File(ExternalBackupStore.rootDir, name)
@@ -335,8 +411,16 @@ class BackupManager(private val termux: TermuxRuntime) {
     }
 
     /** 校验 zip 完整性：遍历全部条目并读取数据（触发 CRC 校验），损坏返回 false */
-    fun validateZip(name: String): Boolean {
-        val file = File(ExternalBackupStore.rootDir, name)
+    fun validateZip(name: String): Boolean =
+        validateZipFile(File(ExternalBackupStore.rootDir, name))
+
+    /**
+     * 同 [validateZip]，但直接针对文件对象。
+     *
+     * 还原流程需要在**动原目录之前**校验来源 zip，而那时手上只有 `File`（可能来自 SAF 临时拷贝，
+     * 不一定在 ExternalBackupStore.rootDir 里）。
+     */
+    fun validateZipFile(file: File): Boolean {
         if (!file.exists() || !file.isFile) return false
         return try {
             java.util.zip.ZipFile(file).use { zip ->
@@ -373,6 +457,12 @@ class BackupManager(private val termux: TermuxRuntime) {
         try {
             val snapshotFile = File(snapshotDir, snapshotName)
             if (!snapshotFile.exists() || !snapshotFile.isFile) return@withContext false
+            // 还原前先校验整包可读性：失败必须在这里就返回，因为下一步就是把当前世界删掉。
+            // 否则后面的 deleteRecursively 已经把当前世界清了，失败就变成永久数据丢失。
+            if (!isValidZip(snapshotFile)) {
+                Log.e(TAG, "restoreSnapshot: 快照不是完整 zip，已中止还原: $snapshotName")
+                return@withContext false
+            }
 
             // 1. 停止服务器（如果在运行）
             if (termux.isMcRunning()) {
@@ -418,6 +508,22 @@ class BackupManager(private val termux: TermuxRuntime) {
         } catch (e: Exception) {
             false
         }
+    }
+
+    /**
+     * 压缩包是否可完整读取。
+     *
+     * 用 [ZipFile] 走中央目录：比逐个条目解压更快，而且能检出「尾部中央目录缺失」
+     * 这种典型截断。zip-slip 类的单条目多数 ballistic 情况仍要靠 [extractZipToDir] 的路径校验。
+     */
+    private fun isValidZip(file: File): Boolean = try {
+        java.util.zip.ZipFile(file).use { zip ->
+            zip.entries().toList()
+            true
+        }
+    } catch (e: Exception) {
+        Log.w(TAG, "invalid zip ${file.name}: ${e.message}")
+        false
     }
 
     /** 删除快照文件 */
@@ -470,6 +576,7 @@ class BackupManager(private val termux: TermuxRuntime) {
     }
 
     private companion object {
+        const val TAG = "BackupManager"
         const val NEW_TIME = "yyyy-MM-dd_HH-mm-ss"
         const val LEGACY_TIME = "yyyyMMdd_HHmmss"
         val NEW_BACKUP = Regex("^(world|server)_(.+)_(\\d{4}-\\d{2}-\\d{2}_\\d{2}-\\d{2}-\\d{2})(?:_(.*))?_(手动|自动)$")

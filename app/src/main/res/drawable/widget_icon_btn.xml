@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 组件上的图标按钮底：浅色主题下图标是深色、底色要浅；夜间主题反之。
+     没有这层底的时候，纯白图标压在白色卡片上等于隐形。 -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="oval">
+    <solid android:color="@color/indigo_soft" />
+</shape>

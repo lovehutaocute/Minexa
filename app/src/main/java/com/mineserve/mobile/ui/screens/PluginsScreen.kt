@@ -261,6 +261,8 @@ fun PluginsScreen(vm: McViewModel) {
     }
     val pluginsPath = vm.currentPluginsPath()
     val isServerRunning = serverState.isRunning
+    // 插件冲突检测接近 O(n²)，用 remember 缓存，避免每次重组全量重算
+    val pluginConflicts = remember(installedPlugins) { vm.detectPluginConflicts(installedPlugins) }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -440,8 +442,9 @@ fun PluginsScreen(vm: McViewModel) {
             when (activeTab) {
                 PluginTab.Installed -> InstalledTab(
                     installed = installedPlugins,
-                    conflicts = vm.detectPluginConflicts(installedPlugins),
+                    conflicts = pluginConflicts,
                     activeCoreExists = activeCore != null,
+                    serverRunning = isServerRunning,
                     onToggle = { vm.togglePluginEnabled(it.fileName) },
                     onDelete = { pendingDelete = it },
                     onShowDetail = { detailPlugin = it }
@@ -462,6 +465,7 @@ fun PluginsScreen(vm: McViewModel) {
                     activeCoreExists = activeCore != null,
                     coreType = coreType,
                     currentServerVersion = activeCore?.version ?: config.mcVersion,
+                    serverRunning = isServerRunning,
                     modrinthResults = modrinthResults,
                     modrinthLoaders = modrinthLoaders,
                     modrinthGameVersions = modrinthGameVersions,
@@ -641,6 +645,7 @@ private fun InstalledTab(
     installed: List<PluginManager.InstalledPlugin>,
     conflicts: List<String>,
     activeCoreExists: Boolean,
+    serverRunning: Boolean,
     onToggle: (PluginManager.InstalledPlugin) -> Unit,
     onDelete: (PluginManager.InstalledPlugin) -> Unit,
     onShowDetail: (PluginManager.InstalledPlugin) -> Unit
@@ -656,6 +661,12 @@ private fun InstalledTab(
         if (installed.isEmpty()) {
             EmptyHint(icon = Icons.Outlined.Extension, text = stringResource(R.string.s771))
             return@McCard
+        }
+
+        // 服务端运行中禁止启用/禁用或删除插件（文件正被 JVM 占用，改动不会生效且易损坏）
+        if (serverRunning) {
+            Spacer(Modifier.height(6.dp))
+            Text(stringResource(R.string.pl_running_block), color = Coral, fontSize = 11.sp, lineHeight = 15.sp)
         }
 
         // 插件冲突警告
@@ -742,6 +753,7 @@ private fun InstalledTab(
             filtered.forEach { p ->
                 InstalledPluginRow(
                     plugin = p,
+                    enabled = !serverRunning,
                     onToggle = { onToggle(p) },
                     onDelete = { onDelete(p) },
                     onShowDetail = { onShowDetail(p) }
@@ -754,6 +766,7 @@ private fun InstalledTab(
 @Composable
 private fun InstalledPluginRow(
     plugin: PluginManager.InstalledPlugin,
+    enabled: Boolean,
     onToggle: () -> Unit,
     onDelete: () -> Unit,
     onShowDetail: () -> Unit
@@ -832,6 +845,7 @@ private fun InstalledPluginRow(
         Switch(
             checked = plugin.isEnabled,
             onCheckedChange = { onToggle() },
+            enabled = enabled,
             modifier = Modifier.size(width = 36.dp, height = 20.dp)
         )
         Spacer(Modifier.size(6.dp))
@@ -841,299 +855,10 @@ private fun InstalledPluginRow(
                 .size(28.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(CoralSoft)
-                .clickable { onDelete() },
+                .clickable(enabled = enabled) { onDelete() },
             contentAlignment = Alignment.Center
         ) {
             Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(14.dp))
-        }
-    }
-}
-
-// ── 精选推荐标签 ────────────────────────────────────────────────────
-
-@Composable
-private fun CuratedTab(
-    curatedList: List<PluginManager.CuratedPlugin>,
-    downloadProgress: Map<String, McViewModel.PluginDownloadProgress>,
-    curatedUpdates: Map<String, PluginManager.CuratedUpdateInfo>,
-    isCheckingUpdates: Boolean,
-    coreType: ServerCore,
-    isCuratedInstalled: (PluginManager.CuratedPlugin) -> Boolean,
-    onInstall: (PluginManager.CuratedPlugin) -> Unit,
-    onCheckUpdates: () -> Unit,
-    onForceRecheck: () -> Unit
-) {
-    McCard(
-        title = stringResource(R.string.s775),
-        trailing = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (isCheckingUpdates) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(12.dp),
-                        color = Indigo,
-                        strokeWidth = 1.5.dp
-                    )
-                    Spacer(Modifier.size(4.dp))
-                }
-                Text(
-                    if (isCheckingUpdates) stringResource(R.string.s776) else stringResource(R.string.s777),
-                    color = Indigo,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.clickable(enabled = !isCheckingUpdates) {
-                        onCheckUpdates()
-                    }
-                )
-            }
-        }
-    ) {
-        Text(
-            stringResource(R.string.s778),
-            color = Muted,
-            fontSize = 10.sp
-        )
-        // 当前核心兼容性彩色提示（醒目展示支持/不支持内容）
-        Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(
-                if (coreType.supportsPlugins) stringResource(R.string.pl_core_supports) else stringResource(R.string.pl_core_unsupported),
-                color = if (coreType.supportsPlugins) Mint else Coral,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-            Text(
-                if (coreType.supportsMods) stringResource(R.string.s781) else stringResource(R.string.s782),
-                color = if (coreType.supportsMods) Mint else Coral,
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            curatedList.forEach { curated ->
-                CuratedPluginRow(
-                    curated = curated,
-                    isInstalled = isCuratedInstalled(curated),
-                    progress = downloadProgress[curated.id],
-                    updateInfo = curatedUpdates[curated.id],
-                    onInstall = { onInstall(curated) }
-                )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        OutlinedButton(
-            onClick = onForceRecheck,
-            enabled = !isCheckingUpdates,
-            shape = RoundedCornerShape(8.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-            Spacer(Modifier.size(4.dp))
-            Text(stringResource(R.string.s783), color = Indigo, fontSize = 11.sp)
-        }
-    }
-
-    // ── 插件资源站点 ──
-    val context = LocalContext.current
-    McCard(title = stringResource(R.string.s765)) {
-        Text(
-            stringResource(R.string.s766),
-            color = Muted,
-            fontSize = 10.sp
-        )
-        Spacer(Modifier.height(8.dp))
-        pluginSites.forEach { site ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        try {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(site.url)))
-                        } catch (e: Exception) { /* 无浏览器时忽略 */ }
-                    }
-                    .padding(vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(site.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        stringResource(site.descRes),
-                        color = Muted,
-                        fontSize = 10.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-                Icon(
-                    Icons.AutoMirrored.Outlined.OpenInNew,
-                    contentDescription = stringResource(R.string.s767),
-                    tint = Indigo,
-                    modifier = Modifier.size(14.dp)
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CuratedPluginRow(
-    curated: PluginManager.CuratedPlugin,
-    isInstalled: Boolean,
-    progress: McViewModel.PluginDownloadProgress?,
-    updateInfo: PluginManager.CuratedUpdateInfo?,
-    onInstall: () -> Unit
-) {
-    val hasUpdate = updateInfo?.hasUpdate == true
-    val context = LocalContext.current
-
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(IndigoSoft)
-            .padding(10.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(36.dp)
-                    .clip(RoundedCornerShape(10.dp))
-                    .background(Brush.linearGradient(listOf(Indigo, Mint))),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    curated.avatarText,
-                    color = Color.White,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold
-                )
-            }
-            Spacer(Modifier.size(10.dp))
-            Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        curated.name,
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                    if (isInstalled) {
-                        Spacer(Modifier.size(6.dp))
-                        BadgeChip(text = stringResource(R.string.s735), color = Mint, bg = MintSoft)
-                    }
-                    if (hasUpdate) {
-                        Spacer(Modifier.size(4.dp))
-                        BadgeChip(text = stringResource(R.string.s784), color = Coral, bg = CoralSoft)
-                    }
-                }
-                Text(
-                    stringResource(R.string.s785, curated.author),
-                    color = Muted,
-                    fontSize = 10.sp
-                )
-                Text(
-                    curated.description,
-                    color = Muted,
-                    fontSize = 10.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
-                // 版本信息
-                if (updateInfo != null) {
-                    Spacer(Modifier.height(2.dp))
-                    Row(
-                        modifier = Modifier
-                            .clickable {
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(updateInfo.latestReleaseUrl))
-                                context.startActivity(intent)
-                            },
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(Icons.Outlined.Update, contentDescription = null, tint = Indigo, modifier = Modifier.size(10.dp))
-                        Spacer(Modifier.size(3.dp))
-                        val latestLabel = stringResource(R.string.s786)
-                        val currentLabel = stringResource(R.string.s787)
-                        Text(
-                            buildString {
-                                append(latestLabel)
-                                append(updateInfo.latestVersion)
-                                if (updateInfo.installedVersion != null) {
-                                    append(currentLabel)
-                                    append(updateInfo.installedVersion)
-                                }
-                            },
-                            color = if (hasUpdate) Coral else Muted,
-                            fontSize = 9.sp,
-                            fontWeight = if (hasUpdate) FontWeight.SemiBold else FontWeight.Normal
-                        )
-                    }
-                }
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-
-        // 下载进度条
-        if (progress != null) {
-            LinearProgressIndicator(
-                progress = { progress.percent / 100f },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(2.dp)),
-                color = Mint,
-                trackColor = Color.White
-            )
-            Spacer(Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    "${progress.percent}%",
-                    color = Indigo,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    progress.speedText,
-                    color = Muted,
-                    fontSize = 10.sp
-                )
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                stringResource(R.string.s788),
-                color = Muted,
-                fontSize = 10.sp
-            )
-        } else {
-            Button(
-                onClick = onInstall,
-                enabled = !isInstalled || hasUpdate,
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = if (isInstalled && !hasUpdate) MintSoft else Indigo,
-                    disabledContainerColor = MintSoft
-                ),
-                shape = RoundedCornerShape(8.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                when {
-                    isInstalled && hasUpdate -> {
-                        Icon(Icons.Outlined.Update, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.size(4.dp))
-                        Text(stringResource(R.string.s789), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    isInstalled -> {
-                        Text(stringResource(R.string.s790), color = Mint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                    else -> {
-                        Icon(Icons.Outlined.Extension, contentDescription = null, modifier = Modifier.size(14.dp))
-                        Spacer(Modifier.size(4.dp))
-                        Text(stringResource(R.string.s791), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-            }
         }
     }
 }
@@ -1446,6 +1171,7 @@ private fun ModsTab(
     modrinthGameVersions: List<String>,
     selectedModVersion: String,
     onSetModVersion: (String) -> Unit,
+    serverRunning: Boolean,
     onToggle: (String) -> Unit,
     onDelete: (PluginManager.ModEntry) -> Unit,
     onUpload: (Uri) -> Unit,
@@ -1467,6 +1193,11 @@ private fun ModsTab(
 
     // 已安装模组
     McCard(title = stringResource(R.string.s828)) {
+        if (serverRunning) {
+            // 服务端运行中禁止启用/禁用或删除模组（文件正被 JVM 占用，改动不会生效且易损坏）
+            Text(stringResource(R.string.pl_running_block), color = Coral, fontSize = 11.sp, lineHeight = 15.sp)
+            Spacer(Modifier.height(6.dp))
+        }
         if (mods.isEmpty()) {
             Text(
                 stringResource(R.string.s829),
@@ -1504,14 +1235,14 @@ private fun ModsTab(
                                 fontSize = 10.sp
                             )
                         }
-                        TextButton(onClick = { onToggle(mod.fileName) }) {
+                        TextButton(onClick = { onToggle(mod.fileName) }, enabled = !serverRunning) {
                             Text(
                                 if (mod.isEnabled) stringResource(R.string.s749) else stringResource(R.string.s748),
                                 color = if (mod.isEnabled) Coral else Mint,
                                 fontSize = 11.sp
                             )
                         }
-                        IconButton(onClick = { onDelete(mod) }) {
+                        IconButton(onClick = { onDelete(mod) }, enabled = !serverRunning) {
                             Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(18.dp))
                         }
                     }

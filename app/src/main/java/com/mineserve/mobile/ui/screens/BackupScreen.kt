@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Delete
@@ -56,6 +57,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.unit.dp
@@ -65,6 +67,7 @@ import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegPill
+import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.Muted
@@ -103,6 +106,9 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
     }
     // 待删除的外部备份文件（二次确认）
     var pendingDeleteBackup by remember { mutableStateOf<String?>(null) }
+    // 历史私有快照的「还原 / 删除」二次确认目标（破坏性操作，需明确确认）
+    var pendingRestoreSnapshot by remember { mutableStateOf<String?>(null) }
+    var pendingDeleteSnapshot by remember { mutableStateOf<String?>(null) }
     // 权限引导对话框（首次进入未授权弹一次）
     var showPermDialog by remember { mutableStateOf(false) }
     var permDialogShown by remember { mutableStateOf(false) }
@@ -177,11 +183,16 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
             // 外部备份权限引导（未授权时显示，醒目样式）
             Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
+                DebouncedTextField(
                     value = if (config.autoBackupIntervalMin > 0) config.autoBackupIntervalMin.toString() else "",
-                    onValueChange = { vm.setAutoBackupInterval(it.toIntOrNull() ?: 0) },
+                    onValueChange = { raw ->
+                        // 解析失败（空串/非数字）保持原值不提交，避免自动备份被静默写成 0（=关闭）；超界按 5–10080 分钟收敛
+                        raw.toIntOrNull()?.let { vm.setAutoBackupInterval(it.coerceIn(5, 10080)) }
+                    },
+                    sanitize = { it.filter(Char::isDigit) },
                     label = { Text("自定义间隔（分钟）") },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.width(180.dp)
                 )
                 OutlinedTextField(
@@ -192,7 +203,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                     modifier = Modifier.width(150.dp)
                 )
             }
-            Text("间隔范围 5–10080 分钟；保留数量范围 1–100。输入 0 可关闭自动备份。", color = Muted, fontSize = 11.sp)
+            Text("间隔范围 5–10080 分钟；保留数量范围 1–100。关闭自动备份请点上方「关闭」。", color = Muted, fontSize = 11.sp)
 
             if (!hasStoragePerm) {
                 Box(
@@ -403,6 +414,67 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                 )
             }
 
+            // 私有快照还原二次确认（会用旧快照覆盖当前服务器数据）
+            pendingRestoreSnapshot?.let { name ->
+                AlertDialog(
+                    onDismissRequest = { pendingRestoreSnapshot = null },
+                    title = { Text(stringResource(R.string.backup_snapshot_restore_title), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Text(
+                            stringResource(R.string.backup_snapshot_restore_content, name),
+                            color = Muted, fontSize = 12.sp
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingRestoreSnapshot = null
+                            scope.launch {
+                                vm.restoreSnapshot(name)
+                                snackbarHostState.showSnackbar(context.getString(R.string.s336))
+                            }
+                        }) {
+                            Text(stringResource(R.string.s337), color = Indigo, fontWeight = FontWeight.SemiBold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingRestoreSnapshot = null }) {
+                            Text(stringResource(R.string.s402), color = Muted)
+                        }
+                    }
+                )
+            }
+
+            // 私有快照删除二次确认
+            pendingDeleteSnapshot?.let { name ->
+                AlertDialog(
+                    onDismissRequest = { pendingDeleteSnapshot = null },
+                    title = { Text(stringResource(R.string.backup_snapshot_delete_title), fontWeight = FontWeight.Bold) },
+                    text = {
+                        Text(
+                            stringResource(R.string.backup_snapshot_delete_content, name),
+                            color = Muted, fontSize = 12.sp
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(onClick = {
+                            pendingDeleteSnapshot = null
+                            scope.launch {
+                                vm.deleteSnapshot(name)
+                                vm.loadSnapshots()
+                                snackbarHostState.showSnackbar(context.getString(R.string.s338, name))
+                            }
+                        }) {
+                            Text(stringResource(R.string.s339), color = Coral, fontWeight = FontWeight.SemiBold)
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { pendingDeleteSnapshot = null }) {
+                            Text(stringResource(R.string.s402), color = Muted)
+                        }
+                    }
+                )
+            }
+
             // 服务器还原重名冲突对话框
             val conflict by vm.restoreConflict.collectAsState()
             if (conflict != null) {
@@ -469,21 +541,10 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                             ) {
                                 Icon(Icons.Outlined.FileDownload, stringResource(R.string.s335), tint = Indigo, modifier = Modifier.size(18.dp))
                             }
-                            IconButton(onClick = {
-                                scope.launch {
-                                    vm.restoreSnapshot(snap.name)
-                                    snackbarHostState.showSnackbar(context.getString(R.string.s336))
-                                }
-                            }, modifier = Modifier.size(32.dp)) {
+                            IconButton(onClick = { pendingRestoreSnapshot = snap.name }, modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Outlined.Restore, stringResource(R.string.s337), tint = Indigo, modifier = Modifier.size(18.dp))
                             }
-                            IconButton(onClick = {
-                                scope.launch {
-                                    vm.deleteSnapshot(snap.name)
-                                    vm.loadSnapshots()
-                                    snackbarHostState.showSnackbar(context.getString(R.string.s338, snap.name))
-                                }
-                            }, modifier = Modifier.size(32.dp)) {
+                            IconButton(onClick = { pendingDeleteSnapshot = snap.name }, modifier = Modifier.size(32.dp)) {
                                 Icon(Icons.Outlined.Delete, stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(18.dp))
                             }
                         }

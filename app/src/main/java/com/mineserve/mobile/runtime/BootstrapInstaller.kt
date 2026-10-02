@@ -40,14 +40,6 @@ class BootstrapInstaller(private val context: Context) {
     /** MC 服务器日志文件路径（startLogWatcher 监视此文件） */
     val logFile: File get() = File(rootDir, "home/server/logs/latest.log")
 
-    val socketFile: File get() = File(runtimeDir, "mc.sock")
-
-    /** ConsoleSocketServer 使用的 socket 文件（位于 rootDir/tmp） */
-    fun ensureSocketFile(): File {
-        val dir = File(rootDir, "tmp").apply { mkdirs() }
-        return File(dir, "mc.sock")
-    }
-
     private val readyFile: File get() = File(context.filesDir, ".bootstrap_ready")
 
     /** 日志回调，供 UI 显示下载进度 */
@@ -158,29 +150,47 @@ class BootstrapInstaller(private val context: Context) {
         val snapshotsSrc = File(rootDir, "home/snapshots")
         val serversKeep = File(keepDir, "servers")
         val snapshotsKeep = File(keepDir, "snapshots")
-        fun protect(src: File, dst: File) {
-            if (src.exists()) {
-                dst.deleteRecursively()
-                runCatching { src.renameTo(dst) }
-                    .onFailure { Log.w(TAG, "deleteBootstrap: protect ${src.name} failed: ${it.message}") }
-            }
+
+        /**
+         * 把 [from] 整体搬到 [to]。
+         *
+         * `File.renameTo` 失败时**只返回 false、不抛异常**。旧写法是
+         * `runCatching { src.renameTo(dst) }.onFailure { ... }`——那个 onFailure 永远不会触发，
+         * 搬迁失败被彻底静默，紧接着 rootDir 就被整个删掉。必须判返回值。
+         */
+        fun move(from: File, to: File): Boolean {
+            if (!from.exists()) return true
+            to.deleteRecursively()
+            to.parentFile?.mkdirs()
+            val ok = runCatching { from.renameTo(to) }.getOrDefault(false)
+            if (!ok) Log.e(TAG, "deleteBootstrap: 搬迁 ${from.name} 失败（文件被占用 / 权限 / 挂载点变化）")
+            return ok
         }
-        protect(serversSrc, serversKeep)
-        protect(snapshotsSrc, snapshotsKeep)
+
+        val keptServers = move(serversSrc, serversKeep)
+        val keptSnapshots = move(snapshotsSrc, snapshotsKeep)
+
+        // 任何一处没搬走就绝不继续删 rootDir：宁可删除失败让用户重试，
+        // 也不能在数据还躺在原地的时候把整个目录删掉。
+        if (!keptServers || !keptSnapshots) {
+            log("错误：存档搬迁失败，已中止删除以免丢失数据（请关闭可能占用文件的程序后重试）")
+            move(serversKeep, serversSrc)
+            move(snapshotsKeep, snapshotsSrc)
+            runCatching { keepDir.delete() }
+            return
+        }
 
         deleteRetry(rootDir)
 
         // 删除完成后恢复存档与备份到新环境
-        fun restore(dst: File, src: File) {
-            if (src.exists()) {
-                dst.parentFile?.mkdirs()
-                runCatching { src.renameTo(dst) }
-                    .onFailure { Log.w(TAG, "deleteBootstrap: restore ${src.name} failed: ${it.message}") }
-            }
+        val restoredServers = move(serversKeep, serversSrc)
+        val restoredSnapshots = move(snapshotsKeep, snapshotsSrc)
+        if (restoredServers && restoredSnapshots) {
+            runCatching { keepDir.delete() }
+        } else {
+            // 还原失败时**不要**清掉 keepDir —— 数据就留在那里，下次启动还能人工找回。
+            log("警告：部分数据未能还原到新环境，仍保留在 ${keepDir.absolutePath}")
         }
-        restore(serversSrc, serversKeep)
-        restore(snapshotsSrc, snapshotsKeep)
-        runCatching { keepDir.delete() }
         // 强制删除时额外清理 native / runtime / tmp 缓存
         if (force) {
             deleteRetry(nativeDir)
@@ -210,7 +220,10 @@ class BootstrapInstaller(private val context: Context) {
                 // gpgv 包装脚本需要包含 Capabilities（旧版本是 exit 0）
                 (gpgvWrapper.exists() && !gpgvWrapper.readText().contains("Capabilities")) ||
                 // dpkg 包装脚本需要包含兼容符号链接（旧版本未创建导致 .deb 解压位置错误）
-                (dpkgWrapper.exists() && !dpkgWrapper.readText().contains("compat symlink"))
+                (dpkgWrapper.exists() && !dpkgWrapper.readText().contains("compat symlink")) ||
+                // etc/tls/cert.pem 缺失（老版本没补这一处）：apt 的 https 方法会报
+                // "No system certificates available. Try installing ca-certificates"
+                (!File(rootDir, "etc/tls/cert.pem").exists())
             if (needPostSetup) {
                 log("补充配置（旧版本初始化时未生成）...")
                 withContext(Dispatchers.IO) { postSetup() }
@@ -240,10 +253,21 @@ class BootstrapInstaller(private val context: Context) {
                     log("已存在缓存的 rootfs，跳过下载")
                 }
 
-                // 如果 rootDir 已有旧内容（上次提取失败），先清除
+                // 如果 rootDir 已有旧内容（上次提取失败），先清掉——但**必须保留 home/**。
+                //
+                // 为什么不能整个删掉 rootDir：deleteBootstrap() 的存档保护逻辑是
+                // 「把 home/servers、home/snapshots 挪到 .keep_data → 删 rootDir → 再挪回来」，
+                // 所以「删过运行环境、重新初始化」这条路径走到这里时，rootDir 恰好存在、
+                // 却偏偏没有 bin/bash（只剩刚恢复回来的 home/servers）。
+                // 旧写法 `rootDir.deleteRecursively()` 会把用户的整个世界存档、
+                // 核心 jar、插件与配置一起删掉——正好破坏了上层那句「绝不能随依赖一起删」。
                 if (rootDir.exists() && !File(rootDir, "bin/bash").exists()) {
-                    log("清除上次失败的提取...")
-                    rootDir.deleteRecursively()
+                    log("清除上次失败的提取（保留 home/）...")
+                    rootDir.listFiles()?.forEach { entry ->
+                        if (entry.name != "home") {
+                            runCatching { entry.deleteRecursively() }
+                        }
+                    }
                 }
 
                 // 步骤 2: 解压 rootfs（含符号链接处理）
@@ -282,6 +306,10 @@ class BootstrapInstaller(private val context: Context) {
                 onProgress(InstallPhase.DONE, 100)
                 log("Termux 环境初始化完成")
                 true
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 协程被取消不是「安装失败」。吞掉它会让调用方按失败处理（弹错、进入重试），
+                // 而实际的下载/解压并不会因为这次取消而停止，等于取消语义被彻底破坏。
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "bootstrap failed: ${e.message}", e)
                 log("初始化失败: ${e.message}")
@@ -1022,6 +1050,20 @@ esac
             } catch (e: Exception) {
                 // 符号链接失败时直接复制
                 caBundle.copyTo(tlsCaBundle, overwrite = true)
+            }
+        }
+        // 同理补 etc/tls/cert.pem：Termux 官方 ca-certificates 包里它是**符号链接**，
+        // 而 apt 的 https 方法与 curl 默认就读这个路径。解 .deb 的链路一旦丢掉这个链接，
+        // apt 会报 "No system certificates available. Try installing ca-certificates" ——
+        // 它让你去装的那个包早就装过了，用户会陷进无解的循环。
+        val tlsCertPem = File(tlsDir, "cert.pem")
+        if (caBundle.exists() && caBundle.length() > 0L &&
+            (!tlsCertPem.exists() || tlsCertPem.length() == 0L)
+        ) {
+            try {
+                android.system.Os.symlink(caBundle.absolutePath, tlsCertPem.absolutePath)
+            } catch (e: Exception) {
+                caBundle.copyTo(tlsCertPem, overwrite = true)
             }
         }
 

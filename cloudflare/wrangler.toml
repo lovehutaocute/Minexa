@@ -9,6 +9,11 @@ compatibility_date = "2025-01-01"
 binding = "COUNTS"
 id = "626e69d94e9b41e88cc671386af0e71d"
 
+# 运行时 secret（都不进版本库）：
+#   npx wrangler secret put RESET_CODE              # 清空确认码；不配置时 /reset 返回 503
+#   npx wrangler secret put RESET_ALLOWED_ORIGINS    # 可选：允许跨域调用 /reset 的来源，逗号分隔
+#   npx wrangler secret put PULSE_TOKEN              # 可选：配置后 /pulse 必须带同名 header
+#
 # 部署：
 #   npx wrangler deploy
 # 部署后 workers.dev 域名形如：https://mineserve-usage.<你的子域>.workers.dev

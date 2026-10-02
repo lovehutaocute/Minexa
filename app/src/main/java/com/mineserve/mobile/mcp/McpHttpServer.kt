@@ -10,12 +10,17 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketTimeoutException
-import java.util.concurrent.Executors
+import java.util.concurrent.LinkedBlockingQueue
+import java.util.concurrent.RejectedExecutionException
+import java.util.concurrent.ThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 极简 HTTP/1.1 服务器：仅供应用内嵌 MCP 端点使用，不引入第三方依赖。
- *  - ServerSocket 绑定 0.0.0.0:port，线程池每连接一线程，keep-alive 循环
+ *  - ServerSocket 默认只绑 127.0.0.1，[start] 传 bindLan=true 才放开到 0.0.0.0
+ *  - 有界线程池（见 [pool]）+ 并发连接数上限（见 [MAX_CONNECTIONS]），keep-alive 循环
  *  - 支持 Content-Length 与 chunked 请求体（上限 MAX_BODY_BYTES）、Expect: 100-continue
  *  - 所有 I/O 都在独立线程池执行，禁止在主线程调用 start()
  */
@@ -56,6 +61,7 @@ class McpHttpServer(
                 204 -> "No Content"
                 400 -> "Bad Request"
                 401 -> "Unauthorized"
+                403 -> "Forbidden"
                 404 -> "Not Found"
                 405 -> "Method Not Allowed"
                 408 -> "Request Timeout"
@@ -71,9 +77,28 @@ class McpHttpServer(
 
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
-    private val pool = Executors.newCachedThreadPool { r ->
-        Thread(r, "mcp-http").apply { isDaemon = true }
-    }
+
+    /**
+     * 有界线程池：MCP 允许上传大文件、跑耗时命令，单条连接会长时间占用线程。
+     * 原先用 Executors.newCachedThreadPool（无上限），而未鉴权连接在读完整请求前
+     * 就能一直 keep-alive 空转（最长 30s），几百条连接即可耗尽线程/内存。
+     *
+     * 这里用「固定上限 16 线程 + 容量 64 的队列」的 ThreadPoolExecutor：
+     *  - corePoolSize 必须等于 maximumPoolSize —— 否则任务会先堆进队列、直到队列
+     *    满才扩容到 max，实际并发会远低于 16（ThreadPoolExecutor 的已知行为），
+     *    一条长命令就会把其余请求全部堵在队列里
+     *  - 队列满时 AbortPolicy 拒绝，由 [acceptLoop] 兜底关闭该连接
+     *  - core 线程按需惰性创建，MCP 未启用时不会常驻任何线程
+     */
+    private val pool = ThreadPoolExecutor(
+        MAX_POOL_SIZE, MAX_POOL_SIZE, 60L, TimeUnit.SECONDS,
+        LinkedBlockingQueue(QUEUE_CAPACITY),
+        { r -> Thread(r, "mcp-http").apply { isDaemon = true } },
+        ThreadPoolExecutor.AbortPolicy()
+    )
+
+    /** 当前活跃连接数：超过 [MAX_CONNECTIONS] 时在 accept 之后立即拒绝，从入口限流 */
+    private val activeConnections = AtomicInteger(0)
 
     /** 绑定失败原因（端口占用等），供 UI 展示 */
     @Volatile
@@ -85,13 +110,20 @@ class McpHttpServer(
     /** 实际绑定的端口（port 传 0 时为系统分配的端口） */
     val boundPort: Int? get() = serverSocket?.localPort
 
-    /** 绑定并开始监听；返回 false 表示绑定失败 */
-    fun start(): Boolean {
+    /**
+     * 绑定并开始监听；返回 false 表示绑定失败。
+     *
+     * @param bindLan true 时绑 0.0.0.0（局域网可访问）；默认 false 只绑 127.0.0.1，
+     *                避免把可执行特权命令的 MCP 端点暴露给同网段任意主机。
+     *                该参数受 [com.mineserve.mobile.data.McConfig.mcpAllowLan] 控制。
+     */
+    fun start(bindLan: Boolean = false): Boolean {
         if (!running.compareAndSet(false, true)) return true
         return try {
             val ss = ServerSocket()
             ss.reuseAddress = true
-            ss.bind(InetSocketAddress("0.0.0.0", port))
+            val bindAddr = if (bindLan) "0.0.0.0" else "127.0.0.1"
+            ss.bind(InetSocketAddress(bindAddr, port))
             serverSocket = ss
             lastBindError = null
             pool.execute { acceptLoop(ss) }
@@ -117,7 +149,24 @@ class McpHttpServer(
                 if (running.get()) Log.w(TAG, "accept failed: ${e.message}")
                 continue
             }
-            pool.execute { serve(client) }
+            // 并发连接上限：超过就直接关闭，不提交任务。
+            // 必须在入口限流 —— 鉴权发生在 handler 内（读完整请求之后），
+            // 攻击者可用大量未鉴权的空转连接绕过鉴权、长期占满线程池。
+            if (activeConnections.incrementAndGet() > MAX_CONNECTIONS) {
+                activeConnections.decrementAndGet()
+                Log.w(TAG, "connection limit $MAX_CONNECTIONS reached, rejecting ${client.inetAddress?.hostAddress}")
+                runCatching { client.close() }
+                continue
+            }
+            try {
+                pool.execute { serve(client) }
+            } catch (e: RejectedExecutionException) {
+                // 队列已满（正常路径下连接上限会先拦下，这里是防御性兜底），
+                // 必须回补计数并关闭 socket，否则连接数只增不减、accept 循环也会被异常带崩。
+                activeConnections.decrementAndGet()
+                Log.w(TAG, "thread pool saturated, rejecting connection: ${e.message}")
+                runCatching { client.close() }
+            }
         }
     }
 
@@ -158,6 +207,8 @@ class McpHttpServer(
         } catch (e: Exception) {
             Log.d(TAG, "connection ended: ${e.message}")
         } finally {
+            // 无论正常结束、超时还是异常都必须递减，否则计数泄漏会导致后续连接被误拒
+            activeConnections.decrementAndGet()
             runCatching { socket.close() }
         }
     }
@@ -262,6 +313,14 @@ class McpHttpServer(
         private const val TAG = "McpHttpServer"
         private const val READ_TIMEOUT_MS = 30_000
         private const val MAX_HEADER_BYTES = 32 * 1024
+
+        // 有界线程池参数：见 [pool] 的说明。16 个线程足以覆盖正常的 MCP 调用，
+        // 64 的队列给突发流量留一点缓冲，超出即拒绝。
+        private const val MAX_POOL_SIZE = 16
+        private const val QUEUE_CAPACITY = 64
+
+        /** 允许同时在处理的连接上限，超出在 accept 后立即拒绝，防止连接耗尽线程/内存 */
+        private const val MAX_CONNECTIONS = 32
 
         /**
          * 请求体上限：upload_file 以 base64 分块传输大文件（模组/存档），

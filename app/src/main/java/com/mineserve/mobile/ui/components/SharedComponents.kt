@@ -5,16 +5,29 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.ui.res.stringResource
 import com.mineserve.mobile.R
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -27,6 +40,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -48,9 +63,11 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
@@ -68,6 +85,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mineserve.mobile.data.JavaRuntime
+import com.mineserve.mobile.data.JavaVendor
+import com.mineserve.mobile.data.JavaVersion
+import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ServerState
 import com.mineserve.mobile.data.StepStatus
 import kotlinx.coroutines.delay
@@ -188,6 +209,13 @@ fun HeroBlock(
     onlineModeEnabled: Boolean = false,
     isRefreshing: Boolean = false,
     lastRefreshAtMs: Long = 0L,
+    /**
+     * 跳过「启动中」阶段展示（见 [com.mineserve.mobile.data.McConfig.skipStartupProgress]）。
+     *
+     * true 时：不显示「正在启动服务端 · xxx」与阶段进度条，状态行直接按运行中呈现。
+     * 只影响呈现，[ServerState.startupPhase] 本身照常推进。
+     */
+    skipStartupProgress: Boolean = false,
     onRefresh: (() -> Unit)? = null
 ) {
     Box(
@@ -201,8 +229,9 @@ fun HeroBlock(
             .padding(horizontal = 16.dp, vertical = 12.dp)
     ) {
         Column {
-            // 启动中：isRunning 且尚未完成启动（runningSinceMs == 0）
-            val isStarting = state.isRunning && state.runningSinceMs == 0L
+            // 启动中：isRunning 且尚未完成启动（runningSinceMs == 0）。
+            // 用户开了「跳过启动中进度」就当作已经就绪，不再暴露中间态。
+            val isStarting = state.isRunning && state.runningSinceMs == 0L && !skipStartupProgress
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -522,33 +551,6 @@ fun SegPill(
     }
 }
 
-/**
- * Pill 按钮：参考界面 .pill-btn
- */
-@Composable
-fun PillButton(
-    text: String,
-    install: Boolean,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val (bg, fg) = if (install) Indigo to Color.White else CoralSoft to Coral
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(20.dp))
-            .background(bg)
-            .clickable { onClick() }
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-    ) {
-        Text(
-            text,
-            color = fg,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
-        )
-    }
-}
-
 private fun formatMemory(mb: Long): String =
     if (mb >= 1024) String.format("%.1fG", mb / 1024.0) else "${mb}M"
 
@@ -612,18 +614,27 @@ fun DebouncedTextField(
         }
     }
 
-    // 组合移除（切页/销毁）时立即回传未写回内容，避免防抖窗口内输入丢失
+    // 组合移除（切页/销毁）时立即回传未写回内容，避免防抖窗口内输入丢失。
+    // value 是普通参数、不是快照状态，DisposableEffect(Unit) 的闭包只会捕获首帧的值，
+    // 因此用 rememberUpdatedState 取最新值作为比较基准，否则退出时会用旧文本覆盖已生效的新值。
+    val latestValue by rememberUpdatedState(value)
     DisposableEffect(Unit) {
         onDispose {
-            if (text != value) onValueChange(text)
+            if (text != latestValue) onValueChange(text)
         }
     }
 
     OutlinedTextField(
         value = text,
         onValueChange = { newText ->
-            text = sanitize?.invoke(newText) ?: newText
-            editing = true
+            val next = sanitize?.invoke(newText) ?: newText
+            // 仅当清洗后文本真的变化时才进入编辑态：
+            // 若清洗结果与原文本相同，LaunchedEffect(text) 不会重启，editing 会永久卡在 true，
+            // 导致外部值同步失效、退出时把旧文本写回。
+            if (next != text) {
+                text = next
+                editing = true
+            }
         },
         modifier = modifier
             .bringIntoViewRequester(bringIntoViewRequester)
@@ -785,4 +796,301 @@ fun QqGroupDialog(onDismiss: () -> Unit) {
             }
         }
     )
+}
+
+// ══════════════════════════════════════════════════════════════
+// Java 运行环境：来源分组列表
+//
+// 依赖管理页的 Java 板块与概览页「运行环境」弹窗共用这一套渲染，
+// 分组与版本都直接来自 JavaVendor.entries × vendor.versions，
+// 不在这里另抄一份清单 —— 否则两处会各自漂移出「弹窗里能选、依赖页里没有」的错位。
+// ══════════════════════════════════════════════════════════════
+
+/**
+ * 来源分组标题：一行标题 + 一句来源说明，右侧折叠箭头。整行可点，点击切换展开。
+ *
+ * 字体、颜色、圆角与间距沿用原有取值，只多了一个箭头与点击态 ——
+ * 折叠控件不应该看起来像另一个东西。
+ *
+ * 折叠的意义：三个来源的版本行加起来 11 条，默认全展开会把「卸载 / 重装 / 安装」
+ * 三键挤到屏幕外，而这三个按钮才是这个板块的主要操作。
+ */
+@Composable
+fun RuntimeGroupHeader(
+    title: String,
+    note: String,
+    expanded: Boolean,
+    enabled: Boolean = true,
+    onToggle: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(enabled = enabled) { onToggle() }
+            .padding(top = 8.dp, start = 4.dp, end = 4.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                title,
+                color = Indigo,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Text(note, color = Muted, fontSize = 10.sp)
+        }
+        Icon(
+            // 展开时朝上、折叠时朝下：箭头指向「点下去会发生什么」的相反方向是常态，
+            // 但这里用「当前状态」语义更直观 —— 朝下代表内容被收起。
+            imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+            contentDescription = null,
+            tint = Indigo,
+            modifier = Modifier.size(20.dp)
+        )
+    }
+}
+
+/**
+ * Ubuntu 发行版胶囊切换控件。
+ *
+ * 左侧 Ubuntu 20.04、右侧 Ubuntu 22.04；选中项用蓝色胶囊背景标出，
+ * 切换时蓝色背景**滑动**到另一侧而不是瞬移 —— 瞬移会让用户怀疑是否真的切换了，
+ * 尤其在随后的版本列表也跟着变的时候，两个变化叠在一起很难判断因果。
+ *
+ * 两个选项等宽，因此高亮块的宽度就是轨道的一半，位移按索引线性计算，
+ * 不需要测量每个标签的文字宽度。
+ */
+@Composable
+fun ProotDistroPillSwitcher(
+    selected: ProotDistro,
+    enabled: Boolean,
+    onSelect: (ProotDistro) -> Unit
+) {
+    val options = ProotDistro.entries
+    if (options.isEmpty()) return
+    val selectedIndex = options.indexOf(selected).coerceAtLeast(0)
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(34.dp)
+            .clip(RoundedCornerShape(17.dp))
+            .background(FieldGray)
+            .alpha(if (enabled) 1f else 0.5f)
+    ) {
+        val segmentWidth = maxWidth / options.size
+        val highlightOffset by animateDpAsState(
+            targetValue = segmentWidth * selectedIndex,
+            animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+            label = "proot-distro-highlight"
+        )
+        // 高亮块：留 3dp 内边距，所以圆角比轨道小 3dp，视觉上正好同心
+        Box(
+            modifier = Modifier
+                .offset(x = highlightOffset)
+                .width(segmentWidth)
+                .fillMaxHeight()
+                .padding(3.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(Indigo)
+        )
+        Row(Modifier.fillMaxSize()) {
+            options.forEach { distro ->
+                val isSelected = distro == selected
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(enabled = enabled) { onSelect(distro) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        // 胶囊里用短名（「Ubuntu 20.04」）：一半宽度放不下带代号的显示名
+                        distro.shortName,
+                        color = if (isSelected) Color.White else Indigo,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 来源的分组标题文案。 */
+fun JavaVendor.groupTitleRes(): Int = when (this) {
+    JavaVendor.Termux -> R.string.java_group_termux
+    JavaVendor.Fcl -> R.string.java_group_fcl
+    JavaVendor.Proot -> R.string.java_group_proot
+}
+
+/** 来源分组标题下的一句说明。 */
+fun JavaVendor.groupNoteRes(): Int = when (this) {
+    JavaVendor.Termux -> R.string.java_group_termux_note
+    JavaVendor.Fcl -> R.string.java_group_fcl_note
+    JavaVendor.Proot -> R.string.java_group_proot_note
+}
+
+/**
+ * 版本行的一句补充说明；只有能力上确实有差异的版本才有。
+ *
+ * - Proot 的 Java 8：只有 focal 提供它，切到 jammy 后这一项会从列表里消失。
+ *   不提示的话，用户会以为「装好的 Java 8 丢了」。
+ * - Proot 的其他版本：容器内是 glibc 环境，IPv6 兼容层不生效，
+ *   且能装哪些版本取决于所选发行版（见 [ProotDistro.availableJavaVersions]）。
+ *
+ * 注：Java 8 曾挂在 Termux 分组下（那时它已跑在容器里），现已归入 PRoot 分组，
+ * 因此不再有「Termux + Java 8」的说明分支。
+ */
+private fun javaVersionNoteRes(vendor: JavaVendor, version: JavaVersion): Int? =
+    when {
+        vendor == JavaVendor.Proot && version == JavaVersion.Java8 -> R.string.java_note_proot_java8
+        vendor == JavaVendor.Proot -> R.string.java_note_proot_container
+        else -> null
+    }
+
+/**
+ * 弹窗 / 列表里的单个运行环境版本行：选中态用 Mint 边框 + 淡底。
+ *
+ * [busy] 为真时右侧的状态文字换成进度圈 —— 只有正在下载解压的那一行会亮起来，
+ * 否则用户不知道那个 37–62MB 的进度到底是给谁的。
+ */
+@Composable
+fun RuntimeVersionRow(
+    label: String,
+    note: String?,
+    status: String?,
+    statusColor: Color = Muted,
+    selected: Boolean,
+    busy: Boolean = false,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (selected) Mint.copy(alpha = 0.12f) else Color.Transparent)
+            .border(
+                width = if (selected) 1.5.dp else 0.dp,
+                color = if (selected) Mint else Color.Transparent,
+                shape = RoundedCornerShape(10.dp)
+            )
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(
+                label,
+                fontSize = 13.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (selected) Mint else Color.Unspecified
+            )
+            note?.let {
+                Text(it, color = Muted, fontSize = 10.sp)
+            }
+        }
+        if (busy) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Indigo)
+        } else {
+            status?.let {
+                Text(it, color = statusColor, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+/**
+ * Java 运行环境分组列表：三个来源各一段（分组标题 + 组内纯版本号）。
+ *
+ * @param selected 当前选中项，选中态由 [JavaRuntime]（来源 + 版本）决定，
+ *   两套 JDK 的版本号完全重合，只比版本号会串台。
+ * @param enabled 为假时不响应点击（安装中 / 服务器运行中）。
+ * @param inFlight 正在安装的那一项，只在该行显示进度圈。
+ * @param expandedVendors 当前展开的来源集合。**默认空集（全部折叠）**：
+ *   三个来源共 11 条版本行，全展开会把「卸载 / 重装 / 安装」三键顶出屏幕，
+ *   而这三个按钮才是本板块的主要操作。展开状态由调用方持有，
+ *   因为它是界面状态，不该由数据层或 ViewModel 承担。
+ * @param onToggleVendor 点击分组标题时切换该来源的展开状态。
+ * @param prootDistro PRoot 分类当前选中的发行版。PRoot 分类**必须**按它过滤版本：
+ *   `JavaVendor.Proot.versions` 是所有发行版的并集（8/11/17/21），但单个发行版
+ *   只提供其中一部分（focal 无 21、jammy 无 8）。若照并集全列出来，
+ *   用户会看到 "Java 21" 可点、点了却装不上，属于「列表里出现装不上的项」。
+ * @param onDistroChange 切换 PRoot 发行版。必须在**同一次**写入里同时调整版本：
+ *   两个发行版的可用版本不同，沿用旧版本会写出装不上的组合。
+ */
+@Composable
+fun JavaRuntimeGroupList(
+    installed: Set<JavaRuntime>,
+    selected: JavaRuntime,
+    onSelect: (JavaRuntime) -> Unit,
+    enabled: Boolean = true,
+    inFlight: JavaRuntime? = null,
+    expandedVendors: Set<JavaVendor> = emptySet(),
+    onToggleVendor: (JavaVendor) -> Unit = {},
+    prootDistro: ProotDistro = ProotDistro.Default,
+    onDistroChange: (ProotDistro) -> Unit = {}
+) {
+    JavaVendor.entries.forEach { vendor ->
+        val expanded = vendor in expandedVendors
+        // 折叠时把「已选哪一份」写进说明行：三个分组默认全折叠，而下面的
+        // 「卸载 / 重装 / 安装」三键作用于当前选中项 —— 不标出来的话，
+        // 用户在折叠状态下根本看不出这三个按钮会作用到哪一份 Java 上。
+        // 展开时不需要：选中的那一行有 Mint 高亮边框，已经足够显眼。
+        val note = buildString {
+            append(stringResource(vendor.groupNoteRes()))
+            if (!expanded && selected.vendor == vendor) {
+                append(" · ")
+                append(stringResource(R.string.java_group_selected, selected.version.displayName))
+            }
+        }
+        RuntimeGroupHeader(
+            title = stringResource(vendor.groupTitleRes()),
+            note = note,
+            expanded = expanded,
+            onToggle = { onToggleVendor(vendor) }
+        )
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(160)) + expandVertically(tween(220)),
+            exit = fadeOut(tween(120)) + shrinkVertically(tween(180))
+        ) {
+            Column {
+                if (vendor == JavaVendor.Proot) {
+                    // 发行版切换放在版本行之前：它决定下面能列出哪些版本，
+                    // 顺序反了会让人以为「换了发行版版本却没变」是 bug。
+                    Spacer(Modifier.height(6.dp))
+                    ProotDistroPillSwitcher(
+                        selected = prootDistro,
+                        enabled = enabled,
+                        onSelect = onDistroChange
+                    )
+                    Spacer(Modifier.height(2.dp))
+                }
+                // PRoot 列全部候选版本（并集），其中当前发行版不提供的置灰 ——
+                // 只看并集会让用户点到一个装不上的版本；只列可用版本又会让用户
+                // 以为应用漏了某个版本。置灰同时满足「看得到」与「点不动」。
+                val versions = vendor.versions
+                versions.forEach { version ->
+                    val runtime = JavaRuntime(vendor, version)
+                    val isInstalled = runtime in installed
+                    val unavailable = vendor == JavaVendor.Proot &&
+                        version !in prootDistro.availableJavaVersions
+                    RuntimeVersionRow(
+                        label = version.displayName,
+                        note = javaVersionNoteRes(vendor, version)?.let { stringResource(it) },
+                        status = when {
+                            unavailable -> stringResource(R.string.java_note_proot_unavailable)
+                            isInstalled -> stringResource(R.string.dash_java_installed)
+                            else -> stringResource(R.string.env_java_not_installed)
+                        },
+                        statusColor = if (isInstalled && !unavailable) Mint else Muted,
+                        selected = runtime == selected,
+                        busy = runtime == inFlight,
+                        onClick = { if (enabled && !unavailable) onSelect(runtime) }
+                    )
+                }
+            }
+        }
+    }
 }

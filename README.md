@@ -14,15 +14,16 @@ MineServe Mobile is a native Android app for Minecraft Java Edition servers, wit
 
 ## ✨ Features
 
-- **No root required** — built-in Termux bootstrap runtime; Java 17/21/25 run directly, while legacy Java 8 servers use ARM64 Ubuntu PRoot.
+- **No root required** — built-in Termux bootstrap runtime; Java 11/17/21/25 run directly, while Java 8 and servers that need a standard glibc environment use a PRoot Linux container (Ubuntu 20.04 / 22.04).
 - **Choice of runtime** — Java and PHP runtimes coexist. You pick the environment in the UI and that choice is honoured at launch; PocketMine-MP uses a bundled native PHP runtime, everything else runs on the JVM.
 - **16 core types** — Paper, Purpur, Leaves, Leaf, Spigot, CraftBukkit, Fabric, Forge, NeoForge, Quilt, Vanilla, Velocity, BungeeCord, PowerNukkitX, PocketMine-MP, and Allay.
 - **Multi-server management** — isolated cores, worlds, configuration, plugins, and mods with one-tap switching.
 - **Server import** — independent folder, archive, JAR, and Modrinth `.mrpack` actions with core/version detection.
 - **Plugins and mods** — scan, enable/disable, SAF upload, URL install, and Modrinth search/download.
-- **Tunneling** — frp and bore with LAN and public address display.
+- **Tunneling** — self-hosted frp and bore, plus the SakuraFrp and ME Frp hosted platforms, with LAN and public address display.
 - **Backup and crash reports** — world/full-server backup, SAF export, abnormal-exit logs, native-report aggregation, and offline analysis. Reports keep Watchdog/thread-dump highlights so the real blocking point is never truncated away.
 - **Keep-alive** — foreground service, wake locks, boot/periodic recovery, and an optional status overlay.
+- **Home-screen widgets** — overview, console, event log, and mod/plugin widgets with action buttons, refreshed by a periodic worker.
 - **MCP remote control** — embedded Model Context Protocol server (Streamable HTTP) so LAN AI assistants can check status, start/stop the server, send console commands, and read logs; protected by a bearer token.
 - **Material 3 UI** — Jetpack Compose with compact core and version selection.
 
@@ -35,7 +36,7 @@ MineServe Mobile is a native Android app for Minecraft Java Edition servers, wit
 
 ## 📥 Download and build
 
-Download an `arm64-v8a` APK from the [Releases page](../../releases), or build locally:
+Download an `arm64-v8a` APK from the [Releases page](https://github.com/lovehutaocute/MineServe-Mobile/releases), or build locally:
 
 ```powershell
 git clone https://github.com/lovehutaocute/MineServe-Mobile.git
@@ -60,6 +61,10 @@ Use frp/bore or router port forwarding for public access.
 |---|---|---|---|
 | Paper | ✅ | ❌ | High-performance Java plugin server |
 | Purpur | ✅ | ❌ | Paper fork with more feature toggles |
+| Leaves | ✅ | ❌ | Paper fork optimized for high-version survival servers |
+| Leaf | ✅ | ❌ | Paper fork with Bukkit plugin compatibility and performance work |
+| Spigot | ✅ | ❌ | Classic Bukkit-compatible plugin server |
+| CraftBukkit | ✅ | ❌ | Official Bukkit implementation |
 | Fabric | ❌ | ✅ | Lightweight mod loader |
 | Forge | ❌ | ✅ | Traditional mod loader |
 | NeoForge | ❌ | ✅ | Forge successor with installer flow |
@@ -100,9 +105,37 @@ Use frp/bore or router port forwarding for public access.
 
 - A single "Runtime environment" entry on the Dashboard switches between Java and PHP and lists the versions available in each.
 - Your selection is authoritative — the app never silently rewrites it. If the choice does not match the active core, the launch reports it instead of changing anything behind your back.
-- Java versions 17/21/25 install into the Termux runtime; legacy Java 8 uses ARM64 Ubuntu PRoot.
-- The PHP runtime is an Android aarch64 native build with the extensions PocketMine-MP requires. It downloads on demand (~10 MB) and is shared by every PocketMine server.
 - Environment & dependency management groups Java, dependencies, the Termux environment, and PHP into separate tabs, with install/uninstall and live status for each.
+
+#### The three Java sources
+
+| Group | What it is | Installable versions |
+|---|---|---|
+| **Termux JDK** | openjdk inside the Termux environment, installed via apt | Java 11 / 17 / 21 / 25 |
+| **Pojav JRE** | Android-native JRE built by PojavLauncher, IPv6 supported | Java 17 / 21 / 25 |
+| **PRoot container** | A standard glibc Linux container; rootfs downloaded in-app, JDK installed via apt | see below |
+
+**Java 8 appears only under "PRoot container"** — it runs inside a container anyway, and listing it under Termux made it look like there were two copies.
+
+#### Java versions available in PRoot containers
+
+| Distro | Installable Java |
+|---|---|
+| Ubuntu 20.04 (focal) | Java 8 / 11 / 17 |
+| Ubuntu 22.04 (jammy) | Java 11 / 17 / 21 |
+
+- **Java 8 is provided by focal only**; it disappears from the list after switching the distro to 22.04 (other installed versions are unaffected). Switch with the **Ubuntu 20.04 / 22.04 pill button** inside the group.
+- One container can hold several Java versions. Installing another version later does **not** re-download the rootfs.
+- **Uninstalling one Java version affects that version only**; the other versions in the same container are kept. Use the separate "Delete container" button to reclaim the whole container's space.
+- Containers do **not** grant root — PRoot is a pure userspace compatibility layer.
+- **Java 25 is unavailable in containers** — the Ubuntu arm64 repositories do not ship that package.
+- The server directory enters the container as `/srv/mineserve`, so worlds, plugins, backups and file management keep their exact locations and behaviour.
+
+- The PHP runtime is an Android aarch64 native build with the extensions PocketMine-MP requires. It downloads on demand (~10 MB) and is shared by every PocketMine server.
+
+**Groups are collapsed by default**: the three categories hold 11 version rows in total, and expanding them all pushes the "Uninstall / Reinstall / Install" buttons off the screen. While collapsed, the group title shows "Selected: Java 17", because those buttons act on the current selection.
+
+> **Your runtime choice is never changed for you.** If a Minecraft version needs a different Java at startup, the app only switches the version **within the source you picked under "Runtime"**. When that source genuinely cannot provide it (for example, PRoot containers have no Java 25), it reports an error with a concrete fix (such as "switch Ubuntu 20.04 to 22.04 to get Java 21") instead of silently replacing PRoot with Termux.
 
 ### 🔌 Plugins, mods, and files
 
@@ -116,7 +149,7 @@ Use frp/bore or router port forwarding for public access.
 
 - Backup, restore, delete, and SAF export for overworld, nether, and end.
 - On abnormal exit, saves key log excerpts (Watchdog dumps, exception stacks, fatal errors) plus the most recent 800 `latest.log` lines, together with the newest native report; the crash screen aggregates native reports from all installed servers and analyzes them locally.
-- frp and bore tunnels, with one-tap LAN/public address copy.
+- frp, bore, SakuraFrp, and ME Frp tunnels, with one-tap LAN/public address copy.
 
 ### 🛡️ Keep-alive
 
@@ -127,7 +160,7 @@ Use frp/bore or router port forwarding for public access.
 
 ## 📱 How does a phone run the server?
 
-First setup installs a Termux-compatible runtime and Java into app-private storage. Java 17/21/25 servers are started by the Android shell; legacy Java 8 servers run inside ARM64 Ubuntu PRoot. PocketMine-MP instead runs on a bundled native PHP runtime. All of them are ordinary child processes managed by the app, not root processes.
+First setup installs a Termux-compatible runtime and Java into app-private storage. Java 11/17/21/25 servers are started by the Android shell; servers that need a standard glibc environment (including Java 8) run inside a PRoot Linux container. PocketMine-MP instead runs on a bundled native PHP runtime. All of them are ordinary child processes managed by the app, not root processes.
 
 Console commands go to process stdin and output is displayed live and saved to `logs/latest.log`. Minecraft listens on normal device network ports: use the phone LAN IP locally, or a tunnel/port mapping publicly. The app cannot bypass NAT, carrier CGNAT, or firewalls.
 

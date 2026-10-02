@@ -68,16 +68,54 @@ class McpProtocolTest {
         val names = tools.map { it.jsonObject["name"]!!.jsonPrimitive.content }.toSet()
         assertEquals(
             setOf(
+                // 服务器管理 / 控制台 / 文件 / 模组（原有）
                 "get_server_status", "list_servers", "select_server", "start_server", "stop_server",
                 "send_command", "get_console_logs", "run_termux_command",
                 "list_files", "read_file", "write_file", "delete_file", "rename_file", "make_dir",
                 "upload_file", "extract_archive", "import_server",
-                "list_mods", "search_mods", "install_mod"
+                "list_mods", "search_mods", "install_mod",
+                // 运行环境与依赖
+                "get_runtime_info", "install_java", "remove_java", "reinstall_java",
+                "install_php", "remove_php", "install_dependencies", "remove_dependencies",
+                "install_apt_package", "repair_runtime", "check_command",
+                "set_download_mirror", "set_apt_mirror",
+                // 核心与实例
+                "list_core_versions", "create_server", "delete_server",
+                // 应用配置
+                "get_config", "set_config",
+                // 快照
+                "list_snapshots", "create_snapshot", "restore_snapshot", "delete_snapshot",
+                // 插件
+                "list_plugins", "install_plugin", "toggle_plugin", "delete_plugin",
+                // 日志与诊断
+                "get_app_log", "clear_app_log", "get_last_run_log", "get_device_info",
+                "check_port", "http_probe",
+                // 自动化测试辅助
+                "wait_for_server", "wait_for_log", "file_hash",
+                // 后台任务
+                "get_job", "list_jobs"
             ),
             names
         )
         // 每个工具都有 object 类型的 inputSchema
         tools.forEach { assertTrue(it.jsonObject["inputSchema"] is JsonObject) }
+    }
+
+    @Test
+    fun everyToolHasNonEmptyDescriptionAndObjectSchema() {
+        val body = responseOf("""{"jsonrpc":"2.0","id":20,"method":"tools/list"}""")
+        val tools = (body["result"]!!.jsonObject["tools"] as JsonArray).map { it.jsonObject }
+        assertTrue(tools.isNotEmpty())
+        tools.forEach { tool ->
+            val name = tool["name"]!!.jsonPrimitive.content
+            val description = tool["description"]!!.jsonPrimitive.content
+            assertTrue("tool '$name' has no description", description.isNotBlank())
+            val schema = tool["inputSchema"]!!.jsonObject
+            assertEquals("object", schema["type"]!!.jsonPrimitive.content)
+        }
+        // 工具名不允许重复（重复会让 tools/call 的分发产生歧义）
+        val names = tools.map { it["name"]!!.jsonPrimitive.content }
+        assertEquals(names.size, names.toSet().size)
     }
 
     @Test

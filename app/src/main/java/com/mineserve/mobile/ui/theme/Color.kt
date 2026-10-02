@@ -14,7 +14,6 @@ val LightLine = Color(0xFFE7E9F0)
 val Indigo = Color(0xFF3B4C9C)
 val IndigoDark = Color(0xFF2B3A7A)
 val LightIndigoSoft = Color(0xFFEEF0FA)
-val IndigoRingBg = Color(0xFF2E3D82)
 
 val Mint = Color(0xFF2FBF87)
 val LightMintSoft = Color(0xFFE7F8F0)
@@ -23,8 +22,6 @@ val MintBright = Color(0xFF8CF0C4)
 val Coral = Color(0xFFF97066)
 val LightCoralSoft = Color(0xFFFDEEEC)
 
-val LightFieldBg = Color(0xFFFAFAFC)
-val LightTrackBg = Color(0xFFEEF0F5)
 val LightFieldGray = Color(0xFFF0F1F5)
 
 // ── 深色设计令牌 ─────────────────────────────────────────────────
@@ -36,8 +33,6 @@ val DarkLine = Color(0xFF2A3140)
 val DarkIndigoSoft = Color(0xFF2A3563)
 val DarkMintSoft = Color(0xFF17382C)
 val DarkCoralSoft = Color(0xFF3D2424)
-val DarkFieldBg = Color(0xFF232936)
-val DarkTrackBg = Color(0xFF2A3140)
 val DarkFieldGray = Color(0xFF232936)
 
 // Theme tokens come from MaterialTheme, so previews and explicit theme overrides

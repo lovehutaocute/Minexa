@@ -19,7 +19,7 @@ object ScheduleManager {
     const val ACTION_START_SERVER = "start_server"
     const val ACTION_STOP_SERVER = "stop_server"
 
-    /** 按配置注册/取消两个每日闹钟。 */
+    /** 按配置注册/取消两个每日闹钟。幂等：重复调用只是重算下一次触发时间。 */
     fun register(context: Context, config: McConfig) {
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         if (config.dailyStartEnabled) {
@@ -33,6 +33,16 @@ object ScheduleManager {
             cancel(am, context, REQUEST_STOP)
         }
     }
+
+    /**
+     * 最佳努力地取当前配置（仅在内存态已就绪时）。
+     *
+     * 供 [ScheduleAlarmReceiver] 在主线程同步重注册闹钟使用：拿不到就返回 null，
+     * 由前台服务在协程里补做，**绝不在主线程触发一次同步读盘**。
+     */
+    fun latestConfig(context: Context): McConfig? = runCatching {
+        com.mineserve.mobile.McApplication.get(context).repository.currentConfigOrNull()
+    }.getOrNull()
 
     private fun scheduleDaily(
         am: AlarmManager, context: Context, requestCode: Int,

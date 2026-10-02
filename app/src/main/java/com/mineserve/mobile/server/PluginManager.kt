@@ -35,7 +35,7 @@ import java.util.jar.JarFile
  */
 class PluginManager(
     private val termux: TermuxRuntime,
-    @Suppress("unused") private val context: Context
+    private val context: Context
 ) {
 
     companion object {
@@ -228,7 +228,7 @@ class PluginManager(
         onProgress: (Long, Long, Long) -> Unit = { _, _, _ -> }
     ): File = withContext(Dispatchers.IO) {
         val pluginsDir = pluginsDirOf(dirName).apply { mkdirs() }
-        val target = File(pluginsDir, ensureJarExtension(targetFileName))
+        val target = File(pluginsDir, ensureJarExtension(sanitizeFileName(targetFileName, "plugin.jar")))
 
         // 备份旧文件（若存在），下载失败时回滚
         val backup: File? = if (target.exists()) File(pluginsDir, "${target.name}.bak") else null
@@ -256,8 +256,7 @@ class PluginManager(
     suspend fun installFromUri(uri: Uri, dirName: String, fallbackName: String = "plugin.jar"): String =
         withContext(Dispatchers.IO) {
             val pluginsDir = pluginsDirOf(dirName).apply { mkdirs() }
-            val fileName = queryFileName(uri) ?: fallbackName
-            val safeName = ensureJarExtension(fileName)
+            val safeName = ensureJarExtension(sanitizeFileName(queryFileName(uri), fallbackName))
             val target = File(pluginsDir, safeName)
 
             val input = context.contentResolver.openInputStream(uri)
@@ -281,8 +280,13 @@ class PluginManager(
     suspend fun delete(fileName: String, dirName: String, alsoRemoveDataDir: Boolean = false): Boolean =
         withContext(Dispatchers.IO) {
             val pluginsDir = pluginsDirOf(dirName)
-            val file = File(pluginsDir, fileName)
+            // 文件名可能来自外部（MCP / 导入）：`../server.properties` 经 File(dir, name)
+            // 会落到服务端目录里。这里要求它必须是不含目录成分的纯文件名。
+            val safe = sanitizeFileName(fileName, "")
+            if (safe.isEmpty() || safe != fileName) return@withContext false
+            val file = File(pluginsDir, safe)
             if (!file.exists()) return@withContext false
+            if (file.canonicalFile.parentFile?.canonicalPath != pluginsDir.canonicalPath) return@withContext false
 
             // 先尝试解析元信息获取插件名（用于清理数据目录）
             val pluginName = if (alsoRemoveDataDir) {
@@ -298,11 +302,24 @@ class PluginManager(
                 termux.execOnce("rm", "-f", file.absolutePath)
             }
 
-            // 清理插件数据目录
+            // 清理插件数据目录。
+            //
+            // pluginName 来自插件自己的 plugin.yml（`name: ../world` 这种可以任意构造），
+            // 它和新插件文件名一样是**外部输入**：只做 File(pluginsDir, name) 拼路径的话，
+            // `../world` 会落到服务端目录里，deleteRecursively() 直接把世界删掉。
+            // 所以这里的净化规则必须与上面的 fileName 完全一致（纯文件名 + canonical 父目录校验）。
             if (alsoRemoveDataDir && pluginName != null) {
-                val dataDir = File(pluginsDir, pluginName)
-                if (dataDir.exists() && dataDir.isDirectory) {
-                    dataDir.deleteRecursively()
+                val safeDataName = sanitizeFileName(pluginName, "")
+                if (safeDataName.isNotEmpty() && safeDataName == pluginName) {
+                    val dataDir = File(pluginsDir, safeDataName)
+                    val insidePlugins = dataDir.canonicalFile.parentFile?.canonicalPath == pluginsDir.canonicalPath
+                    if (insidePlugins && dataDir.exists() && dataDir.isDirectory) {
+                        dataDir.deleteRecursively()
+                    } else {
+                        Log.w(TAG, "delete: 跳过可疑插件数据目录 ${dataDir.absolutePath}")
+                    }
+                } else {
+                    Log.w(TAG, "delete: 插件名不是纯文件名，已跳过数据目录清理: $pluginName")
                 }
             }
             !file.exists()
@@ -315,14 +332,14 @@ class PluginManager(
      */
     suspend fun toggleEnabled(fileName: String, dirName: String): String? = withContext(Dispatchers.IO) {
         val pluginsDir = pluginsDirOf(dirName)
-        val file = File(pluginsDir, fileName)
+        // 与 delete 同规则：拒绝含目录成分的文件名，避免 `../xxx` 改写服务端目录里的其它文件
+        val safe = sanitizeFileName(fileName, "")
+        if (safe.isEmpty() || safe != fileName) return@withContext null
+        val file = File(pluginsDir, safe)
         if (!file.exists()) return@withContext null
+        if (file.canonicalFile.parentFile?.canonicalPath != pluginsDir.canonicalPath) return@withContext null
 
-        val newName = if (fileName.startsWith(DISABLED_PREFIX)) {
-            fileName.substring(1)
-        } else {
-            "$DISABLED_PREFIX$fileName"
-        }
+        val newName = if (safe.startsWith(DISABLED_PREFIX)) safe.substring(1) else "$DISABLED_PREFIX$safe"
         val target = File(pluginsDir, newName)
 
         // 同步迁移缓存 key
@@ -626,6 +643,18 @@ class PluginManager(
         return if (name.endsWith(JAR_EXT, ignoreCase = true)) name else "$name$JAR_EXT"
     }
 
+    /**
+     * 净化来自 SAF（`_display_name` / `lastPathSegment`）或远端的文件名。
+     *
+     * 只取最后一段路径，拒绝空串、`.`、`..`，否则回退 [fallback]。不净化的话，
+     * provider 返回 `../../server.jar` 这类名字会经 `File(dir, name)` 写出目录之外。
+     * 思路与 `ServerImportLayout.importedJarFileName` 一致。
+     */
+    private fun sanitizeFileName(name: String?, fallback: String): String {
+        val base = name?.substringAfterLast('/')?.substringAfterLast('\\')?.trim().orEmpty()
+        return if (base.isEmpty() || base == "." || base == "..") fallback else base
+    }
+
     private fun queryFileName(uri: Uri): String? {
         return try {
             val cursor = context.contentResolver.query(uri, null, null, null, null)
@@ -720,7 +749,7 @@ class PluginManager(
         onProgress: (Long, Long, Long) -> Unit = { _, _, _ -> }
     ): File = withContext(Dispatchers.IO) {
         val dir = modsDirOf(dirName).apply { mkdirs() }
-        val target = File(dir, ensureJarExtension(targetFileName))
+        val target = File(dir, ensureJarExtension(sanitizeFileName(targetFileName, "mod.jar")))
         val backup: File? = if (target.exists()) File(dir, "${target.name}.bak") else null
         if (backup != null) target.renameTo(backup)
         try {
@@ -740,7 +769,7 @@ class PluginManager(
     suspend fun installModFromUri(uri: Uri, dirName: String, fallbackName: String = "mod.jar"): String =
         withContext(Dispatchers.IO) {
             val dir = modsDirOf(dirName).apply { mkdirs() }
-            val safeName = ensureJarExtension(queryFileName(uri) ?: fallbackName)
+            val safeName = ensureJarExtension(sanitizeFileName(queryFileName(uri), fallbackName))
             val target = File(dir, safeName)
             val input = context.contentResolver.openInputStream(uri)
                 ?: throw RuntimeException(context.getString(R.string.s129, uri.toString()))

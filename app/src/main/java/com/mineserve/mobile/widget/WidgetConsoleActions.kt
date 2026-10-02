@@ -34,8 +34,9 @@ object WidgetConsoleActions {
         if (cores.isEmpty()) return config.activeCoreName
         val idx = cores.indexOfFirst { it.name == config.activeCoreName }.takeIf { it >= 0 } ?: 0
         val next = cores[(idx + delta + cores.size) % cores.size]
-        val updated = config.copy(activeCoreName = next.name)
-        repo.saveConfig(updated)
+        // 用 updateAndSaveConfig 基于权威内存态原子读改写，避免用陈旧 configFlow 快照
+        // 整份覆盖配置（saveChannel 是 CONFLATED，会把并发的其它修改挤掉）。
+        repo.updateAndSaveConfig { it.copy(activeCoreName = next.name) }
         awaitConfigSaved(repo) { it.activeCoreName == next.name }
         // 该字段就是启动（controller.start）读取的全局选择，切换即生效
         repo.termuxRuntime.emitLog("[widget] 已切换服务器核心: ${next.name}")
@@ -49,8 +50,7 @@ object WidgetConsoleActions {
         val config = repo.configFlow.first()
         val idx = versions.indexOf(config.selectedJavaVersion).takeIf { it >= 0 } ?: 0
         val next = versions[(idx + delta + versions.size) % versions.size]
-        val updated = config.copy(selectedJavaVersion = next)
-        repo.saveConfig(updated)
+        repo.updateAndSaveConfig { it.copy(selectedJavaVersion = next) }
         awaitConfigSaved(repo) { it.selectedJavaVersion == next }
         // 启动校验与 Java 解析读取的就是 selectedJavaVersion，切换即生效
         repo.termuxRuntime.emitLog("[widget] 已切换 Java 版本: ${next.displayName}")
@@ -76,7 +76,12 @@ object WidgetConsoleActions {
         val repo = app.repository
         val config = repo.configFlow.first()
         return runCatching {
-            McServerController(app.termuxRuntime, repo).let { kotlinx.coroutines.runBlocking { it.start(config) } }
+            // start 本身是 suspend：直接挂起调用，不再套 runBlocking 占用 IO 线程。
+            McServerController(app.termuxRuntime, repo).start(config)
+            // App 内启动路径会跟着拉起前台服务（保活 + 通知 + 组件刷新源）。组件路径以前只调
+            // controller.start() 就结束：后台容易被 LMK 杀、熄屏掉线，而且「服务没起而 MC 在跑」
+            // 恰好是 ACTION_REFRESH_STATUS 那条崩溃路径的触发前提。
+            ensureForegroundService(context)
             true
         }.getOrElse { e ->
             ServerEventNotifier.notify(
@@ -89,11 +94,24 @@ object WidgetConsoleActions {
         }
     }
 
+    /**
+     * 拉起前台服务。已在前台就什么都不做；没起则走 startForegroundService（前台服务内部会
+     * 补齐 startForeground，不会造成 5 秒 ANR/崩溃）。
+     */
+    private fun ensureForegroundService(context: Context) {
+        runCatching {
+            val intent = android.content.Intent(context, McForegroundService::class.java)
+                .setAction(McForegroundService.ACTION_START)
+            if (McForegroundService.isRunning) context.startService(intent)
+            else context.startForegroundService(intent)
+        }
+    }
+
     /** 停止服务器。 */
     suspend fun stopServer(context: Context): Boolean {
         val app = McApplication.get(context)
         return runCatching {
-            McServerController(app.termuxRuntime, app.repository).let { kotlinx.coroutines.runBlocking { it.stop() } }
+            McServerController(app.termuxRuntime, app.repository).stop()
             true
         }.getOrDefault(false)
     }

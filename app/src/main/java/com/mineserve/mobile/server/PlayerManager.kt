@@ -175,9 +175,6 @@ class PlayerManager(private val termux: TermuxRuntime) {
     /** 关闭白名单 */
     fun whitelistOff(): Boolean = sendCmd("whitelist off")
 
-    /** 重载白名单（手动编辑 whitelist.json 后调用） */
-    fun whitelistReload(): Boolean = sendCmd("whitelist reload")
-
     // ── 踢出/封禁 ──────────────────────────────────────────────
 
     /**
@@ -253,10 +250,10 @@ class PlayerManager(private val termux: TermuxRuntime) {
         val modeName = when (mode.coerceIn(0, 3)) {
             0 -> "survival"; 1 -> "creative"; 2 -> "adventure"; 3 -> "spectator"; else -> "survival"
         }
-        // MC 1.13+ 语法：gamemode <模式名> [玩家]
-        // 旧版 pre-1.13 兼容：gamemode <玩家> <模式名>
-        sendCmd("gamemode $modeName $name")
-        return sendCmd("gamemode $name $modeName")
+        // 只发 1.13+ 的 gamemode <模式名> <玩家>：现代核心（Paper/Spigot/Fabric/Forge 等）
+        // 均为此语法。原先同时发旧版 gamemode <玩家> <模式名>，在 1.13+ 上第二条会被解析成
+        // 「未知游戏模式 <玩家名>」，控制台每设一次多一条语法错误，且返回值只反映第二条。
+        return sendCmd("gamemode $modeName $name")
     }
 
     /**

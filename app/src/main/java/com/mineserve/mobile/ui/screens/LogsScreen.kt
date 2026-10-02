@@ -114,6 +114,33 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
         }
     }
 
+    // 日志行 → 稳定 id：日志缓冲是有界的，写满后会从头部裁剪旧行，用下标作 LazyColumn 的 key
+    // 会在裁剪时把同一 key 指向不同内容，导致行内容闪变与滚动跳动。
+    // 这里维护一份自增 id，并在每次刷新时按「上一帧尾部 ↔ 新一帧头部」的重叠区间复用旧 id。
+    var logLineIds by remember { mutableStateOf(emptyList<Long>()) }
+    var prevLogLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var nextLogId by remember { mutableStateOf(0L) }
+    var termuxLineIds by remember { mutableStateOf(emptyList<Long>()) }
+    var prevTermuxLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var nextTermuxId by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(lines) {
+        if (lines.isEmpty()) {
+            logLineIds = emptyList(); prevLogLines = emptyList(); nextLogId = 0L
+        } else {
+            val (ids, next) = assignStableLineIds(prevLogLines, logLineIds, lines, nextLogId)
+            logLineIds = ids; nextLogId = next; prevLogLines = lines.toList()
+        }
+    }
+    LaunchedEffect(termuxLines) {
+        if (termuxLines.isEmpty()) {
+            termuxLineIds = emptyList(); prevTermuxLines = emptyList(); nextTermuxId = 0L
+        } else {
+            val (ids, next) = assignStableLineIds(prevTermuxLines, termuxLineIds, termuxLines, nextTermuxId)
+            termuxLineIds = ids; nextTermuxId = next; prevTermuxLines = termuxLines.toList()
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         // 顶部带返回按钮的 Header（白底覆盖状态栏，配合全屏展示）
         Row(
@@ -230,7 +257,8 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                 ) {
                     itemsIndexed(
                         displayLines,
-                        key = { index, _ -> index },
+                        // id 列表与文本列表由不同 Effect 更新，短暂错位时用负数兜底，避免与真实 id 撞车导致重复 key 崩溃
+                        key = { index, _ -> logLineIds.getOrNull(index) ?: (-1L - index) },
                         contentType = { _, _ -> "console-log" }
                     ) { _, (text, color) ->
                         Text(
@@ -311,7 +339,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                         ) {
                             itemsIndexed(
                                 termuxLines,
-                                key = { index, _ -> index },
+                                key = { index, _ -> termuxLineIds.getOrNull(index) ?: (-1L - index) },
                                 contentType = { _, _ -> "termux-log" }
                             ) { _, line ->
                                 Text(
@@ -386,6 +414,40 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
             }
         )
     }
+}
+
+/**
+ * 为日志行分配稳定递增 id，供 LazyColumn 的 key 使用。
+ *
+ * 日志缓冲是有界的：写满后会从头部丢弃旧行，因此「下标」与「内容」的对应关系会整体前移，
+ * 直接拿 index 当 key 会在裁剪时把同一 key 指向不同内容，造成行内容闪变与滚动跳动。
+ * 这里比较「上一帧尾部」与「新一帧头部」的重叠区间以复用旧 id，其余视为新增行分配新 id。
+ *
+ * @return 新 id 列表 to 下一个可用 id
+ */
+private fun assignStableLineIds(
+    prevLines: List<String>,
+    prevIds: List<Long>,
+    newLines: List<String>,
+    nextId: Long
+): Pair<List<Long>, Long> {
+    val maxOverlap = minOf(prevLines.size, newLines.size)
+    var overlap = maxOverlap
+    while (overlap > 0) {
+        val offset = prevLines.size - overlap
+        var same = true
+        for (i in 0 until overlap) {
+            if (prevLines[offset + i] != newLines[i]) { same = false; break }
+        }
+        if (same) break
+        overlap--
+    }
+    val ids = ArrayList<Long>(newLines.size)
+    val base = prevIds.size - overlap
+    for (i in 0 until overlap) ids.add(prevIds[base + i])
+    var id = nextId
+    for (i in overlap until newLines.size) ids.add(id++)
+    return ids to id
 }
 
 /** 日志行颜色（纯主线程判断，开销很小） */

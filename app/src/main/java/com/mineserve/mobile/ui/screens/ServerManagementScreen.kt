@@ -13,6 +13,7 @@ import androidx.compose.material.icons.outlined.Extension
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
+import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -42,7 +43,8 @@ fun ServerManagementScreen(
     vm: McViewModel,
     onPlugins: () -> Unit,
     onProperties: () -> Unit,
-    onIcon: () -> Unit
+    onIcon: () -> Unit,
+    onWorlds: () -> Unit
 ) {
     val config by vm.config.collectAsState()
     val state by vm.serverState.collectAsState()
@@ -61,6 +63,8 @@ fun ServerManagementScreen(
         )
         Text(if (state.isRunning) "服务器运行中" else "服务器未运行", color = if (state.isRunning) Color(0xFF2E9B62) else Muted, fontSize = 12.sp)
         ManagementEntry("模组与插件", "安装、更新和管理服务器插件或模组", Icons.Outlined.Extension, onPlugins)
+        // 世界（存档）是服务端目录下的实体，属服务器管理；原先藏在「更多」里，路径太长
+        ManagementEntry("世界管理", "切换、导入、导出与重置世界存档", Icons.Outlined.Map, onWorlds)
         ManagementEntry("服务器配置", "编辑当前核心对应的配置文件", Icons.Outlined.Tune, onProperties)
         ManagementEntry("服务器图标", "更换 Java Edition 的 server-icon.png", Icons.Outlined.Image, onIcon)
         if (active != null) {

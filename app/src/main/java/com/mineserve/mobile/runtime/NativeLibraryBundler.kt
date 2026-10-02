@@ -55,6 +55,25 @@ object NativeLibraryBundler {
     const val HEAP_TAG_FIX_LIB = "libheaptagfix.so"
 
     /**
+     * 随 APK 分发、**不经过 [provision] 落盘**的库之二：`app/src/main/cpp/ipv6fix.c`
+     * 的编译产物，用来把「JVM 判定本机有没有 IPv6」那一步骗过去。
+     *
+     * OpenJDK 的 `IPv6_supported()` 靠 `fopen("/proc/net/if_inet6")` 判定，而 Android
+     * 上 App 读不到该文件 ⇒ `Net.isIPv6Available()==false` ⇒ `ServerSocketChannel`
+     * 只按 IPv4 打开 ⇒ `server-ip=::` 启动即崩（`Net.checkAddress` →
+     * `UnsupportedAddressTypeException`）。AOSP 与 Pojav/FCL 血统的 Android JDK 是
+     * 编译期跳过这段检查的，Termux 的 openjdk 没有这条补丁 —— 本库在运行时补上。
+     *
+     * 和 [HEAP_TAG_FIX_LIB] 一样只经 `LD_PRELOAD`（绝对路径）注入，不复制到
+     * Termux 库目录，所以不在 [PACKAGED_LIBRARIES] 里；登记在这里是为了让
+     * 「jniLibs 里每个文件都有出处」这条守卫说得通（见 [BundledLibrariesTest]）。
+     *
+     * 产物同样**不随常规构建编译**：改过 ipv6fix.c 之后必须手动跑
+     * `.github/workflows/build-ipv6fix.yml` 重新生成，否则改动不生效。
+     */
+    const val IPV6_FIX_LIB = "libipv6fix.so"
+
+    /**
      * 打包进 APK 的库清单：**打包文件名 → 运行时的真实文件名（SONAME）**。
      *
      * 键是 `jniLibs/arm64-v8a/` 下的文件名；值是它落到 Termux 库目录后应该叫什么。
@@ -80,14 +99,21 @@ object NativeLibraryBundler {
      * [BundledLibrariesTest] 会在 CI 上校验这层一致性（清单有、文件没有就会失败）。
      *
      * ## 这张表只放「真的随 APK 打包」的库
-     * `libtalloc.so.2` 与 `libandroid-shmem.so` 属于 **proot 依赖链**，官方 rootfs 不含
-     * proot（`bootstrap-aarch64.zip` 里搜不到 proot/talloc/shmem），它们只能由运行时的
-     * proot-distro 提供 —— 因此**不在这张表里**，见 [RUNTIME_OPTIONAL_LIBRARIES]。
+     * 每个键都必须能在 `app/src/main/jniLibs/arm64-v8a/` 下找到同名文件，
+     * [BundledLibrariesTest] 会在 CI 上校验这层一致性（清单有、文件没有就会失败）。
      *
-     * 把它们混进这张表会造成一个持续存在的假警报：由本表派生的
-     * [TermuxRuntime.termuxLibraryCandidates] 会为每一项检查「是否已就位」，
-     * 而这两个库在设备上**永远不会**位于 App 能落盘的位置，于是每次初始化都会打出
-     * 「依赖 libtalloc.so.2 未找到」这类无法消除的警告，把真正缺库时的提示淹没掉。
+     * 曾经把 `libtalloc.so.2` / `libandroid-shmem.so` 排除在表外，理由是「官方 bootstrap
+     * rootfs 里没有 proot，只能由运行时的 proot-distro 提供」。这个理由是错的 ——
+     * 它们与其余库一样，能从 App **同一个** Termux 源（`libtalloc` / `libandroid-shmem` 两个
+     * deb，均取自 `mirrors.tuna…/termux/apt/termux-main`）取到。排除的代价是真机上的死锁：
+     * `bin/proot.bin` 链接失败 → Ubuntu 容器起不来 → Java 8 装不上，而且因为 apt 需要 proot
+     * 才能装 proot 的依赖，用户没有任何自救路径。
+     *
+     * 更隐蔽的一层：这两个 deb 里 `libtalloc` **只有**真实文件 `libtalloc.so.2.4.3`，
+     * `libtalloc.so` 与 `libtalloc.so.2` 都是**符号链接**。本环境的 dpkg 是「解包器」
+     * 而非完整实现，符号链接不一定会被重建，linker 又只认硬名字（不做前缀匹配），
+     * 于是即使 apt 装过 proot，`libtalloc.so.2` 依然可能不存在。打包时直接写成 SONAME 名的
+     * 真实文件，等于把这条符号链接链路整个绕开。
      */
     val PACKAGED_LIBRARIES: Map<String, String> = linkedMapOf(
         // ── apt 直接依赖 ──────────────────────────────────────
@@ -118,33 +144,16 @@ object NativeLibraryBundler {
         "libc++_shared.so" to "libc++_shared.so",    // apt 的 C++ 运行时
         "libgcrypt.so" to "libgcrypt.so",
         "libgpg-error.so" to "libgpg-error.so",      // libgcrypt 的依赖
-        "libxxhash.so" to "libxxhash.so.0"           // 见下方注释：打包名不能带版本号
-    )
-
-    /**
-     * **不随 APK 打包**、由 Termux 侧包管理器（proot-distro）提供的库。
-     *
-     * 这两个库属于 proot 依赖链，而官方 bootstrap rootfs 里没有 proot
-     * （`bootstrap-aarch64.zip` 中搜不到 proot/talloc/shmem），App 无从提供副本。
-     * 保留它们只是为了把「proot 链路依赖什么」写在一处。
-     *
-     * 它们**不参与落盘，也不参与「缺库就报警告」的静态检查**：
-     * 在官方 rootfs 上它们本来就不存在，静态检查只会每次初始化都报一遍
-     * 「依赖 libtalloc.so.2 未找到」，把真正缺库时的提示淹没掉。
-     * 是否真的缺失，交给 [auditTermuxBinaries] 按 proot 二进制的 DT_NEEDED 动态判断。
-     */
-    val RUNTIME_OPTIONAL_LIBRARIES: Map<String, String> = linkedMapOf(
-        "libtalloc.so" to "libtalloc.so.2",           // proot 硬依赖
+        "libxxhash.so" to "libxxhash.so.0",          // 见下方注释：打包名不能带版本号
+        // ── 第三批：proot 依赖链（Ubuntu 容器 / Java 8 的前置） ──
+        // 来源：设备日志
+        //   CANNOT LINK EXECUTABLE ".../bin/proot.bin": library "libtalloc.so.2" not found
+        // 两个库都已用 ELF 解析核验：libtalloc 的 SONAME = libtalloc.so.2、DT_NEEDED 只有
+        // libc.so；libandroid-shmem 无 SONAME（故打包名 = 运行时名），DT_NEEDED 为
+        // liblog.so + libc.so（系统库，设备上恒在）。
+        "libtalloc.so" to "libtalloc.so.2",
         "libandroid-shmem.so" to "libandroid-shmem.so"
     )
-
-    /**
-     * 全部登记项 = 打包 + 非打包，仅供「清单 ↔ jniLibs」一致性守卫使用
-     * （见 [BundledLibrariesTest]）。**运行时逻辑一律用 [PACKAGED_LIBRARIES]**，
-     * 否则又会把非打包项当成缺失。
-     */
-    val BUNDLED_LIBRARIES: Map<String, String> =
-        PACKAGED_LIBRARIES + RUNTIME_OPTIONAL_LIBRARIES
 
     /**
      * 返回随 APK 打包的共享库所在目录；目录不存在时返回 null。
@@ -219,10 +228,22 @@ object NativeLibraryBundler {
      * 现在只认 [需要的库名正则]，且最后用库目录实存性交叉验证。
      */
     fun neededLibrariesOf(binary: File): List<String> {
-        elfNeeded(binary)?.let { if (it.isNotEmpty()) return it }
+        elfDynamic(binary)?.let { if (it.needed.isNotEmpty()) return it.needed }
         // 退化路径：交给 linker 解析并严格提取
         return linkerView(binary)
     }
+
+    /**
+     * 读取 [binary] 的 SONAME（`DT_SONAME`），没有则返回 null。
+     *
+     * 用途是「落盘名必须等于 SONAME」这条守卫：linker 只用**硬名字**查找依赖
+     * （不做前缀匹配），所以打包名映射错了就等于没打包。
+     * 真实的踩坑见 [PACKAGED_LIBRARIES] 里 libtalloc 那段。
+     */
+    fun sonameOf(binary: File): String? = elfDynamic(binary)?.soname
+
+    /** `.dynamic` 段里我们关心的两样东西。 */
+    data class ElfDynamic(val needed: List<String>, val soname: String?)
 
     /** 严格从一段文本里提取「缺失的库名」。只接受合法库文件名。 */
     private fun extractMissingLibNames(text: String): List<String> {
@@ -271,12 +292,12 @@ object NativeLibraryBundler {
     }
 
     /**
-     * 直接解析 ELF 的 `.dynamic` 段取出 DT_NEEDED。
+     * 直接解析 ELF 的 `.dynamic` 段，取出 DT_NEEDED 与 DT_SONAME。
      *
      * 只用 FileChannel 随机读，不把整个 ELF 载入内存（库文件可达数 MB）。
      * 结构参照 ELF64 规范；不认识的格式一律返回 null 交给上层降级。
      */
-    private fun elfNeeded(binary: File): List<String>? = runCatching {
+    private fun elfDynamic(binary: File): ElfDynamic? = runCatching {
         java.io.RandomAccessFile(binary, "r").use { raf ->
             val header = ByteArray(64)
             if (raf.read(header) != 64) return null
@@ -357,6 +378,7 @@ object NativeLibraryBundler {
 
             var strTabAddr = -1L
             val neededOffsets = mutableListOf<Long>()
+            var sonameOffset = -1L
             var k = 0
             while (k + 16 <= read) {
                 var tag = 0L
@@ -372,21 +394,23 @@ object NativeLibraryBundler {
                 if (tag == 0L) break            // DT_NULL
                 if (tag == 5L) strTabAddr = v   // DT_STRTAB（这里是文件内偏移）
                 if (tag == 1L) neededOffsets += v // DT_NEEDED（strtab 内偏移）
+                if (tag == 14L) sonameOffset = v  // DT_SONAME
                 k += 16
             }
-            if (strTabAddr < 0 || neededOffsets.isEmpty()) return null
+            if (strTabAddr < 0) return null
 
-            val names = mutableListOf<String>()
-            neededOffsets.forEach { no ->
-                raf.seek(strTabAddr + no)
+            fun strAt(offset: Long): String {
+                raf.seek(strTabAddr + offset)
                 val bytes = ByteArray(256)
                 val n = raf.read(bytes)
-                if (n <= 0) return@forEach
+                if (n <= 0) return ""
                 val zero = bytes.indexOfFirst { it == 0.toByte() }
-                val name = String(bytes, 0, if (zero >= 0) zero else n, Charsets.UTF_8)
-                if (name.isNotBlank()) names += name
+                return String(bytes, 0, if (zero >= 0) zero else n, Charsets.UTF_8)
             }
-            names
+
+            val names = neededOffsets.map { strAt(it) }.filter { it.isNotBlank() }
+            val soname = if (sonameOffset >= 0) strAt(sonameOffset).takeIf { it.isNotBlank() } else null
+            ElfDynamic(names, soname)
         }
     }.getOrNull()
 
@@ -416,6 +440,53 @@ object NativeLibraryBundler {
                 ?.let { return it }
         }
         return null
+    }
+
+    /**
+     * 给 [libDirs] 下的库补齐「SONAME 名字」的别名（幂等）。
+     *
+     * ## 为什么需要它
+     * deb 里的库常常只有带完整版本的真实文件（`libtalloc.so.2.4.3`），
+     * `libtalloc.so.2` / `libtalloc.so` 都是**符号链接**。而 linker 查找依赖时只认**硬名字**，
+     * 不做前缀匹配 —— 磁盘上摆着 `libtalloc.so.2.4.3`，它照样报
+     * `library "libtalloc.so.2" not found`。
+     *
+     * 本环境解 .deb 的路径有两处会丢符号链接：`dpkg-deb -x` 的结果会被后续包内的目录条目
+     * 覆盖、以及 compat 目录归位（见 `TermuxRuntime.fixUsrBin`）只搬文件。任何一处丢掉链接，
+     * 结果是「apt 明明装成功了，命令还是起不来」。
+     *
+     * 因此不依赖 deb 的链接，按 ELF 自己的 DT_SONAME 现补：找不到 SONAME 名的库一律跳过
+     * （libandroid-shmem / libandroid-glob 这类没有 SONAME，linker 就是按文件名找）。
+     *
+     * 优先建符号链接；设备不支持时退化为复制（占空间但一定可用）。
+     *
+     * @return 新建的别名数量
+     */
+    fun ensureSonameAliases(libDirs: List<File>): Int {
+        var created = 0
+        libDirs.forEach { dir ->
+            if (!dir.isDirectory) return@forEach
+            dir.listFiles().orEmpty().forEach { file ->
+                if (!file.isFile) return@forEach
+                val name = file.name
+                if (!name.startsWith("lib") || !name.contains(".so")) return@forEach
+                val soname = sonameOf(file) ?: return@forEach
+                if (soname == name) return@forEach
+                val alias = File(dir, soname)
+                if (alias.exists()) return@forEach
+                runCatching {
+                    android.system.Os.symlink(name, alias.absolutePath)
+                    created++
+                }.onFailure {
+                    runCatching {
+                        file.copyTo(alias, overwrite = false)
+                        created++
+                    }.onFailure { e -> Log.w(TAG, "补 $soname 别名失败: ${e.message}") }
+                }
+            }
+        }
+        if (created > 0) Log.i(TAG, "补齐 $created 个 SONAME 别名")
+        return created
     }
 
     /**

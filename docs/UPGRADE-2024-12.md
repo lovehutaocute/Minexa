@@ -12,7 +12,6 @@
 | androidx.core-ktx | 1.13.1 | 1.15.0 | |
 | lifecycle | 2.8.6 | 2.8.7 | |
 | activity-compose | 1.9.2 | 1.9.3 | |
-| navigation-compose | 2.8.1 | 2.8.5 | |
 | kotlinx-serialization | 1.7.3 | 1.8.0 | 需 Kotlin 2.0.20+ |
 | kotlinx-coroutines | 1.9.0 | 1.10.1 | 需 Kotlin 2.0+ |
 | work-runtime | 2.9.1 | 2.10.0 | |
@@ -34,3 +33,7 @@
 ## 同时完成
 
 - 全部剩余硬编码中文字符串已迁入 strings.xml（见提交信息），单元测试依赖已就绪。
+
+## 勘误
+
+- 本文档原先还列有 `navigation-compose 2.8.1 → 2.8.5` 一行，但**本项目从未依赖 androidx navigation**：`gradle/libs.versions.toml` 中没有该条目，应用内也没有 `NavHost`/`NavController`。页面切换由手写的标签组件 `app/src/main/java/com/mineserve/mobile/ui/McTab.kt` 实现，因此该行已删除。表中其余各行与当前 `libs.versions.toml` 一致。

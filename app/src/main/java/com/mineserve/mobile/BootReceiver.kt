@@ -19,7 +19,15 @@ import kotlinx.coroutines.launch
 class BootReceiver : BroadcastReceiver() {
 
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
+        // manifest 同时声明了 BOOT_COMPLETED 与 QUICKBOOT_POWERON（部分厂商快速启动广播）。
+        // 原实现只放行 BOOT_COMPLETED，导致 QUICKBOOT_POWERON 分支永远不可达。
+        // 局部变量刻意不叫 action：下面 Intent.apply 里的 `action = ...` 会被它遮蔽，
+        // 变成「给 val 赋值」而编译不过。
+        val intentAction = intent.action
+        val isBoot = intentAction == Intent.ACTION_BOOT_COMPLETED ||
+            intentAction == "android.intent.action.QUICKBOOT_POWERON" ||
+            intentAction == "com.htc.intent.action.QUICKBOOT_POWERON"
+        if (!isBoot) return
 
         // 重新注册每日定时开/停服闹钟
         val pending = goAsync()

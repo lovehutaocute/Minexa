@@ -28,6 +28,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.ui.screens.BackupScreen
@@ -56,6 +57,7 @@ import com.mineserve.mobile.ui.screens.McpScreen
 import com.mineserve.mobile.ui.screens.WidgetSettingsScreen
 import com.mineserve.mobile.ui.screens.CrashReportsScreen
 import com.mineserve.mobile.ui.screens.CrashReportDialog
+import com.mineserve.mobile.ui.screens.WorldsScreen
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
 import com.mineserve.mobile.ui.theme.Indigo
@@ -63,7 +65,7 @@ import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.Muted
 
 /** 子页面类型（从设置页进入的二级页面） */
-enum class SubPage { Properties, Network, Backup, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, More }
+enum class SubPage { Properties, Network, Backup, WorldManage, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, More }
 
 /**
  * 应用根布局：底部 6 Tab；概览页可跳转日志页；设置页可跳转子页面
@@ -79,6 +81,14 @@ fun McApp() {
     var subPage by rememberSaveable { mutableStateOf<SubPage?>(null) }
     // 依赖与环境管理页的初始模块（0=Java 1=依赖 2=Termux）
     var envManagerTab by rememberSaveable { mutableStateOf(0) }
+
+    // 把 Activity 的前台/后台状态显式推给 VM。
+    // 各页面用 collectAsState（非生命周期感知）订阅日志流：Activity 停止后 Compose 组合不销毁、
+    // subscriptionCount 恒 > 0，VM 仅凭订阅数无法判断界面是否可见，后台降频会失效。
+    LifecycleResumeEffect(Unit) {
+        vm.setUiVisible(true)
+        onPauseOrDispose { vm.setUiVisible(false) }
+    }
 
     // 启动自动检查更新（后台执行，发现新版发通知）
     LaunchedEffect(Unit) {
@@ -156,6 +166,7 @@ fun McApp() {
                         SubPage.Properties -> PropertiesScreen(vm = vm, onBack = { subPage = null })
                         SubPage.Network -> NetworkScreen(vm = vm, onBack = { subPage = null })
                         SubPage.Backup -> BackupScreen(vm = vm, onBack = { subPage = null })
+                        SubPage.WorldManage -> WorldsScreen(vm = vm, onBack = { subPage = null })
                         SubPage.DownloadHelp -> DownloadHelpScreen(vm = vm, onBack = { subPage = null })
                         SubPage.MtGuide -> MtGuideScreen(onBack = { subPage = null })
                         SubPage.KeepAlive -> KeepAliveScreen(vm = vm, onBack = { subPage = null })
@@ -211,7 +222,8 @@ fun McApp() {
                         vm = vm,
                         onPlugins = { subPage = SubPage.Plugins },
                         onProperties = { subPage = SubPage.Properties },
-                        onIcon = { subPage = SubPage.ServerIcon }
+                        onIcon = { subPage = SubPage.ServerIcon },
+                        onWorlds = { subPage = SubPage.WorldManage }
                     )
                     McTab.Players -> PlayersScreen(
                         vm = vm,

@@ -13,6 +13,7 @@ import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.UsageTracker
 import com.mineserve.mobile.mcp.McpServerManager
 import com.mineserve.mobile.runtime.TermuxRuntime
+import com.mineserve.mobile.server.CrashReportAnalyzer
 import com.mineserve.mobile.service.McForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -147,6 +148,14 @@ class McApplication : Application(), Configuration.Provider {
         // 初始化多线程下载设置持有器（供各下载模块读取）
         DownloadPrefs.init(this)
 
+        // 加载崩溃归因规则（内置 assets/rules/server_errors.json + 用户自定义规则目录）。
+        // 同步执行，只读有界的内容（内置 asset 几 KB，自定义规则单个限额 256 KB）；
+        // 之后 CrashReportAnalyzer.analyze() 才能在 UI 线程同步调用而无需再做 IO。
+        CrashReportAnalyzer.logger = { msg ->
+            android.util.Log.w("CrashReportAnalyzer", msg)
+        }
+        CrashReportAnalyzer.initialize(this)
+
         termuxRuntime = TermuxRuntime(this)
 
         // 启动时推送上次崩溃日志到控制台（IO 线程，不阻塞主线程启动）
@@ -267,19 +276,37 @@ class McApplication : Application(), Configuration.Provider {
             if (backgroundWorkRegistered) return
             backgroundWorkRegistered = true
         }
-        try {
-            WorkManager.initialize(this, workManagerConfiguration)
-            androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-                "widget_refresh",
-                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
-                androidx.work.PeriodicWorkRequestBuilder<com.mineserve.mobile.widget.WidgetRefreshWorker>(
-                    15, java.util.concurrent.TimeUnit.MINUTES
-                ).build()
-            )
-        } catch (e: Exception) {
+        // 只保留 Configuration.Provider 的官方自动初始化，不再手动 WorkManager.initialize：
+        // onCreate 里 3 秒后的 keep_alive 分支会先调用 getInstance() 触发自动初始化，
+        // 两者无先后保证，手动 initialize 会抛 IllegalStateException 被旧逻辑吞掉，
+        // 导致这里唯一的 widget_refresh 周期任务永不入队。
+        if (!enqueueWidgetRefresh()) {
             synchronized(this) { backgroundWorkRegistered = false }
-            android.util.Log.w("McApplication", "WorkManager setup failed", e)
+            // 初始化竞争属于偶发：短暂等待后重试一次，且失败时明确打错误日志，不再静默吞掉。
+            scope().launch {
+                kotlinx.coroutines.delay(1_000)
+                if (enqueueWidgetRefresh()) {
+                    synchronized(this@McApplication) { backgroundWorkRegistered = true }
+                } else {
+                    android.util.Log.e("McApplication", "widget_refresh 入队失败：WorkManager 不可用，兜底刷新任务未注册")
+                }
+            }
         }
+    }
+
+    /** 入队 widget_refresh（用 Configuration.Provider 自动初始化的 WorkManager 实例）。 */
+    private fun enqueueWidgetRefresh(): Boolean = try {
+        WorkManager.getInstance(this).enqueueUniquePeriodicWork(
+            "widget_refresh",
+            androidx.work.ExistingPeriodicWorkPolicy.KEEP,
+            androidx.work.PeriodicWorkRequestBuilder<com.mineserve.mobile.widget.WidgetRefreshWorker>(
+                15, java.util.concurrent.TimeUnit.MINUTES
+            ).build()
+        )
+        true
+    } catch (e: Exception) {
+        android.util.Log.w("McApplication", "WorkManager setup failed", e)
+        false
     }
 
     /**

@@ -99,4 +99,58 @@ object McpFileUtils {
             val n = input.read(head)
             (0 until (n.coerceAtLeast(0))).any { head[it] == 0.toByte() }
         }
+
+    /**
+     * 从远端下载 URL 推导安全的落盘文件名。
+     *
+     * 为什么必须净化：url 来自 Modrinth / 用户传入等外部数据源，不可信。
+     * 若直接取 `url.substringAfterLast('/')` 再 URLDecoder 解码，`%2F` 会解成 `/`、
+     * `%2e%2e` 会解成 `..`；下游只补 `.jar` 后缀就 `File(dir, name)`，
+     * 可越界写到目标目录之外。
+     * 做法：解码后只保留最后一个路径段（同时处理 `/` 与 `\`），再拒绝空串、`.`、`..`；
+     * 仍不合法则回退到一个同样经过路径成分剥离的安全默认名（保留 `.jar` 后缀）。
+     *
+     * @param fallbackStem 回退名用的主干（同样是不可信输入，会再剥一次路径成分）
+     */
+    fun safeRemoteFileName(url: String, fallbackStem: String): String {
+        val decoded = runCatching { java.net.URLDecoder.decode(url.substringAfterLast('/'), "UTF-8") }
+            .getOrNull().orEmpty()
+        // 解码后仍可能由 %2F / %5C 还原出分隔符，取最后一段彻底消除目录成分
+        val candidate = decoded.substringAfterLast('/').substringAfterLast('\\').trim()
+        if (candidate.isNotEmpty() && candidate != "." && candidate != "..") return candidate
+        val fallback = fallbackStem.substringAfterLast('/').substringAfterLast('\\').trim()
+        return if (fallback.isNotEmpty() && fallback != "." && fallback != "..") "$fallback.jar" else "download.jar"
+    }
+
+    /** 支持的摘要算法白名单（避免把任意字符串交给 MessageDigest 抛异常） */
+    private val DIGEST_ALGORITHMS = mapOf(
+        "md5" to "MD5",
+        "sha1" to "SHA-1",
+        "sha256" to "SHA-256"
+    )
+
+    /**
+     * 计算文件摘要，返回小写十六进制；算法不支持时返回 null。
+     * 流式读取（64KB 缓冲），不会把整个文件载入内存。
+     */
+    fun digestHex(file: File, algorithm: String): String? {
+        val jca = DIGEST_ALGORITHMS[algorithm.lowercase()] ?: return null
+        if (!file.isFile) return null
+        val digest = java.security.MessageDigest.getInstance(jca)
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n <= 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /** 是否受支持的摘要算法名 */
+    fun supportsDigest(algorithm: String): Boolean = DIGEST_ALGORITHMS.containsKey(algorithm.lowercase())
+
+    /** 摘要算法名列表（用于错误提示） */
+    fun digestAlgorithms(): List<String> = DIGEST_ALGORITHMS.keys.toList()
 }

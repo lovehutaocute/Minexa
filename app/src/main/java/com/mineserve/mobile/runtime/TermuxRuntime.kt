@@ -5,9 +5,16 @@ import android.util.Log
 import android.system.Os
 import com.mineserve.mobile.runtime.NativeLibraryBundler.PACKAGED_LIBRARIES
 import com.mineserve.mobile.data.InstallStep
+import com.mineserve.mobile.data.JavaRuntime
+import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.JavaVersion
+import com.mineserve.mobile.data.JvmFlavor
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.AptMirror
+import com.mineserve.mobile.data.LegacyJava8Distro
+import com.mineserve.mobile.data.ProotDistro
+import com.mineserve.mobile.data.ProotContainerProfile
+import com.mineserve.mobile.data.isProotGuestRuntime
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.StepState
 import com.mineserve.mobile.data.StepStatus
@@ -49,6 +56,14 @@ class TermuxRuntime(context: Context) {
     internal val installer = BootstrapInstaller(context)
 
     /**
+     * FCL 来源的 JDK（FoldCraftLauncher 血统的原生 JRE）安装器。
+     *
+     * 它与 [installer] 平级：装到 `filesDir/jvm-fcl/`，不在 Termux 前缀里，
+     * 因而不受 apt/dpkg 与 `fixUsrBin` 的 jvm 目录替换影响（见 [FclJreInstaller]）。
+     */
+    internal val fclJre = FclJreInstaller(context)
+
+    /**
      * 随 APK 打包的 Termux 共享库在设备上的可读路径（nativeLibraryDir）。
      *
      * 缺库会导致 Termux 侧二进制在动态链接阶段直接失败：
@@ -76,13 +91,109 @@ class TermuxRuntime(context: Context) {
     /** 库缺失只提示一次，避免每次启动命令都刷日志。 */
     private val heapTagFixWarned = java.util.concurrent.atomic.AtomicBoolean(false)
 
-    private val java8Rootfs: File
-        get() = File(installer.rootDir, "var/lib/mineserve/java8-ubuntu-rootfs")
+    /**
+     * 「Termux 来源 + Java 8」这条历史组合对应的容器画像。
+     *
+     * 它不是一个特殊实体，就是普通的 focal + Java 8 —— 保留这个名字只是为了让
+     * 调用点读起来能表达「这是那条遗留组合」，而不必到处写
+     * `ProotContainerProfile(ProotDistro.Focal, JavaVersion.Java8)`。
+     *
+     * 发行版取自 [LegacyJava8Distro]（数据层），与配置归一 `normalizeProotRuntime()`
+     * 用的是同一个常量：两处若各写一份 focal，将来改了一处就会出现
+     * 「归一后配置指向 A，实际启动找 B」这种服务端起不来的错位。
+     */
+    private val legacyJava8Profile: ProotContainerProfile =
+        ProotContainerProfile(LegacyJava8Distro, JavaVersion.Java8)
 
-    private val java8ReadyMarker: File
-        get() = File(installer.rootDir, "java-8-ubuntu-ready")
+    /** 按 (发行版, Java 版本) 取得容器画像；组合不可安装时返回 null。 */
+    fun prootProfileFor(distro: ProotDistro, version: JavaVersion): ProotContainerProfile? =
+        distro.profileFor(version)
 
-    private val ubuntuJava8Home = "/usr/lib/jvm/java-8-openjdk-arm64"
+    /**
+     * 启动时用的当前发行版选择。
+     *
+     * 由 [McApplication] / ViewModel 在启动服务端前写入，与 `McConfig.prootDistro`
+     * 保持同步。之所以做成运行时的可变状态而不是每处都传参：
+     * [startMc] 的签名已被多处调用（MCP、桌面组件、定时任务、自动重启），
+     * 再加一个参数会让这些调用点全部改一遍，而它们本来就该跟随当前配置。
+     */
+    @Volatile
+    var selectedProotDistro: ProotDistro = ProotDistro.Default
+
+    /**
+     * 当前选用的 Java 来源。
+     *
+     * 与 [selectedProotDistro] 一样，是「当前配置」在运行时的投影，
+     * 供那些拿不到 `McConfig` 的路径（Forge 启动参数拼接、installer 分派）
+     * 判断该走来宾还是宿主链路。
+     */
+    @Volatile
+    var selectedProotVendor: JavaVendor = JavaVendor.Termux
+
+    /**
+     * 解析「本次启动要用的容器画像」。
+     *
+     * 用户选的发行版**不提供**所选 Java 版本时（例如发行版 focal、版本 Java 21），
+     * 直接抛出带解释的错误，而不是静默回退到另一个发行版 ——
+     * 静默回退会让「用户选的」和「实际跑的」变成两个东西，
+     * 而用户完全无从察觉，正是最难排查的那类问题。
+     */
+    private fun awaitProotProfile(version: JavaVersion): ProotContainerProfile {
+        val distro = selectedProotDistro
+        return distro.profileFor(version) ?: run {
+            val err = "${distro.displayName} 不提供 ${version.displayName}，" +
+                "可选：${distro.availableJavaVersions.joinToString { it.displayName }}。" +
+                "请在「依赖与环境管理」里改选发行版或 Java 版本。"
+            emitLog("[startMc] $err")
+            throw RuntimeException(err)
+        }
+    }
+
+    /**
+     * 从 (来源, 版本) 解析出容器画像，供 installer / 命令执行等**不经过 startMc** 的路径使用。
+     *
+     * 与 [awaitProotProfile] 的区别：本方法显式接收来源，因此
+     * 「Termux + Java 8」这条历史组合会稳定解析到 focal，
+     * 而不会受当前 [selectedProotDistro] 影响（用户切发行版不该改变 Java 8 的行为）。
+     */
+    fun resolveProotProfile(vendor: JavaVendor, version: JavaVersion): ProotContainerProfile =
+        if (vendor == JavaVendor.Proot) awaitProotProfile(version) else legacyJava8Profile
+
+    /** 某个容器画像的 rootfs 是否已经解压出可用的 shell。 */
+    private fun containerRootfsReady(profile: ProotContainerProfile): Boolean =
+        hasUsableUbuntuShell(profile.rootfsDir(installer.rootDir))
+
+    /** 该画像的 rootfs 根目录。 */
+    private fun containerRootfs(profile: ProotContainerProfile): File =
+        profile.rootfsDir(installer.rootDir)
+
+    /**
+     * 指定容器画像里的 Java 是否**装好且可用**。
+     *
+     * 判定三件事同时成立：就绪标记存在、来宾 `java` 可执行、`libjvm.so` 存在。
+     * 只看标记是不够的——rootfs 可能被清理、apt 事务可能中断在半途，
+     * 而标记还在，于是界面显示「已安装」，点启动才发现根本找不到 java。
+     *
+     * 两个候选路径是必要的：Java 8 的 Ubuntu 包用的是老 layout（JRE 在 `jre/` 下），
+     * 11 及以上是新 layout。少写一条就会让其中一半版本被误判成未安装。
+     */
+    fun isContainerJavaReady(profile: ProotContainerProfile): Boolean {
+        val prefix = installer.rootDir
+        val rootfs = containerRootfs(profile)
+        if (!rootfs.isDirectory) return false
+        if (!profile.readyMarker(prefix).isFile) return false
+        val hasJava = profile.guestJavaBinaryCandidates
+            .map { File(rootfs, it.removePrefix("/")) }
+            .any { it.isFile }
+        val hasJvmLibrary = profile.guestJvmLibraryCandidates
+            .map { File(rootfs, it.removePrefix("/")) }
+            .any { it.isFile }
+        return hasJava && hasJvmLibrary
+    }
+
+    /** 已就绪的容器画像集合（供依赖管理页与诊断共用）。 */
+    fun installedProotContainers(): Set<ProotContainerProfile> =
+        ProotContainerProfile.all.filter { isContainerJavaReady(it) }.toSet()
 
     /** MC 服务器进程（null 表示未启动） */
     @Volatile
@@ -94,6 +205,32 @@ class TermuxRuntime(context: Context) {
     @Volatile private var lastMcLogFile: File? = null
     @Volatile private var lastMcLogStartOffset: Long = 0L
     private val mcProcessLock = Any()
+
+    /**
+     * 串行化「启动服务端」这件事。
+     *
+     * [startMc] / [startPhp] / [startMcCustom] 都是同样的三步：
+     * 「读 mcProcess 判断是否已在跑 → spawn 进程 → [trackMcProcess] 写入」。
+     * 这三步之间原先**没有任何互斥**，于是两个线程可以都读到 mcProcess == null：
+     * 崩溃自动重启线程（McServerController 里那个 `Thread { Thread.sleep; runBlocking { launchMc } }`）
+     * 和用户手动点「启动」撞在一起就会各起一个 JVM，同一个 world 被两个进程打开 ——
+     * Paper/Spigot 报 `already locked`，最坏情况写坏 region 文件。
+     *
+     * 用一把独立的锁而不是 [mcProcessLock]：启动过程包含 spawn 进程，可能耗到秒级，
+     * 不该让 [clearMcProcessIfCurrent] 这种短操作陪着等。
+     * 可重入，所以 [startMc] 内部再调 [startMcInProot] 不会自锁。
+     */
+    private val mcLaunchLock = java.util.concurrent.locks.ReentrantLock()
+
+    /** 持 [mcLaunchLock] 执行 [block]；供各 start* 入口做启动串行化。 */
+    private inline fun <T> withLaunchLock(block: () -> T): T {
+        mcLaunchLock.lock()
+        try {
+            return block()
+        } finally {
+            mcLaunchLock.unlock()
+        }
+    }
 
     init {
         // 把打包的 libandroid-glob.so 落到 Termux 库目录，必须在任何命令执行前完成。
@@ -230,9 +367,28 @@ class TermuxRuntime(context: Context) {
 
     /** 读取当前服务端日志文件的最近内容，供终端页快速恢复历史输出。 */
     suspend fun readRecentMcLog(dirName: String, maxLines: Int = 300): List<String> = withContext(Dispatchers.IO) {
-        val file = File(serverDirFor(dirName), "logs/latest.log")
-        if (!file.isFile || file.length() == 0L) return@withContext emptyList()
-        file.useLines(Charsets.UTF_8) { lines -> lines.toList().takeLast(maxLines) }
+        val serverDir = serverDirFor(dirName)
+        // 优先读服务端自己维护的 latest.log（Paper/Spigot/Forge 由 log4j 写，内容是权威的）；
+        // 只有它不存在或为空时才回退到应用侧捕获的控制台输出——
+        // 例如 PocketMine、或核心在写出第一行日志前就崩了的情况。
+        val source = mcLogFileFor(dirName) ?: return@withContext emptyList()
+        source.useLines(Charsets.UTF_8) { lines -> lines.toList().takeLast(maxLines) }
+    }
+
+    /**
+     * 当前可用于读取服务端输出的文件：优先服务端自己维护的 latest.log
+     * （Paper/Spigot/Forge 由 log4j 写，内容权威），没有时回退到应用侧捕获的控制台输出。
+     *
+     * 调用方（含 MCP 的 get_console_logs / wait_for_log）**必须走这里**再去 tail：
+     * 以前它们硬编码 logs/latest.log，而 PocketMine 根本不生成这个文件 ——
+     * 于是这两个工具在 PocketMine 上恒返回空/永远超时（1.2.7 里是有数据的，属行为回归）。
+     *
+     * @return null 表示还没有任何输出可读
+     */
+    fun mcLogFileFor(dirName: String): File? {
+        val serverDir = serverDirFor(dirName)
+        File(serverDir, "logs/latest.log").takeIf { it.isFile && it.length() > 0L }?.let { return it }
+        return File(serverDir, MC_CONSOLE_LOG_NAME).takeIf { it.isFile && it.length() > 0L }
     }
 
     /** 读取最近一次服务端运行从启动到退出产生的完整日志。 */
@@ -251,8 +407,19 @@ class TermuxRuntime(context: Context) {
         }
     }
 
+    /**
+     * 准备**应用侧**的控制台捕获文件，并记住本次运行的起始偏移。
+     *
+     * 为什么不再直接写服务端的 `logs/latest.log`：那个文件是 Paper/Spigot/Forge 由 log4j
+     * 自己维护的，应用再往里 append 一遍同样的 stdout，会让**每一行出现两次**、日志体积翻倍，
+     * 还会让 [readRecentMcLog] 的 overlap 去重失效（终端页看到重复行）。
+     * 现在两个文件各写各的：服务端写它的，应用写 [MC_CONSOLE_LOG_NAME]。
+     *
+     * `lastMcLog*` 指向这份捕获文件，所以 [readLastMcRunLog] 拿到的仍是
+     * 「本次运行从启动到退出」的完整输出，语义没变。
+     */
     private fun prepareMcLogFile(serverDir: File): File {
-        val file = File(serverDir, "logs/latest.log")
+        val file = File(serverDir, MC_CONSOLE_LOG_NAME)
         file.parentFile?.mkdirs()
         file.createNewFile()
         lastMcLogFile = file
@@ -305,24 +472,106 @@ class TermuxRuntime(context: Context) {
         return if (resolved != "java") resolved else null
     }
 
-    fun isJavaInstalled(version: JavaVersion): Boolean = if (version == JavaVersion.Java8) {
-        java8UbuntuReady()
-    } else {
-        javaCandidates(version).any {
-            File(it, "bin/java").exists() && File(it, "bin/java").canExecute()
+    /**
+     * 指定来源下某版本是否已装好。
+     *
+     * 两套 JDK 的落点完全不同：Termux 侧在 `$PREFIX/lib/jvm/`（Java 8 还额外分到
+     * proot 来宾根文件系统），FCL 侧在 `filesDir/jvm-fcl/`。判定「装没装」也必须
+     * 按来源分开查，否则会出现「Termux 装了 Java 17 于是 FCL 的 Java 17 也显示已安装」
+     * 这种一眼看不出问题、点下去才报错的错位。
+     */
+    fun isJavaInstalled(
+        version: JavaVersion,
+        vendor: JavaVendor = JavaVendor.Termux
+    ): Boolean = when (vendor) {
+        JavaVendor.Fcl -> fclJre.isInstalled(version)
+        JavaVendor.Termux -> if (version == JavaVersion.Java8) {
+            // 历史遗留：Termux 来源的 Java 8 一直跑在 focal 容器里。
+            java8UbuntuReady()
+        } else {
+            javaCandidates(version).any {
+                File(it, "bin/java").exists() && File(it, "bin/java").canExecute()
+            }
+        }
+        // Proot 来源：**只要某个发行版里装好了这个版本**就算已安装。
+        //
+        // 这里刻意不接收 distro 参数：本方法回答的是「这个 (来源, 版本) 装没装」，
+        // 而界面上的分组列表也按 (来源, 版本) 展示 —— 同一个 Java 17 装在
+        // focal 还是 jammy 里，对用户而言都是「PRoot 的 Java 17 已装」。
+        // 「当前选中的发行版里是否装了这个版本」是另一个问题，
+        // 由 [isJavaReadyForDistro] 回答，启动校验走那条。
+        JavaVendor.Proot -> ProotDistro.entries.any { distro ->
+            distro.profileFor(version)?.let { isContainerJavaReady(it) } == true
         }
     }
 
-    fun installedJavaVersions(): Set<JavaVersion> = JavaVersion.values().filter(::isJavaInstalled).toSet()
+    /**
+     * 所选发行版里这个 Java 版本是否真的可用。
+     *
+     * 与 [isJavaInstalled] 的区别很关键：用户可能把 Java 17 装在 focal 里，
+     * 却把当前发行版选成了 jammy —— 此时「已安装」为真，但**这次启动会失败**。
+     * 启动前的校验必须用本方法，否则会出现「界面显示已安装，点启动报找不到 java」。
+     *
+     * @return 组合非法（该发行版不提供此版本）或未安装时为 false
+     */
+    fun isJavaReadyForDistro(version: JavaVersion, distro: ProotDistro): Boolean =
+        distro.profileFor(version)?.let { isContainerJavaReady(it) } ?: false
 
-    /** 直接删除指定 Java 版本的文件（Java 8 为独立 PRoot 来宾根文件系统）。返回是否有文件被删除。 */
-    fun deleteJava(version: JavaVersion): Boolean {
+    fun installedJavaVersions(): Set<JavaVersion> =
+        JavaVersion.values().filter { isJavaInstalled(it, JavaVendor.Termux) }.toSet()
+
+    /** 已安装的运行环境（来源 + 版本），供「依赖与环境管理」两处分组列表共用。 */
+    fun installedJavaRuntimes(): Set<JavaRuntime> =
+        JavaRuntime.all.filter { isJavaInstalled(it.version, it.vendor) }.toSet()
+
+    /**
+     * 删除指定运行环境的文件。
+     *
+     * 各来源的落点完全不同，且**只删自己那一份**，不碰其他来源：
+     * - FCL：`filesDir/jvm-fcl/` 下的一棵子树
+     * - Proot：进容器 `apt purge` 掉**该版本**的 JDK，保留 rootfs 与其他版本
+     * - Termux Java 8：历史遗留的 focal 容器（与 Proot.Focal 是同一份文件）
+     * - Termux 其他版本：`$PREFIX/lib/jvm/<dir>`
+     *
+     * 返回是否有文件被删除。
+     *
+     * ## 为什么是 suspend
+     *
+     * PRoot 来源的删除要进容器跑 apt（秒级到十秒级），必须挂起执行。
+     * 其余来源都是本地文件操作，走同一条挂起签名即可 ——
+     * 为它们在调用侧分叉出两条路径，只会让「忘了加 running 守卫」这类漏洞更容易出现。
+     */
+    suspend fun deleteJava(version: JavaVersion, vendor: JavaVendor = JavaVendor.Termux): Boolean {
         if (isMcRunning()) return false
-        val roots: List<File> = if (version == JavaVersion.Java8) {
-            listOf(java8Rootfs, File(installer.rootDir, "java-8-ubuntu-ready"))
-        } else {
-            javaCandidates(version).map(::File)
+        if (vendor == JavaVendor.Fcl) return fclJre.delete(version)
+
+        // Proot 来源：**按版本**卸载，而不是删掉整个 rootfs。
+        //
+        // 一个 rootfs 里可以装多个 JDK（focal 有 8/11/17）。早先这里直接删 rootfs，
+        // 用户在界面上只点了「卸载 Java 17」，实际却把 Java 8 和 11 一起清掉了 ——
+        // 那是「删容器」的语义，不是「卸载这个运行环境」。现在改为 apt purge
+        // 单个包，容器与其余版本都保留。
+        if (vendor == JavaVendor.Proot) {
+            val profile = awaitProotProfile(version)
+            val ok = uninstallProotJava(profile)
+            // 只有容器内确认卸载干净了，才重新评估「这个发行版还剩哪些版本」。
+            // 若这是最后一个版本，rootfs 已无 JDK，标记留给用户主动删容器时清。
+            return ok
         }
+
+        // Termux 来源的 Java 8 与 Proot 来源的 focal 是**同一个** focal 容器，
+        // 因此删除逻辑也复用同一个 helper，只是入口来源不同。
+        // 单独写一份「删 rootfs + 删标记」很容易漏掉其中一项，
+        // 留下「标记还在但 rootfs 没了」这种自相矛盾的状态。
+        if (version == JavaVersion.Java8) {
+            val removed = deleteProotContainer(ProotDistro.Focal)
+            if (removed && installedJavaVersions().isEmpty()) {
+                File(installer.rootDir, "bin/java").delete()
+            }
+            return removed
+        }
+
+        val roots: List<File> = javaCandidates(version).map(::File)
         var deleted = false
         roots.forEach { root ->
             if (root.exists()) deleted = root.deleteRecursively() || deleted
@@ -332,6 +581,163 @@ class TermuxRuntime(context: Context) {
             File(installer.rootDir, "bin/java").delete()
         }
         return deleted
+    }
+
+    /**
+     * 在容器内用 apt 卸载**单个** JDK，保留 rootfs 与其他 Java 版本。
+     *
+     * ## 为什么需要它
+     *
+     * 一个发行版 rootfs 可以装多个 JDK（focal 支持 8/11/17）。早先「删除 Java 17」
+     * 的实现是直接把整个 rootfs 删掉 —— 用户的 Java 8、11 会**一起消失**，
+     * 而界面上他只点了 Java 17 那一个。现在改为进容器 apt remove，
+     * 只清掉目标版本。
+     *
+     * ## 用 `apt-get purge` 而不是 `autoremove`
+     *
+     * `purge` 会连配置文件一起删；`autoremove` 则会连带清掉「不再被依赖」的包，
+     * 在多版本共存时可能把别的 JDK 依赖的 `ca-certificates`、`fontconfig` 之类
+     * 一并拔掉，导致剩余版本在下次启动时才出问题。因此只 purge 目标包本身，
+     * 不做 autoremove。
+     *
+     * ## 为什么要 `-f install` 与 `dpkg --configure -a`
+     *
+     * 容器内的 apt 事务可能因为网络中断而停在半途（装机时常见）。
+     * 直接 purge 会在 dpkg 锁或未配置包上失败，先跑一遍恢复能让卸载更稳。
+     */
+    private fun containerJavaUninstallCommand(profile: ProotContainerProfile): String {
+        val pkg = profile.aptPackage
+        // 校验用的候选路径必须非空。空列表会展开成 `if ; then`（空命令恒真），
+        // 于是「卸载后仍检测到 java」的判定会永远成立、每次卸载都报失败。
+        // 候选来自 ProotContainerProfile 的常量列表，正常不会为空；这里拦一道，
+        // 让将来改动该列表的人立刻看到原因，而不是面对一个诡异的必失败。
+        val binaryChecks = profile.guestJavaBinaryCandidates
+            .joinToString(" || ") { "test -x $it" }
+        check(binaryChecks.isNotBlank()) {
+            "guestJavaBinaryCandidates 为空，卸载校验会退化成恒真；请检查 ProotContainerProfile"
+        }
+        return """
+        echo "[proot] 正在恢复容器内未完成的软件包事务..."
+        if ! dpkg --configure -a || ! apt-get -o DPkg::Lock::Timeout=60 -f install -y; then
+          echo "[proot] dpkg 恢复失败，未继续卸载；请稍后重试"
+          exit 1
+        fi
+        echo "[proot] 正在卸载 $pkg"
+        # 只 purge 目标包，刻意不做 autoremove：多版本共存时它可能拔掉
+        # 其他 JDK 仍需要的公共依赖，问题要到下次启动才暴露。
+        apt-get -o DPkg::Lock::Timeout=60 purge -y $pkg || exit 1
+        # 目录残留（配置文件、apt 未跟踪的文件）一并清掉，否则
+        # 就绪判定可能因为 java 还在而继续报「已安装」。
+        rm -rf '${profile.javaHomeInGuest}'
+        # 校验：所有已知 layout 下都不能再有可执行的 java，否则这次卸载算失败
+        # （Java 8 的包把 JRE 放在 jre/bin/java，只查新 layout 会漏判）
+        if $binaryChecks; then
+          echo "[proot] $pkg 卸载后仍检测到 java，卸载未生效"
+          exit 1
+        fi
+        exit 0
+        """.trimIndent()
+    }
+
+    /**
+     * 卸载容器内的单个 JDK（保留 rootfs 与其他 Java 版本）。
+     *
+     * @return 卸载是否成功（`true` 也包含「本来就没装」的情况）
+     */
+    suspend fun uninstallProotJava(profile: ProotContainerProfile): Boolean = withContext(Dispatchers.IO) {
+        if (isMcRunning()) {
+            emitLog("[proot] 服务端正在运行，无法卸载 ${profile.displayName}")
+            return@withContext false
+        }
+        if (!isContainerJavaReady(profile)) {
+            // 本来就没装：视为已达成目标，不必进容器跑一次 apt。
+            emitLog("[proot] ${profile.displayName} 未安装，无需卸载")
+            return@withContext true
+        }
+        if (!prepareUbuntuRuntime(profile)) {
+            emitLog("[proot] ${profile.displayName} 容器无法启动，请先修复运行环境")
+            return@withContext false
+        }
+        emitLog("[proot] 正在 ${profile.displayName} 内卸载 ${profile.aptPackage}")
+        val code = runUbuntu(
+            containerJavaUninstallCommand(profile),
+            timeoutMs = 300_000,
+            profile = profile
+        )
+        if (code != 0) {
+            // 卸载失败时**不删除任何宿主文件**：容器内状态未知，
+            // 贸然删标记会让用户看到「未安装」但磁盘上还留着一份完整 JDK。
+            emitLog("[proot] ${profile.displayName} 卸载失败（exit=$code），容器状态未改动")
+            return@withContext false
+        }
+        emitLog("[proot] ${profile.displayName} 已卸载")
+        true
+    }
+
+    /**
+     * 删除整个 PRoot 容器（不论里面装了哪些 Java 版本）。
+     *
+     * 与 [deleteJava] 的 Proot 分支是同一件事，但入口不同：容器页给出的是
+     * 「删除这个容器」，而依赖页给的是「卸载这个运行环境」。两者都必须
+     * 确认服务端没在跑 —— 正在用的 rootfs 被删掉，服务端会以奇怪的方式崩。
+     *
+     * @return 是否有文件被删除
+     */
+    fun deleteProotContainer(distro: ProotDistro): Boolean {
+        if (isMcRunning()) return false
+        val template = distro.availableJavaVersions.firstOrNull() ?: return false
+        val profile = ProotContainerProfile(distro, template)
+        var removed = false
+        val rootfs = profile.rootfsDir(installer.rootDir)
+        if (rootfs.exists()) removed = rootfs.deleteRecursively() || removed
+        // 标记文件的存在与否不影响「删掉了没有」的语义，单独清掉即可
+        profile.readyMarker(installer.rootDir).delete()
+        // PRoot glue 文件（PROOT_TMP_DIR）也一并回收
+        profile.prootTmpDir(installer.rootDir).deleteRecursively()
+        return removed
+    }
+
+    /** 容器 rootfs 占用的磁盘字节数（供「删除以回收空间」的提示使用）。 */    fun prootContainerSizeBytes(distro: ProotDistro): Long {
+        val template = distro.availableJavaVersions.firstOrNull() ?: return 0L
+        val rootfs = ProotContainerProfile(distro, template).rootfsDir(installer.rootDir)
+        if (!rootfs.isDirectory) return 0L
+        return runCatching {
+            rootfs.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+        }.getOrDefault(0L)
+    }
+
+    /**
+     * 某个容器的分层状态，用于诊断页展示「到底卡在哪一层」。
+     *
+     * 容器链路有四层，每层都可能单独出问题，而用户看到的只有一句
+     * 「已安装 / 未安装」。分层报告让「rootfs 没解压完」与
+     * 「rootfs 好了但这个 Java 没装上」区分开 —— 前者要重新下载，
+     * 后者只需重装一次 apt 包，代价差很多。
+     */
+    data class ProotContainerState(
+        /** rootfs 目录存在 */
+        val rootfsPresent: Boolean,
+        /** rootfs 里有可用的 shell（解压完整） */
+        val shellUsable: Boolean,
+        /** 该发行版的就绪标记存在 */
+        val readyMarkerPresent: Boolean,
+        /** 该发行版下所有已装 Java 版本 */
+        val installedVersions: List<JavaVersion>,
+        /** rootfs 占用字节数 */
+        val sizeBytes: Long
+    )
+
+    fun prootContainerState(distro: ProotDistro): ProotContainerState {
+        val template = distro.availableJavaVersions.first()
+        val profile = ProotContainerProfile(distro, template)
+        val rootfs = profile.rootfsDir(installer.rootDir)
+        return ProotContainerState(
+            rootfsPresent = rootfs.isDirectory,
+            shellUsable = hasUsableUbuntuShell(rootfs),
+            readyMarkerPresent = profile.readyMarker(installer.rootDir).isFile,
+            installedVersions = distro.availableJavaVersions.filter { isJavaReadyForDistro(it, distro) },
+            sizeBytes = prootContainerSizeBytes(distro)
+        )
     }
 
     // ── PocketMine-MP 专用 PHP 运行时 ─────────────────────────────
@@ -349,12 +755,6 @@ class TermuxRuntime(context: Context) {
 
     /** 指定 PHP 版本的可执行文件 */
     fun phpBinaryFor(version: PhpVersion): File = File(phpRuntimeDirFor(version), "php")
-
-    /** 默认（PocketMine 使用）PHP 运行时目录，等价于 phpRuntimeDirFor(Default) */
-    val phpRuntimeDir: File get() = phpRuntimeDirFor(PhpVersion.Default)
-
-    /** 默认 PHP 可执行文件 */
-    val phpBinary: File get() = phpBinaryFor(PhpVersion.Default)
 
     /** 指定 PHP 版本是否已就绪 */
     fun isPhpInstalled(version: PhpVersion = PhpVersion.Default): Boolean =
@@ -385,12 +785,59 @@ class TermuxRuntime(context: Context) {
             "https://github.moeyy.xyz/",
             ""
         ).map { it + url }
+        // 期望摘要：上游用的是**滚动 tag**（`pm5-latest`），写死哈希会在上游发新版时直接失效、
+        // 把正常更新误判成篡改。所以从 GitHub API 现取该 asset 的官方 digest——
+        // api.github.com 与下面的镜像站是**不同主机**，镜像伪造不了它。
+        val expectedSha = RemoteArtifact.githubAssetSha256(
+            "ItzxDwi", "AndroidPHP", version.releaseTag, version.tarballAsset
+        )
+        if (expectedSha == null) {
+            onLog("[php] 提示：拿不到官方校验值，本次只接受 GitHub 直连来源")
+        }
         var downloaded = false
         for (mirror in mirrors) {
-            if (downloadFile(mirror, tarball)) { downloaded = true; break }
-            onLog("[php] 镜像下载失败，尝试下一个源...")
+            if (!downloadFile(mirror, tarball)) {
+                onLog("[php] 镜像下载失败，尝试下一个源...")
+                continue
+            }
+            // 这几个来源全是第三方反代，对内容不作任何承诺。
+            // 下载到的 tarball 会被直接解压、chmod 755、随后当作 PHP 解释器执行，
+            // 所以"够大就放行"是绝对不能接受的判据。
+            if (tarball.length() < 1_000_000L) {
+                onLog("[php] 来源内容过小，已丢弃")
+                tarball.delete()
+                continue
+            }
+            if (expectedSha != null) {
+                if (!RemoteArtifact.matches(tarball, expectedSha)) {
+                    onLog("[php] 校验失败（内容与官方不符），已丢弃该来源")
+                    tarball.delete()
+                    continue
+                }
+            } else {
+                // 拿不到官方摘要时，第三方反代的内容确实对不上账。但同网络下 github.com 直连
+                // 本来就可能不通（之前全部拒绝会让 PHP 在国内彻底装不上，报错还是误导性的
+                // 「请检查网络后重试」）。折中：反代来源必须额外通过**结构校验**——
+                // 它是 gzip、且包内确实含一个 php 可执行文件；只看大小是不够的。
+                // 伪造 byte-for-byte 相同结构的成本远高于改包的收益。
+                if (RemoteArtifact.isDirectGitHubSource(mirror)) {
+                    downloaded = true
+                    break
+                }
+                val problem = phpTarballProblem(tarball)
+                if (problem != null) {
+                    onLog("[php] 第三方来源内容不符合预期（$problem），已丢弃")
+                    tarball.delete()
+                    continue
+                }
+                onLog("[php] 无官方校验值可用，已按包结构校验放行第三方来源")
+                downloaded = true
+                break
+            }
+            downloaded = true
+            break
         }
-        if (!downloaded || tarball.length() < 1_000_000L) {
+        if (!downloaded) {
             tarball.delete()
             onLog("[php] ${version.displayName} 运行环境下载失败，请检查网络后重试")
             return false
@@ -410,6 +857,36 @@ class TermuxRuntime(context: Context) {
             else "[php] ${version.displayName} 运行环境不完整，请删除 ${version.runtimeDirName} 目录后重试"
         )
         return ok
+    }
+
+    /**
+     * 第三方来源的 tarball 结构校验：返回 null 表示通过，否则返回问题描述。
+     *
+     * 只检查「它是我们期望形态的 PHP 运行环境」——是 gzip、里面有 php 可执行条目。
+     * 这挡不住字节级伪造，但能挡住最常见的失败形态：反代返回 HTML 错误页、
+     * 登录中转页、被截断的包（tar 提前结束）。
+     */
+    private fun phpTarballProblem(tarball: File): String? {
+        return try {
+            java.util.zip.GZIPInputStream(tarball.inputStream().buffered()).use { gzip ->
+                org.apache.commons.compress.archivers.tar.TarArchiveInputStream(gzip).use { tar ->
+                    var foundBinary = false
+                    var entries = 0
+                    while (true) {
+                        val entry = tar.nextTarEntry ?: break
+                        entries++
+                        if (entries > 4 && !foundBinary) return@use "包内前 $entries 个条目里没有 php 可执行文件"
+                        if (!entry.isDirectory && (entry.name == "php" || entry.name.endsWith("/php"))) {
+                            foundBinary = true
+                            break
+                        }
+                    }
+                    if (!foundBinary) "包内没有 php 可执行文件" else null
+                }
+            }
+        } catch (e: Exception) {
+            "无法作为 PHP 运行环境包解析（${e.message}）"
+        }
     }
 
     /** 直接删除指定版本的 PHP 运行环境。返回是否有文件被删除。 */
@@ -506,32 +983,108 @@ class TermuxRuntime(context: Context) {
         ).any { it.isFile && it.canExecute() }
     }
 
-    /** Read-only checks used by the dashboard diagnostic screen. */
-    fun javaRuntimeDiagnostic(version: JavaVersion): Pair<Boolean, String> = when (version) {
-        JavaVersion.Java8 -> {
-            val rootfsReady = hasUsableUbuntuShell(java8Rootfs)
-            val ready = java8UbuntuReady()
-            when {
-                ready -> true to "Ubuntu ARM64 container and openjdk-8-jdk are ready"
-                !rootfsReady -> false to "Ubuntu ARM64 container shell is unavailable"
-                else -> false to "openjdk-8-jdk is incomplete or has not passed verification"
+    /**
+     * Read-only checks used by the dashboard diagnostic screen.
+     *
+     * FCL 来源只看它自己的落点：那套 JRE 是整包解压出来的完整运行时，不存在
+     * 「装了但是缺件」这种半成品状态（安装是「校验通过 → 原子改名」，要么整棵都在，
+     * 要么什么都没有），所以判定条件比 Termux 的 `isJavaComplete` 简单。
+     */
+    fun javaRuntimeDiagnostic(
+        version: JavaVersion,
+        vendor: JavaVendor = JavaVendor.Termux
+    ): Pair<Boolean, String> = when (vendor) {
+        JavaVendor.Fcl -> {
+            val ready = fclJre.isInstalled(version)
+            // 括号不能省：Kotlin 的 infix `to` 右操作数只吃 rangeExpression，
+            // 直接写 `ready to if (...)` 是语法错误（if 是更高一层的 expression）。
+            ready to (
+                if (ready) "FCL ${version.displayName} runtime is executable"
+                else "FCL ${version.displayName} runtime is not installed"
+                )
+        }
+        JavaVendor.Termux -> when (version) {
+            JavaVersion.Java8 -> {
+                // 「Termux + Java 8」实质就是 focal 容器，与 Proot 来源走同一套判定。
+                val profile = legacyJava8Profile
+                val rootfsReady = hasUsableUbuntuShell(profile.rootfsDir(installer.rootDir))
+                val ready = isContainerJavaReady(profile)
+                when {
+                    ready -> true to "Ubuntu ARM64 container and openjdk-8-jdk are ready"
+                    !rootfsReady -> false to "Ubuntu ARM64 container shell is unavailable"
+                    else -> false to "openjdk-8-jdk is incomplete or has not passed verification"
+                }
+            }
+            else -> {
+                val ready = isJavaInstalled(version) && isJavaComplete(version)
+                ready to (if (ready) "${version.displayName} runtime is executable"
+                else "${version.displayName} runtime is missing or incomplete")
             }
         }
-        else -> {
-            val ready = isJavaInstalled(version) && isJavaComplete(version)
-            ready to if (ready) "${version.displayName} runtime is executable" else "${version.displayName} runtime is missing or incomplete"
+        // PRoot 来源：这里刻意**不接收** distro 参数，因为诊断问的是
+        // 「PRoot 的某个 Java 版本有没有可用的实现」——只要任意一个发行版
+        // 提供且装好了，这条路就是通的。用户当前选中的发行版里到底装没装，
+        // 是启动校验关心的事，由 [isJavaReadyForDistro] 回答。
+        // 两者的区别很实际：Java 17 装在 focal、当前选 jammy 时，
+        // 诊断说「可用」没错（换个发行版就能跑），但启动必须拦下来。
+        JavaVendor.Proot -> {
+            val candidates = ProotDistro.entries.mapNotNull { it.profileFor(version) }
+            val readyProfile = candidates.firstOrNull { isContainerJavaReady(it) }
+            when {
+                candidates.isEmpty() -> false to
+                    "No PRoot distro provides ${version.displayName}"
+                readyProfile != null -> true to
+                    "${readyProfile.displayName} container has ${readyProfile.aptPackage} ready"
+                candidates.none { containerRootfsReady(it) } -> false to
+                    "${candidates.first().distro.displayName} container rootfs is unavailable"
+                else -> false to
+                    "${candidates.first().aptPackage} is incomplete or has not passed verification"
+            }
         }
+    }
+
+    /**
+     * 某来源（含 Proot / Termux Java 8）的字体运行库是否就绪。
+     *
+     * 与 [fontRuntimeReady] 的区别是**接收 vendor 并自行分流**：
+     * 来宾链路进容器检查，宿主链路查宿主文件。
+     * 诊断页与任何「不知道当前是哪种链路」的调用方都应该用这个方法。
+     */
+    fun fontRuntimeDiagnostic(vendor: JavaVendor, version: JavaVersion): Boolean {
+        if (isProotGuestRuntime(vendor, version)) {
+            val profile = resolveProotProfile(vendor, version)
+            if (!hasUsableUbuntuShell(profile.rootfsDir(installer.rootDir))) return false
+            return runUbuntu(
+                "test -f /etc/fonts/fonts.conf && test -x /usr/bin/fc-cache",
+                15_000,
+                profile = profile
+            ) == 0
+        }
+        // FCL 的 JRE 是整包解压的完整运行时，字体随包附带，无 apt 补齐一说
+        if (vendor == JavaVendor.Fcl) return true
+        return fontRuntimeReady(version)
     }
 
     fun needsFontRuntime(core: ServerCore): Boolean = core == ServerCore.Forge || core == ServerCore.NeoForge
 
-    fun fontRuntimeReady(version: JavaVersion): Boolean = if (version == JavaVersion.Java8) {
-        hasUsableUbuntuShell(java8Rootfs) && runUbuntu(
-            "test -f /etc/fonts/fonts.conf && test -x /usr/bin/fc-cache",
-            15_000
-        ) == 0
-    } else {
-        File(installer.rootDir, "etc/fonts/fonts.conf").isFile && isCommandInstalled("fc-cache")
+    /**
+     * 宿主侧字体运行库是否就绪。
+     *
+     * ⚠️ **只对宿主链路（Termux 非 Java 8）有意义。**
+     * 来宾容器链路的字体在容器内，必须用 `runUbuntu(...)` 进容器检查，
+     * 否则会拿宿主的 `etc/fonts/fonts.conf` 去回答来宾的问题 ——
+     * 容器缺字体时会误报「已就绪」，启动后 Fontconfig 才失败。
+     *
+     * 调用方若要判断「某来源（含 Proot）的字体是否就绪」，请用
+     * [autoRepairRuntime]（它已按 [isProotGuestRuntime] 分流），
+     * 或自行按 vendor 分支。这里保留 `require` 是为了挡住误用，
+     * 因为这种误用不会崩，只会静默给出错误答案。
+     */
+    fun fontRuntimeReady(version: JavaVersion): Boolean {
+        require(!isProotGuestRuntime(JavaVendor.Termux, version)) {
+            "$version 走来宾容器链路，字体在容器内；请改用容器内的检查（见 autoRepairRuntime）"
+        }
+        return File(installer.rootDir, "etc/fonts/fonts.conf").isFile && isCommandInstalled("fc-cache")
     }
 
     /** Rebuild fontconfig with the resolved executable path rather than PATH lookup. */
@@ -566,10 +1119,60 @@ class TermuxRuntime(context: Context) {
         return rebuildTermuxFontCache()
     }
 
-    suspend fun installJava(version: JavaVersion): Boolean = withContext(Dispatchers.IO) {
+    /**
+     * 安装指定来源的指定 Java 版本。
+     *
+     * [JavaVendor.Fcl] 走的是「下载 .ecpkg → 校验 → 解压到 filesDir/jvm-fcl/」，
+     * 与 apt 无关；[JavaVendor.Termux] 走原有的 apt / Ubuntu 容器路径。
+     * [onProgress] 取值 0–100，三种来源都有意义：
+     * - FCL：按下载字节数算。
+     * - PRoot：按阶段报（rootfs 下载解压 0–60、容器内 apt 安装 60–100）。
+     *   apt 本身不给细粒度进度，但整段是数分钟的长任务，进度圈不动会被当成卡死。
+     * - Termux 宿主：apt 同样无细粒度进度，只在开始/结束时回调。
+     */
+    suspend fun installJava(
+        version: JavaVersion,
+        vendor: JavaVendor = JavaVendor.Termux,
+        onProgress: ((Int) -> Unit)? = null,
+        distro: ProotDistro = ProotDistro.Default
+    ): Boolean = withContext(Dispatchers.IO) {
+        if (vendor == JavaVendor.Fcl) {
+            // 刻意不检查 isReady()：这套 JRE 是 Android 原生二进制，落盘即可用，
+            // 与 Termux 环境是否初始化无关（启动服务端时才需要 Termux 环境）。
+            emitLog("[java] 正在安装 FCL ${version.displayName}（下载 .ecpkg 并校验）")
+            return@withContext fclJre.install(
+                version = version,
+                onProgress = { done, total, _ ->
+                    onProgress?.invoke((done * 100 / total.coerceAtLeast(1L)).toInt())
+                },
+                onLog = { emitLog(it) }
+            )
+        }
+        // PRoot 来源：先确认「这个发行版确实提供这个版本」，再进容器装。
+        //
+        // 这一步不能省。用户完全可能把发行版设成 focal 而版本选成 Java 21 ——
+        // 若不校验就直接进容器，apt 只会报一句 `Unable to locate package openjdk-21-jdk`，
+        // 用户看到的是「安装失败」，而不是「这个组合不成立」。
+        if (vendor == JavaVendor.Proot) {
+            if (!isReady()) throw RuntimeException("Termux 环境未初始化")
+            val profile = distro.profileFor(version)
+            if (profile == null) {
+                emitLog(
+                    "[proot] ${distro.displayName} 不提供 ${version.displayName}" +
+                        "（可选：${distro.availableJavaVersions.joinToString { it.displayName }}）"
+                )
+                return@withContext false
+            }
+            return@withContext installProotJava(profile, onProgress)
+        }
         if (!isReady()) throw RuntimeException("Termux 环境未初始化")
-        if (version == JavaVersion.Java8) {
-            return@withContext installJava8Ubuntu()
+        // 「Termux + Java 8」与「Proot + 任意版本」走**同一条**来宾安装路径。
+        // 之前这里是单独的一次 installJava8Ubuntu() 调用，仅仅因为 Java 8 是
+        // 最早唯一的容器用途；现在两者在语义上完全等价（都是 focal + Java 8），
+        // 保留两条分支只会让「日志措辞不同、就绪判定不同」这类分歧有可乘之机。
+        if (isProotGuestRuntime(vendor, version)) {
+            val profile = resolveProotProfile(vendor, version)
+            return@withContext installProotJava(profile, onProgress)
         }
         emitLog("[java] 正在安装 ${version.displayName}")
         emitLog("[java] ${version.displayName} 正在下载并配置，首次安装可能需要数分钟")
@@ -605,80 +1208,154 @@ class TermuxRuntime(context: Context) {
         return code == 0
     }
 
-    /** Install Java 8 inside the Ubuntu ARM64 glibc container. */
-    private suspend fun installJava8Ubuntu(): Boolean {
-        val marker = java8ReadyMarker
-        if (java8UbuntuReady()) {
-            emitLog("[java] Ubuntu ARM64 glibc Java 8 已安装，跳过重复下载")
+    /**
+     * 在 PRoot 容器里用 apt 安装指定 Java 版本。
+     *
+     * 这是从 `installJava8Ubuntu()` 泛化来的：结构完全一致（恢复未完成事务 →
+     * 逐个镜像试 apt 源 → 安装 → 校验），只是发行版代号、包名、JAVA_HOME
+     * 与版本验证正则改由 [ProotContainerProfile] 推导。
+     *
+     * @return 是否安装并校验成功
+     */
+    /**
+     * 安装容器内的一个 Java 版本。
+     *
+     * @param onProgress 0–100 的阶段进度。分两段：rootfs 下载解压（0–60）、
+     *   容器内 apt 安装（60–100）。apt 本身不给细粒度进度，
+     *   所以第二段只在开始与结束时各报一次 —— 但这两段合起来是数分钟的长任务，
+     *   一个不动的进度圈会让用户以为卡死了。
+     */
+    private suspend fun installProotJava(
+        profile: ProotContainerProfile,
+        onProgress: ((Int) -> Unit)? = null
+    ): Boolean {
+        val marker = profile.readyMarker(installer.rootDir)
+        if (isContainerJavaReady(profile)) {
+            emitLog("[proot] ${profile.displayName} 已安装，跳过重复下载")
+            onProgress?.invoke(100)
             return true
         }
-        emitLog("[java] 注意：正在 Ubuntu ARM64 glibc 环境安装 Java 8，非 Termux 官方源")
-        emitLog("[java] Java 8 仅在 Ubuntu 内运行，不会修改 Java 17/25")
+        emitLog("[proot] 注意：正在 ${profile.distro.displayName} glibc 环境安装 ${profile.version.displayName}，非 Termux 官方源")
+        emitLog("[proot] 该 JDK 仅在容器内运行，不会修改 Termux 里的其他 Java 版本")
         marker.delete()
         return try {
-            if (!prepareUbuntuRuntime()) {
-                throw IllegalStateException("Ubuntu 容器无法启动，请先修复运行环境")
+            onProgress?.invoke(0)
+            if (!prepareUbuntuRuntime(profile) { pct ->
+                    // rootfs 阶段映射到 0–60
+                    onProgress?.invoke(pct * 60 / 100)
+                }) {
+                throw IllegalStateException("${profile.distro.displayName} 容器无法启动，请先修复运行环境")
             }
-            emitLog("[java] 正在 Ubuntu 中安装 ARM64 glibc Java 8，首次安装可能需要数分钟")
+            onProgress?.invoke(60)
+            emitLog("[proot] 正在容器内安装 ${profile.aptPackage}，首次安装可能需要数分钟")
             val code = runUbuntu(
-                ubuntuJava8InstallCommand(),
-                timeoutMs = 900_000
+                containerJavaInstallCommand(profile),
+                timeoutMs = 900_000,
+                profile = profile
             )
-            if (code != 0) throw IllegalStateException("Ubuntu 内 Java 8 校验失败（exit=$code）")
-            marker.writeText("ubuntu-focal-arm64-openjdk8\n")
-            emitLog("[java] Ubuntu ARM64 glibc Java 8 安装并校验完成")
+            if (code != 0) {
+                throw IllegalStateException("${profile.displayName} 校验失败（exit=$code）")
+            }
+            marker.parentFile?.mkdirs()
+            marker.writeText("${profile.distro.codename}-arm64-${profile.aptPackage}\n")
+            onProgress?.invoke(100)
+            emitLog("[proot] ${profile.displayName} 安装并校验完成")
             true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // 协程取消不是安装失败：吞掉它会让上层按失败弹错并进入重试，
+            // 而实际的安装流程（runUbuntu 里的挂起调用）并没有被真正中止。
+            throw e
         } catch (e: Exception) {
             marker.delete()
-            emitLog("[java] Ubuntu Java 8 安装失败：${e.message}")
+            emitLog("[proot] ${profile.displayName} 安装失败：${e.message}")
             false
         }
     }
 
-    private fun ubuntuJava8InstallCommand(): String = """
-        echo "[java] 正在恢复 Ubuntu 未完成的软件包事务..."
+    /**
+     * 生成「在容器里安装 Java」的 shell 脚本。
+     *
+     * 脚本按镜像逐个尝试（清华 → 中科大）：容器 rootfs 里还没有 CA 证书，
+     * 因此这一轮引导事务**只用国内 HTTP 源**，把 ca-certificates 和 JDK
+     * 一起装上，后续才能用 HTTPS。
+     *
+     * 校验用 `java -version` 的版本号前缀而非仅看文件是否存在 ——
+     * apt 事务中断时会留下一个半装的 JDK，只看文件会把这种情况判成成功。
+     */
+    private fun containerJavaInstallCommand(profile: ProotContainerProfile): String {
+        val codename = profile.distro.codename
+        val pkg = profile.aptPackage
+        // 版本号前缀：Java 8 的 `java -version` 输出 `1.8.0_xxx`，9 以后是 `11.0.x`。
+        // 用 grep 锚定就能区分「装上了」和「装错了版本」。
+        val versionPattern = when (profile.version) {
+            JavaVersion.Java8 -> "1\\.8\\."
+            JavaVersion.Java11 -> "11\\."
+            JavaVersion.Java17 -> "17\\."
+            JavaVersion.Java21 -> "21\\."
+            JavaVersion.Java25 -> "25\\."
+        }
+        val installFn = "install_jdk"
+        val mirrorCalls = profile.distro.aptMirrors.joinToString(" || \\\n          ") {
+            "$installFn $it"
+        }
+        // 校验用的 java 路径必须与「就绪判定」（[ProotContainerProfile.guestJavaBinaryCandidates]）
+        // 用同一组候选，否则会出现「装好了但判定说没装」的不一致：
+        // Java 8 的 Ubuntu 包把 JRE 放在 `jre/bin/java` 下，只查新 layout 会漏掉它。
+        val javaCheck = profile.guestJavaBinaryCandidates.joinToString(" || ") {
+            "test -x $it"
+        }
+        val javaVersionCheck = profile.guestJavaBinaryCandidates.first()
+        return """
+        echo "[proot] 正在恢复容器内未完成的软件包事务..."
         if ! dpkg --configure -a || ! apt-get -o DPkg::Lock::Timeout=60 -f install -y; then
-          echo "[java] Ubuntu dpkg 恢复失败，未继续切换软件源；请稍后重试运行环境修复"
+          echo "[proot] dpkg 恢复失败，未继续切换软件源；请稍后重试运行环境修复"
           exit 1
         fi
-        install_openjdk8() {
+        $installFn() {
           mirror="${'$'}1"
-          echo "[java] Ubuntu APT 源: ${'$'}mirror"
+          echo "[proot] APT 源: ${'$'}mirror"
           printf '%s\n' \
-            "deb ${'$'}mirror focal main restricted universe multiverse" \
-            "deb ${'$'}mirror focal-updates main restricted universe multiverse" \
-            "deb ${'$'}mirror focal-security main restricted universe multiverse" \
+            "deb ${'$'}mirror $codename main restricted universe multiverse" \
+            "deb ${'$'}mirror $codename-updates main restricted universe multiverse" \
+            "deb ${'$'}mirror $codename-security main restricted universe multiverse" \
             > /etc/apt/sources.list
           rm -rf /var/lib/apt/lists/*
           if apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 && \
-            apt-get install -y --no-install-recommends openjdk-8-jdk ca-certificates fontconfig fonts-dejavu-core; then
-            test -x /usr/bin/java && /usr/bin/java -version 2>&1 | grep -q '1\.8\.'
+            apt-get install -y --no-install-recommends $pkg ca-certificates fontconfig fonts-dejavu-core; then
+            ($javaCheck) && \
+              $javaVersionCheck -version 2>&1 | grep -q '$versionPattern'
             return ${'$'}?
           fi
           return 1
         }
-        # The dedicated Ubuntu rootfs may not have CA certificates yet. Use
-        # domestic HTTP only for this bootstrap transaction, then install
-        # ca-certificates together with Java for subsequent HTTPS use.
-        install_openjdk8 http://mirrors.tuna.tsinghua.edu.cn/ubuntu-ports || \
-          install_openjdk8 http://mirrors.ustc.edu.cn/ubuntu-ports
-    """.trimIndent()
-
-    private fun java8UbuntuReady(): Boolean {
-        val rootfs = java8Rootfs
-        val javaHome = File(rootfs, ubuntuJava8Home.removePrefix("/"))
-        val jvmLibrary = listOf(
-            File(javaHome, "jre/lib/aarch64/server/libjvm.so"),
-            File(javaHome, "lib/server/libjvm.so")
-        ).any { it.isFile }
-        return java8ReadyMarker.isFile &&
-            listOf(File(javaHome, "jre/bin/java"), File(javaHome, "bin/java")).any { it.isFile } &&
-            jvmLibrary
+        # 容器 rootfs 里可能还没有 CA 证书，因此这一轮引导只用国内 HTTP 源，
+        # 把 ca-certificates 与 JDK 一起装上，后续才能走 HTTPS。
+        $mirrorCalls
+        """.trimIndent()
     }
 
-    private fun prepareUbuntuRuntime(): Boolean {
+    /**
+     * 「Termux 来源 + Java 8」这条历史组合是否就绪。
+     *
+     * 它就是 focal + Java 8 的就绪判定，没有额外分支 ——
+     * 与 Proot 来源共用同一套逻辑，避免两条链路对「什么叫装好了」出现分歧。
+     */
+    private fun java8UbuntuReady(): Boolean = isContainerJavaReady(legacyJava8Profile)
+
+    /**
+     * 准备 PRoot 容器运行时（与具体发行版无关的那部分）。
+     *
+     * 只做「容器能跑起来」的前置：proot 包、库修复、launcher、rootfs 可用性。
+     * 具体在容器里装哪个发行版的 Java 由调用方另行处理。
+     *
+     * @param profile 目标画像；仅用于日志措辞与 rootfs 落点。
+     */
+    private fun prepareUbuntuRuntime(
+        profile: ProotContainerProfile = legacyJava8Profile,
+        onRootfsProgress: ((Int) -> Unit)? = null
+    ): Boolean {
         if (!prepareAptPackages("proot")) {
-            emitLog("[java] Java 8 前置依赖 proot 无法从 Termux 软件源获取")
+            emitLog("[proot] ${profile.displayName} 前置依赖 proot 无法从 Termux 软件源获取")
             return false
         }
         var code = execOnce(
@@ -694,67 +1371,101 @@ class TermuxRuntime(context: Context) {
         ensureRootfsExecutable()
         if (!verifyProot()) return false
 
-        if (runUbuntu("test -x /bin/sh && exit 0", 60_000) == 0) return true
-        if (!installUbuntuBaseRootfs()) {
-            emitLog("[java] Java 8 专用 Ubuntu rootfs 无法重建；旧的 Debian/Ubuntu 容器和服务器数据未被修改")
+        if (runUbuntu("test -x /bin/sh && exit 0", 60_000, profile = profile) == 0) {
+            onRootfsProgress?.invoke(100)
+            return true
+        }
+        if (!installUbuntuBaseRootfs(profile, onRootfsProgress)) {
+            emitLog("[proot] ${profile.distro.displayName} rootfs 无法重建；旧的容器和服务器数据未被修改")
             return false
         }
-        emitLog("[java] 正在部署 Ubuntu ARM64 rootfs，首次安装需要较长时间")
-        return runUbuntu("test -x /bin/sh && exit 0", 60_000) == 0
+        emitLog("[proot] 正在部署 ${profile.distro.displayName} ARM64 rootfs，首次安装需要较长时间")
+        return runUbuntu("test -x /bin/sh && exit 0", 60_000, profile = profile) == 0
     }
 
     /**
      * Uses the Ubuntu Base image instead of proot-distro's Docker Hub image.
-     * Docker Hub commonly returns HTTP 429 on mobile networks; the two URLs
+     * Docker Hub commonly returns HTTP 429 on mobile networks; the URLs
      * below are ordinary Ubuntu archive endpoints and do not require an account.
+     *
+     * 按画像取归档名与下载源：每个发行版有自己的 base image。
      */
-    private fun installUbuntuBaseRootfs(): Boolean {
-        if (hasUsableUbuntuShell(java8Rootfs)) return true
+    private fun installUbuntuBaseRootfs(
+        profile: ProotContainerProfile = legacyJava8Profile,
+        onProgress: ((Int) -> Unit)? = null
+    ): Boolean {
+        val rootfs = containerRootfs(profile)
+        if (hasUsableUbuntuShell(rootfs)) {
+            onProgress?.invoke(100)
+            return true
+        }
 
-        val archiveName = "ubuntu-base-20.04.5-base-arm64.tar.gz"
+        val archiveName = baseImageArchiveName(profile.distro)
         val archive = File(installer.tmpDir, archiveName)
-        val urls = listOf(
-            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/20.04/release/$archiveName",
-            "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/20.04/release/$archiveName"
-        )
+        val urls = baseImageUrls(profile.distro)
         return try {
-            emitLog("[java] 正在下载 Ubuntu 20.04 ARM64 基础 rootfs（非 Docker Hub）")
+            emitLog("[proot] 正在下载 ${profile.distro.displayName} ARM64 基础 rootfs（非 Docker Hub）")
             archive.delete()
             var lastError: Exception? = null
             for (url in urls) {
                 try {
-                    emitLog("[java] Ubuntu rootfs source: $url")
-                    downloadUbuntuRootfs(url, archive)
+                    emitLog("[proot] rootfs source: $url")
+                    // 下载占 rootfs 阶段的 85%，解压/修复占剩余 15%：
+                    // 下载是几百兆的网络传输，解压是本地操作，这个比例贴近真实耗时。
+                    downloadUbuntuRootfs(url, archive) { pct ->
+                        onProgress?.invoke(pct * 85 / 100)
+                    }
                     if (isPlausibleUbuntuArchive(archive)) break
-                    throw IllegalStateException("Ubuntu rootfs download is incomplete")
+                    throw IllegalStateException("rootfs download is incomplete")
                 } catch (e: Exception) {
                     lastError = e
                     archive.delete()
-                    emitLog("[java] Ubuntu rootfs source failed: ${e.message}")
+                    emitLog("[proot] rootfs source failed: ${e.message}")
                 }
             }
             if (!isPlausibleUbuntuArchive(archive)) {
-                throw lastError ?: IllegalStateException("Ubuntu rootfs download failed")
+                throw lastError ?: IllegalStateException("rootfs download failed")
             }
-
-            // This is the dedicated Java 8 rootfs only.  Never touch legacy
-            // proot-distro containers, server files, worlds, plugins, or config.
-            java8Rootfs.deleteRecursively()
-            java8Rootfs.mkdirs()
-            extractUbuntuRootfs(archive, java8Rootfs)
-            repairUbuntuRootfs()
-            if (!hasUsableUbuntuShell(java8Rootfs)) {
-                throw IllegalStateException("Ubuntu rootfs is missing an executable shell")
+            onProgress?.invoke(85)
+            emitLog("[proot] 正在解压 rootfs 并修复权限，请稍候")
+            // 只动本画像自己的 rootfs。绝不去碰旧版 proot-distro 容器、
+            // 服务端文件、世界、插件或配置。
+            rootfs.deleteRecursively()
+            rootfs.mkdirs()
+            extractUbuntuRootfs(archive, rootfs)
+            repairUbuntuRootfs(profile)
+            if (!hasUsableUbuntuShell(rootfs)) {
+                throw IllegalStateException("rootfs is missing an executable shell")
             }
-            emitLog("[java] Ubuntu ARM64 rootfs is ready")
+            onProgress?.invoke(100)
+            emitLog("[proot] ${profile.distro.displayName} ARM64 rootfs 已就绪")
             true
         } catch (e: Exception) {
-            java8Rootfs.deleteRecursively()
-            emitLog("[java] Ubuntu rootfs installation failed: ${e.message}")
+            rootfs.deleteRecursively()
+            emitLog("[proot] rootfs 安装失败: ${e.message}")
             false
         } finally {
             archive.delete()
         }
+    }
+
+    /** Ubuntu Base 归档文件名（按发行版）。 */
+    private fun baseImageArchiveName(distro: ProotDistro): String = when (distro) {
+        ProotDistro.Focal -> "ubuntu-base-20.04.5-base-arm64.tar.gz"
+        ProotDistro.Jammy -> "ubuntu-base-22.04.5-base-arm64.tar.gz"
+    }
+
+    /** Ubuntu Base 归档下载源，按顺序尝试（清华 → 中科大）。 */
+    private fun baseImageUrls(distro: ProotDistro): List<String> {
+        val release = when (distro) {
+            ProotDistro.Focal -> "20.04"
+            ProotDistro.Jammy -> "22.04"
+        }
+        val archive = baseImageArchiveName(distro)
+        return listOf(
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/$release/release/$archive",
+            "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/$release/release/$archive"
+        )
     }
 
     private fun hasUsableUbuntuShell(rootfs: File): Boolean =
@@ -769,7 +1480,7 @@ class TermuxRuntime(context: Context) {
         }
     }
 
-    private fun downloadUbuntuRootfs(url: String, target: File) {
+    private fun downloadUbuntuRootfs(url: String, target: File, onPercent: ((Int) -> Unit)? = null) {
         val connection = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 60_000
@@ -798,10 +1509,13 @@ class TermuxRuntime(context: Context) {
                                 lastPercent = percent
                                 emitLog("[java] Ubuntu rootfs download: $percent%")
                             }
+                            // 每 10% 回报一次，避免高频刷新 UI
+                            if (lastPercent == percent || percent % 10 == 0) onPercent?.invoke(percent)
                         }
                     }
                 }
             }
+            onPercent?.invoke(100)
         } finally {
             connection.disconnect()
         }
@@ -865,15 +1579,16 @@ class TermuxRuntime(context: Context) {
     private fun runUbuntu(
         command: String,
         timeoutMs: Long = 120_000,
-        extraBinds: List<String> = emptyList()
+        extraBinds: List<String> = emptyList(),
+        profile: ProotContainerProfile = legacyJava8Profile
     ): Int =
-        if (!repairUbuntuRootfs()) {
-            emitLog("[java] Ubuntu rootfs 缺少可执行 shell，无法启动")
+        if (!repairUbuntuRootfs(profile)) {
+            emitLog("[proot] ${profile.distro.displayName} rootfs 缺少可执行 shell，无法启动")
             126
         } else {
-            val rootfs = java8Rootfs
+            val rootfs = containerRootfs(profile)
             val shm = File(rootfs, "tmp").apply { mkdirs() }
-            val resolver = prepareUbuntuDns(rootfs)
+            val resolver = prepareUbuntuDns(rootfs, profile.hostResolvConf(installer.tmpDir))
             val args = mutableListOf(
                 "proot",
                 "--kill-on-exit",
@@ -906,14 +1621,14 @@ class TermuxRuntime(context: Context) {
             execOnceWithTimeout(timeoutMs, *args.toTypedArray(), env = prootEnvironment())
         }
 
-    /** Give the isolated Ubuntu rootfs Android's active DNS servers. */
-    private fun prepareUbuntuDns(rootfs: File): File {
+    /** Give the isolated rootfs Android's active DNS servers. */
+    private fun prepareUbuntuDns(rootfs: File, hostResolv: File? = null): File {
         val addresses = (1..4).mapNotNull { index ->
             readAndroidDns("net.dns$index").takeIf { it.isNotBlank() && it.none(Char::isWhitespace) }
         }.distinct()
         val nameservers = if (addresses.isNotEmpty()) addresses else listOf("223.5.5.5", "119.29.29.29")
         val content = nameservers.joinToString(separator = "\n", postfix = "\n") { "nameserver $it" }
-        val resolver = File(installer.tmpDir, "java8-resolv.conf")
+        val resolver = hostResolv ?: File(installer.tmpDir, "java8-resolv.conf")
         resolver.parentFile?.mkdirs()
         resolver.writeText(content)
 
@@ -936,9 +1651,9 @@ class TermuxRuntime(context: Context) {
         value
     }.getOrDefault("")
 
-    /** Restore executable bits lost while proot-distro applies a rootfs layer. */
-    private fun repairUbuntuRootfs(): Boolean {
-        val rootfs = java8Rootfs
+    /** Restore executable bits lost while a rootfs layer is applied. */
+    private fun repairUbuntuRootfs(profile: ProotContainerProfile = legacyJava8Profile): Boolean {
+        val rootfs = containerRootfs(profile)
         if (!rootfs.isDirectory) return false
         var fixed = 0
         val visited = mutableSetOf<String>()
@@ -978,30 +1693,62 @@ class TermuxRuntime(context: Context) {
             .any { it.isFile && it.canExecute() }
     }
 
-    /** Run a Java 8 installer inside Ubuntu with only the selected server bound in. */
-    fun runJava8Installer(jarPath: String, serverDir: File, timeoutMs: Long = 900_000): Int {
-        val guestDir = "/srv/mineserve"
+    /**
+     * 在容器里跑服务端自带的 installer，只把该服务端目录绑进去。
+     *
+     * @param profile 目标容器画像；默认历史遗留的 focal + Java 8。
+     *   泛化后 JAVA_HOME 与 java 都可执行路径从画像推导，不再硬编码，
+     *   否则在 jammy 里会去执行不存在的 `/usr/bin/java`（jammy 只有
+     *   `/usr/lib/jvm/java-XX-openjdk-arm64/bin/java` 且不一定有 alternatives 链接）。
+     */
+    fun runProotInstaller(
+        jarPath: String,
+        serverDir: File,
+        timeoutMs: Long = 900_000,
+        profile: ProotContainerProfile = legacyJava8Profile
+    ): Int {
+        val guestDir = GUEST_SERVER_DIR
         val guestJar = "$guestDir/${File(jarPath).relativeTo(serverDir).invariantSeparatorsPath}"
-        val command = "export JAVA_HOME=$ubuntuJava8Home; " +
+        val command = "export JAVA_HOME=${profile.javaHomeInGuest}; " +
+            "export PATH=\"${profile.javaHomeInGuest}/bin:\$PATH\"; " +
             "export TMPDIR=/tmp; export HOME=/root; cd '$guestDir' && " +
-            "exec /usr/bin/java -Djava.io.tmpdir=/tmp -jar '$guestJar' " +
+            "exec ${profile.guestJavaBinaryCandidates.first()} -Djava.io.tmpdir=/tmp -jar '$guestJar' " +
             "--installServer"
-        return execUbuntuBound(
+        return execProotBound(
             serverDir,
             command,
-            timeoutMs
+            timeoutMs,
+            profile
         )
     }
 
-    /** Execute a caller-provided Java 8 setup command inside the Ubuntu container. */
-    fun runJava8Command(serverDir: File, command: String, timeoutMs: Long = 900_000): Int =
-        execUbuntuBound(serverDir, command, timeoutMs)
+    /** 兼容历史调用点：focal 容器里的 Java 8 installer。 */
+    fun runJava8Installer(jarPath: String, serverDir: File, timeoutMs: Long = 900_000): Int =
+        runProotInstaller(jarPath, serverDir, timeoutMs, legacyJava8Profile)
 
-    private fun execUbuntuBound(serverDir: File, command: String, timeoutMs: Long): Int {
+    /** 在容器里执行调用方给定的命令（用于 installer 后续步骤与探测）。 */
+    fun runProotCommand(
+        serverDir: File,
+        command: String,
+        timeoutMs: Long = 900_000,
+        profile: ProotContainerProfile = legacyJava8Profile
+    ): Int = execProotBound(serverDir, command, timeoutMs, profile)
+
+    /** 兼容历史调用点。 */
+    fun runJava8Command(serverDir: File, command: String, timeoutMs: Long = 900_000): Int =
+        runProotCommand(serverDir, command, timeoutMs)
+
+    private fun execProotBound(
+        serverDir: File,
+        command: String,
+        timeoutMs: Long,
+        profile: ProotContainerProfile = legacyJava8Profile
+    ): Int {
         return runUbuntu(
             command,
             timeoutMs,
-            extraBinds = listOf("${serverDir.absolutePath}:/srv/mineserve")
+            extraBinds = listOf("${serverDir.absolutePath}:$GUEST_SERVER_DIR"),
+            profile = profile
         )
     }
 
@@ -1016,10 +1763,11 @@ class TermuxRuntime(context: Context) {
             }
             javaCandidates(version).forEach { File(it).deleteRecursively() }
             if (version == JavaVersion.Java8) {
-                java8ReadyMarker.delete()
+                // Java 8 只存在于容器里，且「删除该 Java」的语义就是删掉整个 focal
+                // rootfs（首期不做容器内单个 JDK 的 apt 卸载）。
+                deleteProotContainer(ProotDistro.Focal)
                 File(installer.rootDir, "java-8-android-ready").delete()
                 File(installer.rootDir, "lib/jvm/java-8-android").deleteRecursively()
-                java8Rootfs.deleteRecursively()
             }
         }
         File(installer.rootDir, "bin/java").delete()
@@ -1047,9 +1795,10 @@ class TermuxRuntime(context: Context) {
      * 清单由 [PACKAGED_LIBRARIES] 派生，保证「打包的库」与「修复时就位的库」永远一致，
      * 不会出现「打包了但没落盘」或「落盘了但没打包」的错位。
      *
-     * 刻意**不用** [BUNDLED_LIBRARIES]：它还含 libtalloc / libandroid-shmem 这两个
-     * 只可能由 proot-distro 提供的库，拿它们做「是否已就位」的检查会在每次初始化
-     * 稳定报出两条永远消不掉的「未找到」警告（详见 NativeLibraryBundler 的说明）。
+     * `libtalloc.so.2` / `libandroid-shmem.so` 曾经因为「官方 rootfs 里没有」被排除在外，
+     * 结果设备上 proot 直接链接失败、Ubuntu 容器与 Java 8 全线不可用。现在它们已随 APK
+     * 打包（见 [PACKAGED_LIBRARIES] 第三批），因此这张表里也有它们 ——
+     * 初始化时会照常打印「依赖已就绪: libtalloc.so.2」。
      */
     private val termuxLibraryCandidates: Map<String, List<String>> =
         PACKAGED_LIBRARIES.values.distinct().associateWith { name ->
@@ -1074,14 +1823,17 @@ class TermuxRuntime(context: Context) {
         val compatIsSymlink = runCatching {
             java.nio.file.Files.isSymbolicLink(compatUsr.toPath())
         }.getOrDefault(false)
-        return NativeLibraryBundler.provision(
-            bundledDir = bundledLibDir,
-            targetDirs = buildList {
-                add(File(prefix, "lib"))
-                add(File(prefix, "usr/lib"))
-                if (!compatIsSymlink) add(File(compatUsr, "lib"))
-            }
-        )
+        val targetDirs = buildList {
+            add(File(prefix, "lib"))
+            add(File(prefix, "usr/lib"))
+            if (!compatIsSymlink) add(File(compatUsr, "lib"))
+        }
+        val written = NativeLibraryBundler.provision(bundledDir = bundledLibDir, targetDirs = targetDirs)
+        // 打包的库带着 SONAME 名直接落盘，本不会缺别名；这里补的是**别处**（apt 装进来的 deb）
+        // 留下的库 —— 它们的 `libX.so.2` 是符号链接，解包链路一旦丢掉链接，
+        // 就会出现「apt 说装好了、命令还是 CANNOT LINK」这种最难查的状态。
+        NativeLibraryBundler.ensureSonameAliases(targetDirs)
+        return written
     }
 
     private fun repairProotLibraries(): Boolean {
@@ -1241,58 +1993,6 @@ class TermuxRuntime(context: Context) {
         return code == 0
     }
 
-    /** Rewrite paths embedded in proot-distro metadata/scripts after relocation. */
-    private fun repairProotDistroPaths() {
-        val prefix = installer.rootDir.absolutePath
-        val oldPrefix = "/data/data/com.termux/files/usr"
-        val roots = listOf(
-            File(prefix, "bin"),
-            File(prefix, "usr/bin"),
-            File(prefix, "etc/proot-distro"),
-            File(prefix, "usr/etc/proot-distro"),
-            File(prefix, "usr/share/proot-distro")
-        )
-        var fixed = 0
-        roots.filter { it.exists() }.forEach { root ->
-            val isConfigTree = root.path.contains("${File.separator}proot-distro")
-            root.walkTopDown().filter { it.isFile && it.length() <= 512 * 1024 }.forEach { file ->
-                runCatching {
-                    // ELF files can contain the old path in RPATH/debug strings.
-                    // Never read/write them as text: doing so corrupts proot.bin,
-                    // apt-get and every other native executable.
-                    val bytes = file.inputStream().use { input ->
-                        val head = ByteArray(4)
-                        val count = input.read(head)
-                        if (count == 4 && head.contentEquals(byteArrayOf(0x7f, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()))) {
-                            return@runCatching
-                        }
-                        head
-                    }
-                    val content = file.readText()
-                    if (!isConfigTree && !content.startsWith("#!")) return@runCatching
-                    if (content.indexOf('\u0000') >= 0) return@runCatching
-                    if (content.contains(oldPrefix)) {
-                        file.writeText(content.replace(oldPrefix, prefix))
-                        if (!isConfigTree) file.setExecutable(true, false)
-                        fixed++
-                    }
-                }
-            }
-        }
-        // proot itself probes this path even when TMPDIR is inherited.
-        File(prefix, "tmp").mkdirs()
-        File(prefix, "data/data/com.termux/files/usr/tmp").mkdirs()
-        if (fixed > 0) emitLog("[bootstrap] 修复 $fixed 个 proot-distro 路径")
-    }
-
-    /**
-     * 绕过脚本自身 exec 位/标签限制，直接用其 shebang 解释器执行（如 perl apt-get）。
-     * 适用于脚本 exec 被拒（Permission denied）但解释器可正常执行的环境。
-     */
-    /**
-     * 直接 exec 探测，捕获精确的 IOException 信息（含 errno），用于区分
-     * Permission denied(13) / No such file(2) / Exec format(8) 等不同拒绝原因。
-     */
     /**
      * 决定性测试：把系统原生二进制复制到 app 数据目录再 exec。
      *  - 复制副本可执行 → app_data 执行未被设备禁止，问题在 bootstrap ELF（页大小/加载器）；
@@ -1326,6 +2026,10 @@ class TermuxRuntime(context: Context) {
         if (pb.waitFor(2, TimeUnit.SECONDS)) out else "未知"
     } catch (_: Exception) { "未知" }
 
+    /**
+     * 直接 exec 探测，捕获精确的 IOException 信息（含 errno），用于区分
+     * Permission denied(13) / No such file(2) / Exec format(8) 等不同拒绝原因。
+     */
     fun probeExecErrno(path: String): String {
         return try {
             val pb = ProcessBuilder(path, "--version").redirectErrorStream(true).start()
@@ -1338,6 +2042,10 @@ class TermuxRuntime(context: Context) {
         }
     }
 
+    /**
+     * 绕过脚本自身 exec 位/标签限制，直接用其 shebang 解释器执行（如 perl apt-get）。
+     * 适用于脚本 exec 被拒（Permission denied）但解释器可正常执行的环境。
+     */
     fun execScriptViaInterpreter(script: File, vararg args: String): Int {
         val head = try { script.bufferedReader().use { it.readLine() } } catch (_: Exception) { null } ?: return 1
         if (!head.startsWith("#!")) return 1
@@ -1627,28 +2335,45 @@ class TermuxRuntime(context: Context) {
     /**
      * 启动服务端前的幂等环境修复，只处理缺失或损坏的运行时文件。
      */
-    fun autoRepairRuntime(javaVersion: JavaVersion, needsFonts: Boolean): Int {
+    fun autoRepairRuntime(
+        javaVersion: JavaVersion,
+        needsFonts: Boolean,
+        vendor: JavaVendor = JavaVendor.Termux
+    ): Int {
+        // FCL 来源不需要也不能走这套修复：它的 JRE 是一整包解压出来的完整运行时，
+        // 不存在「缺 libjli、缺字体缓存、靠 apt 补装」这些状态，跑一遍只会白折腾，
+        // 更糟的是 apt 在服务端运行时还可能把 JVM 弄崩（apt 与 MC 共用 rootfs）。
+        if (vendor == JavaVendor.Fcl) return 0
         if (!isReady()) return 0
         val prefix = installer.rootDir
-        if (javaVersion == JavaVersion.Java8) {
-            val ready = java8UbuntuReady() || runBlocking { installJava8Ubuntu() }
+        // 所有「来宾容器」链路（Termux+Java8、Proot 全部版本）都必须走容器内修复。
+        //
+        // 早先这里只判 `javaVersion == Java8`：选中 Proot 来源 + Java 17 时会掉进
+        // 下面的宿主修复分支 —— 对着**宿主** prefix 跑 apt 补 fontconfig、
+        // 检查宿主 `etc/fonts/fonts.conf`，而来宾用的是容器里的那一套。
+        // 结果是容器缺字体时报告「已就绪」，或往宿主装一堆容器根本用不到的东西。
+        if (isProotGuestRuntime(vendor, javaVersion)) {
+            val profile = resolveProotProfile(vendor, javaVersion)
+            val ready = isContainerJavaReady(profile) || runBlocking { installProotJava(profile) }
             if (!ready) {
-                emitLog("[repair] Java 8 Ubuntu ARM64 运行环境不可用")
+                emitLog("[repair] ${profile.displayName} 运行环境不可用")
                 return 0
             }
             val fontsReady = !needsFonts || runUbuntu(
                 "test -f /etc/fonts/fonts.conf && test -x /usr/bin/fc-cache",
-                60_000
+                60_000,
+                profile = profile
             ) == 0
             if (!fontsReady) {
-                emitLog("[repair] 正在补全 Ubuntu 字体运行库...")
+                emitLog("[repair] 正在补全 ${profile.displayName} 字体运行库...")
                 val code = runUbuntu(
                     "export DEBIAN_FRONTEND=noninteractive; " +
                         "apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 && " +
                         "apt-get install -y ca-certificates fontconfig fonts-dejavu-core && fc-cache -f",
-                    300_000
+                    300_000,
+                    profile = profile
                 )
-                if (code != 0) emitLog("[repair] Ubuntu 字体运行库修复失败，将继续尝试无图形模式启动")
+                if (code != 0) emitLog("[repair] ${profile.displayName} 字体运行库修复失败，将继续尝试无图形模式启动")
             }
             return 0
         }
@@ -2075,7 +2800,7 @@ class TermuxRuntime(context: Context) {
 
         installer.onLog?.invoke("[bootstrap] ${version.displayName} 运行环境不完整，正在修复...")
         if (version == JavaVersion.Java8) {
-            val repairedJava8 = runBlocking { installJava8Ubuntu() }
+            val repairedJava8 = runBlocking { installProotJava(legacyJava8Profile) }
             if (repairedJava8) repaired++
             else installer.onLog?.invoke("[bootstrap] Java 8 Ubuntu ARM64 运行时自动修复失败")
             return repaired
@@ -2322,23 +3047,67 @@ class TermuxRuntime(context: Context) {
      * 清理占用指定服务器目录的孤儿 java/MC 进程（app 重启后旧 MC 进程成为孤儿，
      * 仍占着 world/session.lock → 新实例启动报 "already locked"）。
      * 只处理同 uid 的 java 进程且 cmdline 匹配该服务器目录或 MC 启动参数。
+     *
+     * ## 绝不杀「我们自己正在跟踪的那个进程」
+     *
+     * 这个函数是给**孤儿**用的，但 [serverDir] 为 null 时的判据退化成
+     * 「cmdline 含 java && 含 .jar && 含 nogui」——正在运行的服务端恰好完全命中，
+     * 而 fixUsrBin()/ensureAptWorking() 等修复路径会在服务端运行期间被触发
+     * （用户点修复、apt 自愈、MCP repair_runtime），于是「修复」把好好的服务端 SIGKILL 了。
+     * 所以这里必须显式排除 [mcProcess]：它不可能是孤儿，它由本进程托管。
+     */
+    /**
+     * 清理占用某个服务端目录的孤儿 java 进程。
+     *
+     * ## 为什么必须排除「当前托管的进程」整棵子树
+     *
+     * 被登记的 `mcProcess` 是外层 wrapper（PRoot 场景下就是 proot 追踪进程本身，
+     * 因为 `/system/bin/sh -c "... exec proot ..."` 与 `bin/proot` 启动脚本
+     * 都用 exec 替换了自己）。**真正跑服务端的 java 是它的子进程，pid 不同** ——
+     * 只按 pid 排除 wrapper 的话，java 仍会落进下面的匹配，
+     * 于是「修复运行环境」这类在服务端运行期间也会被触发的调用
+     * （`fixUsrBin()` 走 `killOrphanMcProcess(null)`）会把好好的服务端 SIGKILL 掉，
+     * 表现为「启动中突然秒退、没有任何报错」。
+     *
+     * 因此这里按「wrapper 及其全部后代」排除，而不是只比 pid。
+     *
+     * @param serverDir 目标服务端目录；为 null 时退化为「任意 MC java」匹配，
+     *   调用方应尽量传真实目录，见下方的保守匹配说明。
      */
     private fun killOrphanMcProcess(serverDir: File?) {
         try {
             val target = serverDir?.absolutePath
+            val trackedPid = synchronized(mcProcessLock) { if (mcProcess?.isAlive == true) mcPid else null }
+            // 托管进程自身的 pid 可能取不到（Android 上 Process.pid() 未必可用），
+            // 此时退回用 findServerPid 反查，避免漏保护。
+            val protectedPids: Set<Int> = if (trackedPid != null) {
+                descendantPids(trackedPid) + trackedPid
+            } else {
+                emptySet()
+            }
             File("/proc").listFiles()?.forEach { f ->
                 val name = f.name
                 if (name.isEmpty() || !name.all { it.isDigit() }) return@forEach
+                val pid = name.toIntOrNull() ?: return@forEach
+                // 本进程托管的服务端及其后代不是孤儿，任何情况下都不动它。
+                if (pid in protectedPids) return@forEach
+                if (pid == android.os.Process.myPid()) return@forEach
                 val cmdline = try {
                     File(f, "cmdline").readText().replace('\u0000', ' ')
                 } catch (_: Exception) { return@forEach }
                 val isMc = cmdline.contains("java") && if (target != null) {
-                    cmdline.contains(target)
+                    matchesManagedServer(cmdline, target)
                 } else {
                     cmdline.contains(".jar") && cmdline.contains("nogui")
                 }
-                if (isMc) {
-                    val pid = name.toIntOrNull() ?: return@forEach
+                // 兜底护栏：调用方没给目标目录、但此刻确实有一个服务端在跑时，
+                // 只清「不属于当前服务端」的进程是无法判定的 —— `.jar && nogui`
+                // 匹配不出归属。这种情形下宁可不杀：多实例场景里那些 java 很可能是
+                // 另一个正常服务端，误杀等于无故停服。真正的孤儿会在下次
+                // 带 serverDir 的启动/停止路径上被正确清理。
+                val ambiguousWhenRunning = target == null &&
+                    synchronized(mcProcessLock) { mcProcess?.isAlive == true }
+                if (isMc && !ambiguousWhenRunning) {
                     Log.w(TAG, "killOrphanMcProcess: killing orphan pid=$pid (${cmdline.take(140)})")
                     emitLog("[startMc] 清理残留服务器进程 pid=$pid")
                     runCatching { android.os.Process.killProcess(pid) }
@@ -2350,6 +3119,8 @@ class TermuxRuntime(context: Context) {
                             Thread.sleep(100)
                         }
                     }
+                } else if (isMc) {
+                    Log.i(TAG, "killOrphanMcProcess: 服务端运行中且未指定目标目录，跳过 pid=$pid 以免误杀")
                 }
             }
         } catch (e: Exception) {
@@ -2357,8 +3128,73 @@ class TermuxRuntime(context: Context) {
         }
     }
 
-    /** Start Java 8 in Ubuntu/glibc; the host server directory is exposed as /srv/mineserve. */
-    private fun startMcInUbuntu(
+    /**
+     * 判断一条 `/proc/<pid>/cmdline` 是否属于**指定的**那个服务端目录。
+     *
+     * 提到顶层是为了能被单测直接锁住：这段匹配逻辑决定「孤儿进程清不清得掉」
+     * 与「会不会误杀别人的服务端」，但它的输入只有一个字符串，
+     * 放在私有方法里就只能靠设备实测，出错代价又极高。
+     *
+     * ## 为什么必须同时接受两种路径
+     *
+     * PRoot 会改写路径：容器里的 java 通过 `--bind=<宿主 serverDir>:/srv/mineserve`
+     * 看到的是**来宾路径**，而 Linux 的 `/proc/<pid>/cmdline` 记录的是进程收到的
+     * 原始 argv。两种形态都真实存在，只认其中一种就会出现：
+     * - 只认宿主路径 → 容器里的孤儿匹配不到，残留 `world/session.lock`，
+     *   下次启动直接报 `already locked`；
+     * - 只认来宾路径 → 宿主链路的残留清不掉。
+     *
+     * 注意 `/srv/mineserve` 是全局固定挂载点，**不区分**具体是哪个服务端；
+     * 因此调用方在给出 `serverDir` 时，本判断只用于「是不是某个来宾服务端」，
+     * 跨实例的精确归属仍依赖 `mcServerDir` 与进程树排除。
+     */
+    /**
+     * 取某个 pid 的全部后代 pid（不含自身）。
+     *
+     * 用于把「托管的 wrapper + 它启动的 java」当成一个整体保护起来。
+     * 深度上限 32 与 [findServerPid] 的遍历保持一致，避免 procfs 环路导致死循环。
+     */
+    private fun descendantPids(rootPid: Int): Set<Int> = runCatching {
+        val parents = File("/proc").listFiles().orEmpty().mapNotNull { dir ->
+            val pid = dir.name.toIntOrNull() ?: return@mapNotNull null
+            val raw = File(dir, "stat").takeIf { it.isFile }?.readText() ?: return@mapNotNull null
+            val close = raw.lastIndexOf(')')
+            if (close <= 0) return@mapNotNull null
+            val parent = raw.substring(close + 1).trim().split(Regex("\\s+")).getOrNull(1)
+                ?.toIntOrNull() ?: return@mapNotNull null
+            pid to parent
+        }.toMap()
+        val result = mutableSetOf<Int>()
+        var frontier = setOf(rootPid)
+        repeat(32) {
+            val next = parents.filterValues { it in frontier }.keys - result - rootPid
+            if (next.isEmpty()) return@repeat
+            result.addAll(next)
+            frontier = next
+        }
+        result
+    }.getOrDefault(emptySet())
+
+    /**
+     * 在 PRoot 容器里启动服务端（通用实现）。
+     *
+     * 由 `startMcInUbuntu` 泛化而来：PRoot 参数与启动流程**完全保留**，只是把
+     * rootfs、JAVA_HOME、就绪判定改由 [ProotContainerProfile] 推导，
+     * 从而支持多个发行版与多个 Java 版本。
+     *
+     * ## 绑定的意义
+     *
+     * `--bind=<宿主 serverDir>:/srv/mineserve` 让服务端目录**原地**进入容器，
+     * 因此世界、插件、配置、日志仍躺在原来的宿主路径上，
+     * `Worlds` / `BackupManager` / `PluginManager` / 文件管理 / FTP / MCP
+     * 全部无需改动即可继续工作。这是整个 PRoot 方案能低风险落地的根本原因。
+     *
+     * @param javaVersion 来宾里要使用的 Java 版本
+     * @param javaVendor 来源；Termux+Java8 与 Proot 都走来宾链路
+     */
+    private fun startMcInProot(
+        javaVersion: JavaVersion,
+        javaVendor: JavaVendor,
         jarPath: String,
         maxHeapMb: Int,
         serverDir: File,
@@ -2367,11 +3203,18 @@ class TermuxRuntime(context: Context) {
         logFile: File,
         appendNogui: Boolean
     ): Process {
-        if (!java8UbuntuReady()) {
-            emitLog("[startMc] Java 8 Ubuntu ARM64 运行环境未安装或不完整")
-            throw RuntimeException("Java 8 Ubuntu runtime is not ready")
+        // 解析画像：历史遗留的「Termux + Java 8」固定用 focal；
+        // Proot 来源则取决于用户当前选的发行版。
+        val profile = if (javaVendor == JavaVendor.Proot) {
+            awaitProotProfile(javaVersion)
+        } else {
+            legacyJava8Profile
         }
-        val guestDir = "/srv/mineserve"
+        if (!isContainerJavaReady(profile)) {
+            emitLog("[startMc] ${profile.displayName} 运行环境未安装或不完整")
+            throw RuntimeException("${profile.displayName} runtime is not ready")
+        }
+        val guestDir = GUEST_SERVER_DIR
         val guestJar = "$guestDir/${File(jarPath).relativeTo(serverDir).invariantSeparatorsPath}"
         val guestLaunchArgs = launchArgs?.replace(serverDir.absolutePath, guestDir)
         val isLegacyForgeLaunch = launchArgs?.trim()?.startsWith("-jar") == true &&
@@ -2384,7 +3227,7 @@ class TermuxRuntime(context: Context) {
         // jar 已在 App 侧验证过 Main-Class，这里直接使用即可。
         val forgeServerClasspath = if (launchesVerifiedLibraryJar) {
             "forge_jar=\"${'$'}(find libraries/net/minecraftforge/forge -type f -name 'forge-*.jar' -print -quit 2>/dev/null)\"; " +
-                "if [ -z \"${'$'}forge_jar\" ]; then echo '[startMc] Java 8 Forge: launch jar not found in libraries'; exit 1; fi; " +
+                "if [ -z \"${'$'}forge_jar\" ]; then echo '[startMc] ${javaVersion.displayName} Forge: launch jar not found in libraries'; exit 1; fi; " +
                 // 1.12- 的 universal 无 Main-Class，需要 classpath + relauncher 模式；
                 // 1.13-1.16 的 server jar 自带 Main-Class（FMLServerTweaker）与 Class-Path 清单，直接 -jar。
                 "if jar tf \"${'$'}forge_jar\" 2>/dev/null | grep -q 'net/minecraftforge/fml/relauncher/ServerLaunchWrapper.class'; then " +
@@ -2399,23 +3242,28 @@ class TermuxRuntime(context: Context) {
         } else {
             guestLaunchArgs ?: "-jar '$guestJar'"
         }
-        // 注意：此处**有意不使用** heapTagPreloadEnv()。
+        // 注意：此处**有意不使用** preloadEnv()。
         // proot 会把 rootfs 之外的路径映射掉，libheaptagfix.so 位于 App 的
         // nativeLibraryDir，在 guest 内没有对应的可访问路径。若强行设置
         // LD_PRELOAD，linker 找不到该库会直接导致 java 无法启动。
-        // 该分支是 Java 8 + proot 场景，本就不依赖这项优化，故留空。
-        val command = "export JAVA_HOME=$ubuntuJava8Home; " +
-            "export PATH=\"/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"; " +
+        // 该分支是 PRoot 来宾场景，本就不依赖这项优化，故留空。
+        //
+        // JAVA_HOME 与 java 路径都从画像推导：以前这里硬编码 ubuntuJava8Home
+        // 和 `/usr/bin/java`，泛化后不能再用裸 `/usr/bin/java` —— 那是 apt 的
+        // alternatives 符号链接，多版本共存时可能指向别的 JDK。
+        val javaBin = profile.guestJavaBinaryCandidates.first()
+        val command = "export JAVA_HOME=${profile.javaHomeInGuest}; " +
+            "export PATH=\"${profile.javaHomeInGuest}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\"; " +
             "export TMPDIR=/tmp; export HOME=/root; export FONTCONFIG_PATH=/etc/fonts; " +
-            "cd '$guestDir' && $forgeLibraryRepair$forgeServerClasspath exec /usr/bin/java " +
+            "cd '$guestDir' && $forgeLibraryRepair$forgeServerClasspath exec $javaBin " +
             "-Djava.io.tmpdir=/tmp " +
             baseJvmProperties() +
             "-Xmx${maxHeapMb}m $javaArguments" + if (appendNogui) " nogui" else ""
-        val rootfs = java8Rootfs
+        val rootfs = containerRootfs(profile)
         // PRoot creates glue files outside the guest rootfs. Keep this path in
         // the app-owned prefix; Termux's compatibility /usr/tmp may be absent
         // or inaccessible on newer Android storage namespaces.
-        val prootTmp = File(installer.rootDir, "tmp/java8-proot").apply {
+        val prootTmp = profile.prootTmpDir(installer.rootDir).apply {
             mkdirs()
             setReadable(true, false)
             setWritable(true, false)
@@ -2427,7 +3275,7 @@ class TermuxRuntime(context: Context) {
             setWritable(true, false)
             setExecutable(true, false)
         }
-        val resolver = prepareUbuntuDns(rootfs)
+        val resolver = prepareUbuntuDns(rootfs, profile.hostResolvConf(installer.tmpDir))
         val proot = listOf(
             File(installer.rootDir, "bin/proot"),
             File(installer.rootDir, "usr/bin/proot")
@@ -2457,19 +3305,25 @@ class TermuxRuntime(context: Context) {
             environment()["PROOT_TMP_DIR"] = prootTmp.absolutePath
             environment()["TMPDIR"] = prootTmp.absolutePath
         }.start()
-        emitLog("[startMc] Java 8 PRoot 临时目录: ${prootTmp.absolutePath}")
-        Log.i(TAG, "startMc Ubuntu Java 8 command: $command")
-        assertLaunchCommandComplete(command, "startMcInUbuntu")
-        if (isLegacyForgeLaunch) emitLog("[startMc] Java 8 Forge: validating launch jar from verified library")
-        if (launchesVerifiedLibraryJar) {
-            emitLog("[startMc] Java 8 Forge: using ServerLaunchWrapper classpath mode")
+        emitLog("[startMc] ${profile.displayName} PRoot 临时目录: ${prootTmp.absolutePath}")
+        Log.i(TAG, "startMc ${profile.displayName} command: $command")
+        assertLaunchCommandComplete(command, "startMcInProot")
+        if (isLegacyForgeLaunch) {
+            emitLog("[startMc] ${javaVersion.displayName} Forge: validating launch jar from verified library")
         }
-        emitLog("[startMc] java 路径: Ubuntu:/usr/bin/java (openjdk-8-jdk)")
-        emitLog("[startMc] 正在启动 Java 8 服务端...")
+        if (launchesVerifiedLibraryJar) {
+            emitLog("[startMc] ${javaVersion.displayName} Forge: using ServerLaunchWrapper classpath mode")
+        }
+        emitLog("[startMc] java 路径: ${profile.displayName} → $javaBin")
+        emitLog("[startMc] 正在启动 ${profile.displayName} 服务端...")
         trackMcProcess(process, serverDir)
         Thread({
+            // writer 必须声明在 try 之外：原先把声明放在 try 里，catch 分支拿不到它，
+            // readLine() 一抛 IOException（进程被强杀）就漏掉一个 FileOutputStream 与一条管道，
+            // 反复崩溃重启会把 FD 耗光。
+            var writer: java.io.BufferedWriter? = null
             try {
-                val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
+                writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
                     java.io.FileOutputStream(logFile, true), Charsets.UTF_8), 8192)
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
@@ -2481,9 +3335,10 @@ class TermuxRuntime(context: Context) {
                     line = reader.readLine()
                 }
                 writer.flush()
-                writer.close()
             } catch (e: Exception) {
-                Log.w(TAG, "Ubuntu Java 8 stdout reader error: ${e.message}")
+                Log.w(TAG, "${profile.distro.displayName} stdout reader error: ${e.message}")
+            } finally {
+                runCatching { writer?.close() }
             }
         }, "mc-ubuntu-stdout-reader").start()
         Thread({
@@ -2498,40 +3353,67 @@ class TermuxRuntime(context: Context) {
     private fun shellQuote(value: String): String = "'${value.replace("'", "'\\''")}'"
 
     /**
-     * 生成 `export LD_PRELOAD='...libheaptagfix.so'; ` 片段（不可用时返回空串）。
+     * 组装启动 JVM 前要注入的 `LD_PRELOAD` 片段（无可用库时返回空串）。
      *
-     * ## 为什么需要这个
+     * 当前有两个预加载库，按**来源**（[vendor]）与 [jvmFlavor] 决定挂哪些：
      *
-     * Android 11+ 的 bionic 默认给堆分配打指针标签（TBI/MTE），指针高 8 位被
-     * 用作元数据。JVM 内部会改写指针高位做标记，在带标签的堆上会导致：
-     *   1. 释放时标签校验失败 → SIGABRT（退出码 134）
-     *   2. 分配器无法复用被改写过的内存块 → 常驻内存显著升高
-     *   3. 每个分配多出标签元数据，JVM 启动期海量小对象分配累计开销可观
+     *  1. `libheaptagfix.so`（[heapTagLibPath]，两套 JDK 都挂）
+     *     Android 11+ 的 bionic 默认给堆分配打指针标签（TBI/MTE），指针高 8 位被
+     *     用作元数据。JVM 内部会改写指针高位做标记，在带标签的堆上会导致：
+     *       - 释放时标签校验失败 → SIGABRT（退出码 134）
+     *       - 分配器无法复用被改写过的内存块 → 常驻内存显著升高
+     *       - 每个分配多出标签元数据，JVM 启动期海量小对象分配累计开销可观
+     *     后两条正是「同一个服务端、同一份 jar，内存却比别人高 100MB 左右」的原因。
+     *     之所以必须用 LD_PRELOAD：`mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, 0)`
+     *     只对调用它的进程生效、且必须在任何 malloc 之前执行，而服务端是独立进程，
+     *     App 自己调用影响不到它。LD_PRELOAD 让 linker 在加载其他库之前先跑
+     *     [libheaptagfix.so] 的构造函数，正好赶在 JVM 所有分配之前。
      *
-     * 第 2、3 条正是「同一个服务端、同一份 jar，内存却比别人高 100MB 左右」的原因。
+     *  2. `libipv6fix.so`（[ipv6FixLibPath]，仅 **Termux 来源**且 [JvmFlavor.PatchedJdk] 挂）
+     *     把 OpenJDK 判定 IPv6 用的那次 `fopen("/proc/net/if_inet6")` 重定向到非空
+     *     文件（Android 上 App 读不到那个文件，于是 JVM 一律判「无 IPv6」，
+     *     `server-ip=::` 一启动就崩）。库缺失时**不报错、不阻断启动**：只是这次的
+     *     IPv6 判定照旧为 false，用户仍是 IPv4 监听。
      *
-     * ## 为什么必须用 LD_PRELOAD
+     *     [JavaVendor.Fcl] **刻意不挂**：那套 JRE 的 `libnet.so` 在编译期
+     *     （Pojav 的 `26_skip_proc_net6_check.diff`）就跳过了同一处 `fopen`，`::`
+     *     本就可用。再挂一层不仅多余，还会让「FCL 来源的 IPv6 到底靠谁生效」变得
+     *     说不清 —— 出了故障要在两套机制之间猜。
      *
-     * `mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, 0)` 只对调用它的进程生效，
-     * 且必须在任何 malloc 之前执行。服务端是独立进程，App 自己调用影响不到它。
+     * ## 为什么必须合并成一条 export
      *
-     * LD_PRELOAD 让 linker 在加载其他库之前先执行 [libheaptagfix.so] 的构造函数，
-     * 正好赶在 JVM 所有分配之前。这样无需改动任何启动方式。
-     *
-     * 库缺失（降级环境）时返回空串 —— 功能不受影响，只是没有这项优化。
+     * `LD_PRELOAD` 是普通环境变量，**后一条 export 覆盖前一条而不是追加**。
+     * 于是「先 heaptagfix、再 ipv6fix」写两遍的结果是只剩后者，前者被静默丢掉 ——
+     * 而且丢掉的那一个没有任何报错，只能靠别人发现「内存怎么又高了」。
+     * 所以这里统一收口：库列表进来、一条 export 出去（[preloadExportFragment]）。
      */
-    private fun heapTagPreloadEnv(): String {
+    private fun preloadEnv(jvmFlavor: JvmFlavor, vendor: JavaVendor): String {
+        val libs = mutableListOf<String>()
+        heapTagLibPath()?.let { libs += it }
+        if (vendor == JavaVendor.Termux && jvmFlavor == JvmFlavor.PatchedJdk) {
+            ipv6FixLibPath()?.let { libs += it }
+        }
+        return preloadExportFragment(libs)
+    }
+
+    /** `libheaptagfix.so` 在 nativeLibraryDir 下的绝对路径；缺失时返回 null。 */
+    private fun heapTagLibPath(): String? {
         val lib = bundledLibDir?.let { File(it, HEAP_TAG_FIX_LIB) }
         if (lib == null || !lib.isFile) {
             // 只在首次缺失时提示一次，避免每条启动命令都刷日志
             if (heapTagFixWarned.compareAndSet(false, true)) {
                 emitLog("[startMc] 提示: $HEAP_TAG_FIX_LIB 不可用，将不关闭堆指针标签（可能多占内存）")
             }
-            return ""
+            return null
         }
-        return "export LD_PRELOAD='${lib.absolutePath}'; "
+        return lib.absolutePath
     }
 
+    /** `libipv6fix.so` 在 nativeLibraryDir 下的绝对路径；未随 APK 打包时返回 null。 */
+    private fun ipv6FixLibPath(): String? =
+        bundledLibDir?.let { File(it, NativeLibraryBundler.IPV6_FIX_LIB) }
+            ?.takeIf { it.isFile }
+            ?.absolutePath
     /**
      * 启动命令完整性自检：确认拼出来的 shell 命令里**真的有一个要执行的程序**。
      *
@@ -2732,11 +3614,29 @@ class TermuxRuntime(context: Context) {
         javaVersion: JavaVersion = JavaVersion.Java17,
         onExit: (Int) -> Unit,
         launchArgs: String? = null,
-        appendNogui: Boolean = true
-    ): Process {
-        Log.i(TAG, "startMc: jar=$jarPath heap=${maxHeapMb}m dirName=$dirName")
+        appendNogui: Boolean = true,
+        jvmFlavor: JvmFlavor = JvmFlavor.PatchedJdk,
+        javaVendor: JavaVendor = JavaVendor.Termux
+    ): Process = withLaunchLock {
+        startMcImpl(jarPath, maxHeapMb, dirName, javaVersion, onExit, launchArgs, appendNogui, jvmFlavor, javaVendor)
+    }
 
-        // 如果已有进程在运行，先停止
+    /** [startMc] 的实际实现；由 [withLaunchLock] 持锁调用。 */
+    private fun startMcImpl(
+        jarPath: String,
+        maxHeapMb: Int,
+        dirName: String,
+        javaVersion: JavaVersion,
+        onExit: (Int) -> Unit,
+        launchArgs: String?,
+        appendNogui: Boolean,
+        jvmFlavor: JvmFlavor,
+        javaVendor: JavaVendor
+    ): Process {
+        Log.i(TAG, "startMc: jar=$jarPath heap=${maxHeapMb}m dirName=$dirName vendor=$javaVendor")
+
+        // 已有存活进程就直接复用。「判断是否在跑」与 startMcImpl 末尾的 trackMcProcess
+        // 现在被 withLaunchLock 串在同一把锁里，不再有"两边都读到 null 于是双开"的窗口。
         mcProcess?.let { if (it.isAlive) return it }
 
         val prefix = installer.rootDir.absolutePath
@@ -2747,17 +3647,59 @@ class TermuxRuntime(context: Context) {
         // 占着 world/session.lock → 新实例启动报 already locked）
         killOrphanMcProcess(serverDir)
 
-        if (javaVersion == JavaVersion.Java8) {
-            return startMcInUbuntu(jarPath, maxHeapMb, serverDir, onExit, launchArgs, logFile, appendNogui)
+        // 来宾链路（PRoot 容器）：PRoot 来源的全部版本，以及历史遗留的
+        // 「Termux + Java 8」组合 —— 后者在 PRoot 通用化之前就走容器，
+        // 老配置里存的就是这个组合，必须保持同样的行为。
+        //
+        // 判定统一走 isProotGuestRuntime()，与 McServerController 的 Forge 安装路径
+        // 共用同一个谓词，避免「启动走容器、安装走宿主」这类错位。
+        if (isProotGuestRuntime(javaVendor, javaVersion)) {
+            // guest 里的 loader 是 glibc 的 ld.so，加载不了我们这套 bionic 构建的
+            // 预加载库 ⇒ 兼容层对它无效，如实提示而不是让用户以为 IPv6 可用。
+            if (jvmFlavor == JvmFlavor.PatchedJdk) {
+                emitLog(
+                    "[startMc] 提示: ${javaVersion.displayName} 运行在 proot 容器内，" +
+                        "${NativeLibraryBundler.IPV6_FIX_LIB} 无法注入，IPv6 监听仍不可用"
+                )
+            }
+            return startMcInProot(javaVersion, javaVendor, jarPath, maxHeapMb, serverDir, onExit, launchArgs, logFile, appendNogui)
         }
 
-        // Java 17/25 continue to use the existing Termux-hosted launch path.
-        val javaPath = resolveJavaPath(prefix, javaVersion) ?: run {
-            emitLog("[startMc] 错误: java 未找到，openjdk 可能未安装。请删除 Termux 环境后重新初始化")
-            throw RuntimeException("java not found in Termux environment")
+        // 其余组合（Termux 的 11/17/21/25 与 FCL 的 17/21/25）共用同一条 Termux 宿主启动路径。
+        val javaPath = resolveJavaPath(prefix, javaVersion, javaVendor) ?: run {
+            emitLog(
+                "[startMc] 错误: 找不到 ${javaVendor.logName} 的 ${javaVersion.displayName}，" +
+                    "请先在「依赖与环境管理」里安装该运行环境"
+            )
+            throw RuntimeException("java not found: vendor=$javaVendor version=$javaVersion")
         }
         Log.i(TAG, "startMc: resolved java path = $javaPath")
         emitLog("[startMc] java 路径: $javaPath")
+        // 明确写出这次跑的是哪一套 JVM：IPv6 到底能不能用，只能靠这一行
+        // 加上 libipv6fix 自己往 stderr 打的那行确认（崩起来的时候看不出来）。
+        when (javaVendor) {
+            JavaVendor.Fcl -> emitLog(
+                "[startMc] JVM 实现: FCL 原生 JRE（自带 IPv6 支持，server-ip 可写 ::）"
+            )
+            JavaVendor.Termux -> when (jvmFlavor) {
+                JvmFlavor.TermuxJdk -> emitLog(
+                    "[startMc] JVM 实现: Termux JDK（IPv6 监听不可用，server-ip 请留空或 0.0.0.0）"
+                )
+                JvmFlavor.PatchedJdk -> emitLog(
+                    if (ipv6FixLibPath() != null) {
+                        "[startMc] JVM 实现: Termux JDK + IPv6 兼容层（${NativeLibraryBundler.IPV6_FIX_LIB} 已注入）"
+                    } else {
+                        "[startMc] 警告: 缺少 ${NativeLibraryBundler.IPV6_FIX_LIB}（未随 APK 打包），本次 IPv6 监听不可用"
+                    }
+                )
+            }
+            // 走到这里说明分派逻辑出了问题：PRoot 来源在上面就已经转入
+            // startMcInProot 了，不该落到宿主 JVM 分支。显式列出而不是用 else，
+            // 这样将来新增来源时编译器会强制在这里做决定。
+            JavaVendor.Proot -> emitLog(
+                "[startMc] 警告: PRoot 来源不应走宿主 JVM 分支，请检查启动分派"
+            )
+        }
 
         // 用 /system/bin/sh -c 启动 java，设置环境变量
         // 设置 PATH 包含 jvm 的 bin 目录，确保 java 能找到其依赖（如 jlink）
@@ -2767,25 +3709,32 @@ class TermuxRuntime(context: Context) {
         // jvmLibDir：从 javaPath 推导其父目录的 lib 子目录（javaPath = .../bin/java → 父=bin → 父=jvm目录 → lib）
         val jvmLibDir = File(javaPath).parentFile?.parentFile?.let { File(it, "lib") }?.absolutePath
             ?: "$prefix/lib/jvm/java-25-openjdk/lib"
-        // 兜底：将每个受支持版本及 compat 路径加入库搜索路径。
-        // 注意：这里**不再**把所有 Java 版本的 lib 目录都塞进 LD_LIBRARY_PATH。
+        // 库搜索路径。注意：这里**不再**把所有 Java 版本的 lib 目录都塞进 LD_LIBRARY_PATH。
         // 原因：LD_LIBRARY_PATH 越长，linker 在每次 dlopen 时就要按序查找越多目录，
         // 更重要的是可能命中「同名但属于另一个 JRE」的库，导致两份 JRE 原生库同时驻留，
         // 白白多吃几十 MB 常驻内存。当前进程只会用一个 JRE，因此只保留它的路径。
+        //
+        // 顺序对 FCL 来源要反过来：那套 JRE 只依赖系统库（libc/libz/libdl/libm），
+        // 而 Termux 前缀里同样有 libz 等同名库，被先命中就会被换成另一份实现。
+        // 因此把它自己的 lib 放最前，Termux 的目录退到后面当兜底。
+        val libraryPath = if (javaVendor == JavaVendor.Fcl) {
+            "$jvmLibDir:$jvmLibDir/server:$prefix/lib:$compatUsr/lib:$prefix/usr/lib:/system/lib64"
+        } else {
+            "$prefix/lib:$compatUsr/lib:$prefix/usr/lib:$jvmLibDir:$jvmLibDir/server:/system/lib64"
+        }
         val nativeAccessArg = if (javaVersion == JavaVersion.Java25) "--enable-native-access=ALL-UNNAMED " else ""
         // JLine/JNA 会把原生库解包到 java.io.tmpdir；显式指向自己的目录，
         // 避免落到上一个宿主 App 的 cache（实测出现过 edgecube 的路径）。
         val jvmTmpDir = serverTmpDirFor(serverDir).apply { mkdirs() }
         val javaCmd = "export PATH='$jvmBinDir:$prefix/bin:$prefix/usr/bin:$compatUsr/bin:$prefix/bin/applets:$prefix/libexec:/system/bin:/system/xbin'; " +
-            "export LD_LIBRARY_PATH='$prefix/lib:$compatUsr/lib:$prefix/usr/lib:$jvmLibDir:$jvmLibDir/server:/system/lib64'; " +
-            heapTagPreloadEnv() +
+            "export LD_LIBRARY_PATH='$libraryPath'; " +
+            preloadEnv(jvmFlavor, javaVendor) +
             "export FONTCONFIG_PATH='$prefix/etc/fonts'; " +
             "export FONTCONFIG_FILE='$prefix/etc/fonts/fonts.conf'; " +
             "export PREFIX='$prefix'; " +
             "export HOME='$prefix/home'; " +
             "export TMPDIR='$jvmTmpDir'; " +
-            "export JAVA_HOME='${File(javaPath).parentFile?.parent}'; " +
-            // Android 无 /etc/localtime，不设 TZ 时 JVM 与派生命令都会回退 UTC
+            "export JAVA_HOME='${File(javaPath).parentFile?.parent}'; " +            // Android 无 /etc/localtime，不设 TZ 时 JVM 与派生命令都会回退 UTC
             (systemTimeZoneId()?.let { "export TZ='$it'; " } ?: "") +
             "cd '$serverDir' && " +
             "exec '$javaPath' $nativeAccessArg-Djava.io.tmpdir='$jvmTmpDir' -Djna.tmpdir='$jvmTmpDir' " +
@@ -2806,8 +3755,12 @@ class TermuxRuntime(context: Context) {
 
         // 后台线程读取 stdout，推送到 consoleFlow 并写入日志文件
         Thread({
+            // writer 必须声明在 try 之外：原先把声明放在 try 里，catch 分支拿不到它，
+            // readLine() 一抛 IOException（进程被强杀）就漏掉一个 FileOutputStream 与一条管道，
+            // 反复崩溃重启会把 FD 耗光。
+            var writer: java.io.BufferedWriter? = null
             try {
-                val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
+                writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
                     java.io.FileOutputStream(logFile, true), Charsets.UTF_8), 8192)
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
@@ -2820,9 +3773,10 @@ class TermuxRuntime(context: Context) {
                     line = reader.readLine()
                 }
                 writer.flush()
-                writer.close()
             } catch (e: Exception) {
                 Log.w(TAG, "mc stdout reader error: ${e.message}")
+            } finally {
+                runCatching { writer?.close() }
             }
         }, "mc-stdout-reader").start()
 
@@ -2842,6 +3796,17 @@ class TermuxRuntime(context: Context) {
      * 进程管理与日志处理与 [startMc] 一致。
      */
     fun startPhp(
+        phpBinaryPath: String,
+        phpIniPath: String,
+        pharPath: String,
+        dirName: String,
+        onExit: (Int) -> Unit
+    ): Process = withLaunchLock {
+        startPhpImpl(phpBinaryPath, phpIniPath, pharPath, dirName, onExit)
+    }
+
+    /** [startPhp] 的实际实现；由 [withLaunchLock] 持锁调用。 */
+    private fun startPhpImpl(
         phpBinaryPath: String,
         phpIniPath: String,
         pharPath: String,
@@ -2873,8 +3838,12 @@ class TermuxRuntime(context: Context) {
         trackMcProcess(process, serverDir)
 
         Thread({
+            // writer 必须声明在 try 之外：原先把声明放在 try 里，catch 分支拿不到它，
+            // readLine() 一抛 IOException（进程被强杀）就漏掉一个 FileOutputStream 与一条管道，
+            // 反复崩溃重启会把 FD 耗光。
+            var writer: java.io.BufferedWriter? = null
             try {
-                val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
+                writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
                     java.io.FileOutputStream(logFile, true), Charsets.UTF_8), 8192)
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
@@ -2886,9 +3855,10 @@ class TermuxRuntime(context: Context) {
                     line = reader.readLine()
                 }
                 writer.flush()
-                writer.close()
             } catch (e: Exception) {
                 Log.w(TAG, "mc stdout reader error: ${e.message}")
+            } finally {
+                runCatching { writer?.close() }
             }
         }, "mc-stdout-reader").start()
 
@@ -2907,9 +3877,22 @@ class TermuxRuntime(context: Context) {
     fun startMcCustom(
         command: String,
         dirName: String,
-        onExit: (Int) -> Unit
+        onExit: (Int) -> Unit,
+        jvmFlavor: JvmFlavor = JvmFlavor.PatchedJdk,
+        javaVendor: JavaVendor = JavaVendor.Termux
+    ): Process = withLaunchLock {
+        startMcCustomImpl(command, dirName, onExit, jvmFlavor, javaVendor)
+    }
+
+    /** [startMcCustom] 的实际实现；由 [withLaunchLock] 持锁调用。 */
+    private fun startMcCustomImpl(
+        command: String,
+        dirName: String,
+        onExit: (Int) -> Unit,
+        jvmFlavor: JvmFlavor,
+        javaVendor: JavaVendor
     ): Process {
-        Log.i(TAG, "startMcCustom: command=$command dirName=$dirName")
+        Log.i(TAG, "startMcCustom: command=$command dirName=$dirName vendor=$javaVendor")
 
         mcProcess?.let { if (it.isAlive) return it }
 
@@ -2920,10 +3903,11 @@ class TermuxRuntime(context: Context) {
         killOrphanMcProcess(serverDir)
 
         val compatUsr = "$prefix/data/data/com.termux/files/usr"
-        // 同 startMc：只保留用得到的库路径，不把所有 Java 版本都塞进去（见该处注释）。
+        // 自定义命令由用户自己写 java 路径，因此这里不解析 JDK 落点；只有预加载库
+        // 需要按来源区分（FCL 的 JRE 自带 IPv6 支持，不需要兼容层）。
         val fullCmd = "export PATH='$prefix/bin:$prefix/usr/bin:$compatUsr/bin:$prefix/libexec:/system/bin:/system/xbin'; " +
             "export LD_LIBRARY_PATH='$prefix/lib:$compatUsr/lib:$prefix/usr/lib:/system/lib64'; " +
-            heapTagPreloadEnv() +
+            preloadEnv(jvmFlavor, javaVendor) +
             "export FONTCONFIG_PATH='$prefix/etc/fonts'; " +
             "export FONTCONFIG_FILE='$prefix/etc/fonts/fonts.conf'; " +
             "export PREFIX='$prefix'; " +
@@ -2952,8 +3936,12 @@ class TermuxRuntime(context: Context) {
         trackMcProcess(process, serverDir)
 
         Thread({
+            // writer 必须声明在 try 之外：原先把声明放在 try 里，catch 分支拿不到它，
+            // readLine() 一抛 IOException（进程被强杀）就漏掉一个 FileOutputStream 与一条管道，
+            // 反复崩溃重启会把 FD 耗光。
+            var writer: java.io.BufferedWriter? = null
             try {
-                val writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
+                writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
                     java.io.FileOutputStream(logFile, true), Charsets.UTF_8), 8192)
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
@@ -2965,9 +3953,10 @@ class TermuxRuntime(context: Context) {
                     line = reader.readLine()
                 }
                 writer.flush()
-                writer.close()
             } catch (e: Exception) {
                 Log.w(TAG, "mc stdout reader error: ${e.message}")
+            } finally {
+                runCatching { writer?.close() }
             }
         }, "mc-stdout-reader").start()
 
@@ -3006,8 +3995,63 @@ class TermuxRuntime(context: Context) {
         lastUserStopRequestAtMs = 0L
     }
 
-    /** 停止 MC：向 stdin 发送 stop 命令，等待最多 5 秒后强制 destroy */
-    suspend fun stopMc(): Boolean = withContext(Dispatchers.IO) {
+    /**
+     * 启动代际计数：每次「用户发起的启动」递增。
+     *
+     * ## 解决什么问题
+     * `McServerController.start()` 的准备阶段可能长达数分钟（依赖安装、自动修复、
+     * 下载核心）。这期间用户点「停止」时进程根本还不存在，`stopMcGraceful()` 只能
+     * 打上停止标记就返回 true（UI 显示「已停止」）。但准备阶段并不会因此中断，
+     * 它最终仍会走到 [launchMc] 并把服务端拉起来——于是「点了停止，服务器却启动了」，
+     * 而且 [clearUserStopRequest] 还会顺手抹掉停止标记，连崩溃判定都失去依据。
+     *
+     * 现在的规则：
+     *  - [beginStartRequest] 在**用户发起点**调用，返回本次启动的代际号；
+     *  - [isStartCancelled] 在真正 spawn 进程之前调用，若期间用户请求过停止
+     *    （或又发起了新的一次启动），本次启动即被放弃，不做任何启动动作。
+     */
+    @Volatile
+    private var startGeneration: Long = 0L
+
+    /** 用户发起的启动请求：递增代际并返回本次启动的代际号。 */
+    fun beginStartRequest(): Long {
+        // 新一次启动同时清掉停止标记：本轮之后真实崩溃必须能被判成异常退出。
+        clearUserStopRequest()
+        return ++startGeneration
+    }
+
+    /**
+     * 本次启动是否已被取消（准备阶段期间用户点了停止，或有更新的一次启动接管）。
+     *
+     * @param startedAtGeneration [beginStartRequest] 返回的代际号
+     */
+    fun isStartCancelled(startedAtGeneration: Long): Boolean =
+        startGeneration != startedAtGeneration || lastUserStopRequestAtMs != 0L
+
+    /**
+     * 停止 MC（兼容旧调用方）：优雅停止，最多等 5 秒，超时则强制 destroy。
+     *
+     * 备份 / 前台服务 / 计划任务等**无人值守**的路径继续用它 —— 那些场景里没人能
+     * 再点一次按钮，必须自己兜底。用户手动点「停止」走的是 [stopMcGraceful]，
+     * 强杀改由显式的「强制停止」按钮触发（见 [forceStopMc]）。
+     */
+    suspend fun stopMc(): Boolean =
+        if (stopMcGraceful(STOP_GRACE_FALLBACK_MS)) true else forceStopMc()
+
+    /**
+     * 优雅停止：只向 stdin 发 `stop`，轮询等进程自己退出，**不做任何强杀**。
+     *
+     * 之所以把它和 [stopMc] 拆开：服务端收到 `stop` 后要先把世界落盘再退出，
+     * 大世界实测可能要十几秒以上。旧行为是等 5 秒就 `destroyForcibly()`，
+     * 世界没落完就被 SIGKILL —— 这正是「停止后丢存档」投诉的来源。
+     * 现在改成：等多久由 [waitMs] 决定，超时也只是**如实返回失败**，
+     * 由调用方（UI）告诉用户「还停不下来，可以点强制停止」，把是否承受数据风险
+     * 的选择权交回给用户。
+     *
+     * @return true 表示进程确实已退出；false 表示超时仍未退出（进程仍在登记中，
+     *         [forceStopMc] 仍能停掉它）。
+     */
+    suspend fun stopMcGraceful(waitMs: Long = STOP_GRACE_DEFAULT_MS): Boolean = withContext(Dispatchers.IO) {
         // 只要走到这里就一定是"主动停止"，先把标记打上，
         // 再发停止命令 —— 否则进程可能在标记写入前就退出了。
         markUserStopRequested()
@@ -3015,30 +4059,65 @@ class TermuxRuntime(context: Context) {
         val serverDir = mcServerDir
         if (!proc.isAlive) {
             // The shell/PRoot wrapper may have exited while its Java child survived.
-            killOrphanMcProcess(serverDir)
-            clearMcProcessIfCurrent(proc)
+            // 只在"我们仍是当前登记进程"时才清孤儿——否则说明期间已有新进程接管。
+            if (clearMcProcessIfCurrent(proc)) killOrphanMcProcess(serverDir)
             return@withContext true
         }
         try {
             mcStdin?.write("stop\n".toByteArray())
             mcStdin?.flush()
         } catch (e: Exception) {
-            Log.w(TAG, "stopMc: stdin write failed: ${e.message}")
+            Log.w(TAG, "stopMcGraceful: stdin write failed: ${e.message}")
         }
-        // 轮询等待进程退出，最多 5 秒（不阻塞主线程）
-        val deadline = System.currentTimeMillis() + 5000
+        // 轮询等待进程退出。这里刻意不设强杀兜底 —— 见方法注释。
+        val deadline = System.currentTimeMillis() + waitMs
         while (proc.isAlive && System.currentTimeMillis() < deadline) {
             delay(100)
         }
         if (proc.isAlive) {
-            Log.w(TAG, "stopMc: process still alive, destroying")
-            proc.destroyForcibly()
-            withTimeoutOrNull(3000) { while (proc.isAlive) delay(50) }
+            Log.w(TAG, "stopMcGraceful: 进程在 ${waitMs}ms 内未退出，保持登记等待强制停止")
+            emitLog("[stopMc] 服务端仍在关停（已等待 ${waitMs / 1000}s），可点「强制停止」立即结束")
+            return@withContext false
         }
         // PRoot can leave its Java child alive after its outer process exits.
         // Clear it before returning so a subsequent start never doubles servers.
-        killOrphanMcProcess(serverDir)
-        clearMcProcessIfCurrent(proc)
+        //
+        // 但必须先确认「当前登记的仍然是我们要停的那个进程」再清孤儿：
+        // 用户在这段等待里点了「启动」的话，新进程的 cmdline 同样包含 serverDir，
+        // 无条件 killOrphanMcProcess(serverDir) 会把刚起来的服务端直接杀掉——
+        // 表现为「启动秒退、没有任何日志」，还会被上层误判成一次崩溃。
+        if (clearMcProcessIfCurrent(proc)) {
+            killOrphanMcProcess(serverDir)
+        } else {
+            Log.i(TAG, "stopMcGraceful: 停机期间已有新进程接管，跳过孤儿清理")
+        }
+        true
+    }
+
+    /**
+     * 强制停止：立刻 `destroyForcibly()` 并清掉残留子进程，无任何等待门槛。
+     *
+     * 由用户显式确认后触发（UI 上必须先过一遍警告弹窗）。世界数据可能停在
+     * 未落盘的状态 —— 这是用户已知并接受的风险，因此这里不做任何"温和"处理，
+     * 也不加 5 秒等待，避免「点了强制停止还要再等」的二次困惑。
+     */
+    suspend fun forceStopMc(): Boolean = withContext(Dispatchers.IO) {
+        markUserStopRequested()
+        val proc = mcProcess
+        val serverDir = mcServerDir
+        if (proc != null && proc.isAlive) {
+            Log.w(TAG, "forceStopMc: destroyForcibly")
+            emitLog("[stopMc] 执行强制停止")
+            runCatching { proc.destroyForcibly() }
+            withTimeoutOrNull(STOP_FORCE_WAIT_MS) { while (proc.isAlive) delay(50) }
+        }
+        // 无论登记的是不是这个进程，都按目录清一遍孤儿：
+        // 强制停止的语义就是「我现在就要它消失」，PRoot 残留的 Java 子进程同样要清。
+        if (proc == null || clearMcProcessIfCurrent(proc)) {
+            killOrphanMcProcess(serverDir)
+        } else {
+            Log.i(TAG, "forceStopMc: 停机期间已有新进程接管，跳过孤儿清理")
+        }
         true
     }
 
@@ -3075,8 +4154,21 @@ class TermuxRuntime(context: Context) {
     }
 
     /** 检查 MC 进程是否存活 */
+    /** 有 MC 进程在跑（不限是哪个实例）。 */
     fun isMcRunning(): Boolean {
         return mcProcess?.isAlive ?: false
+    }
+
+    /**
+     * 指定服务器目录的服务端是否正在运行。
+     *
+     * [isMcRunning] 是**全局**判断：跑的是 A 实例时，对 B 实例的配置文件做「运行中禁止写入」
+     * 会把无辜的 B 一起拦掉（PNX 切换世界就是这样必然失败的），而且报错文案还会把用户
+     * 引导去查存储权限。这里给出按实例判定的版本。
+     */
+    fun isMcRunningIn(dirName: String): Boolean {
+        if (mcProcess?.isAlive != true) return false
+        return mcServerDir?.absolutePath?.let { serverDirFor(dirName).absolutePath == it } ?: false
     }
 
     /**
@@ -3247,14 +4339,23 @@ class TermuxRuntime(context: Context) {
     private fun findServerPid(rootPid: Int): Int? = runCatching {
         val entries = File("/proc").listFiles().orEmpty().mapNotNull { dir ->
             if (!dir.name.all(Char::isDigit)) return@mapNotNull null
-            val raw = File(dir, "stat").takeIf { it.isFile }?.readText() ?: return@mapNotNull null
+            // 每条 /proc 记录单独兜异常：进程随时可能退出，stat/cmdline 会在
+            // 读取途中消失（NoSuchFileException）。原先只要有一条读失败，
+            // 整个 runCatching 就返回 null —— 表现为内存恒为 0、CPU 空白，
+            // 而服务端其实跑得好好的，属于极难定位的显示回退。
+            val raw = try {
+                File(dir, "stat").takeIf { it.isFile }?.readText() ?: return@mapNotNull null
+            } catch (_: Exception) { return@mapNotNull null }
             val open = raw.indexOf('(')
             val close = raw.lastIndexOf(')')
             if (open < 0 || close <= open) return@mapNotNull null
             val fields = raw.substring(close + 1).trim().split(Regex("\\s+"))
             val pid = dir.name.toIntOrNull() ?: return@mapNotNull null
             val parent = fields.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
-            ProcEntry(pid, parent, raw.substring(open + 1, close), File(dir, "cmdline").readText())
+            val cmdline = try {
+                File(dir, "cmdline").readText()
+            } catch (_: Exception) { return@mapNotNull null }
+            ProcEntry(pid, parent, raw.substring(open + 1, close), cmdline)
         }
         val byPid = entries.associateBy { it.pid }
         fun isDescendant(pid: Int): Boolean {
@@ -3267,7 +4368,18 @@ class TermuxRuntime(context: Context) {
         }
         entries.filter { it.pid == rootPid || isDescendant(it.pid) }
             .filter { it.comm == "java" || it.cmdline.substringBefore('\u0000').substringAfterLast('/') == "java" }
-            .maxByOrNull { if (it.cmdline.contains(".jar") || it.cmdline.contains(installer.rootDir.absolutePath)) 2 else 1 }
+            // 多个 java 后代时优先选「真正在跑服务端」的那个。
+            // 来宾链路下 cmdline 里是 `/srv/mineserve` 或 rootfs 内路径，
+            // 原先只匹配宿主 installer.rootDir 会让容器场景全部退化成等权，
+            // 从而可能选中 installer 那个短命进程而不是服务端。
+            .maxByOrNull {
+                when {
+                    it.cmdline.contains(".jar") -> 3
+                    it.cmdline.contains(GUEST_SERVER_DIR) -> 2
+                    it.cmdline.contains(installer.rootDir.absolutePath) -> 2
+                    else -> 1
+                }
+            }
             ?.pid
     }.getOrNull()
 
@@ -3281,7 +4393,14 @@ class TermuxRuntime(context: Context) {
             val fields = stat.substring(end + 1).trim().split(Regex("\\s+"))
             if (fields.getOrNull(1) != parentPid) return@firstNotNullOfOrNull null
             val cmdline = File(dir, "cmdline").takeIf { it.isFile }?.readText().orEmpty()
-            if (cmdline.contains(installer.rootDir.absolutePath)) dir.name.toIntOrNull() else null
+            // 判据必须同时接受宿主 prefix 与来宾路径：PRoot 会改写 cmdline，
+            // 容器里的 java 既可能显示 rootfs 下的绝对路径，也可能显示
+            // `/srv/mineserve`，只认 installer.rootDir 会漏认（→ mcPid 为 null，
+            // 进而内存/CPU/TPS 全部取不到）。GUEST_SERVER_DIR 是 `/srv/mineserve`，
+            // 它不可能出现在非容器进程里，因此不会误认。
+            if (cmdline.contains(installer.rootDir.absolutePath) ||
+                cmdline.contains(GUEST_SERVER_DIR)
+            ) dir.name.toIntOrNull() else null
         }
     } catch (_: Exception) {
         null
@@ -3297,7 +4416,29 @@ class TermuxRuntime(context: Context) {
      * 4. 通过 find 命令查找
      * 找不到时返回 "java"，让 shell 报错（便于诊断）
      */
-    private fun resolveJavaPath(prefix: String, version: JavaVersion? = null): String? {
+    /**
+     * 解析某个运行环境的 `java` 可执行文件路径。
+     *
+     * [JavaVendor.Fcl] 与 Termux 来源的落点完全不同，必须分开解析（见 [JavaVendor]）：
+     * FCL 那套是外部 JRE，只有 `filesDir/jvm-fcl/java-XX/bin/java` 一个位置，
+     * 不存在 compat / 多候选路径这种事。`java.home` 由 JLI 从自身路径反推，
+     * 所以「找对了 bin/java」就等于「JAVA_HOME 也对」，不需要额外传参。
+     */
+    private fun resolveJavaPath(
+        prefix: String,
+        version: JavaVersion? = null,
+        vendor: JavaVendor = JavaVendor.Termux
+    ): String? {
+        if (vendor == JavaVendor.Fcl) {
+            val ordered = if (version != null) listOf(version) else JavaVendor.Fcl.versions.reversed()
+            return ordered.firstOrNull { fclJre.isInstalled(it) }?.let { fclJre.javaBinary(it).absolutePath }
+        }
+        // PRoot 来源的 java **不在宿主文件系统上**有可执行路径：它是 rootfs 里的
+        // `/usr/lib/jvm/.../bin/java`，只能经 proot 进入容器执行。
+        // 因此这里必须显式返回 null，而不是往下走去扫宿主候选路径 ——
+        // 否则会命中一个「碰巧装过的 Termux JDK」，让宿主链路被无声启用，
+        // 进而出现「选了 PRoot 却按宿主 JVM 跑」这种极难察觉的行为错位。
+        if (vendor == JavaVendor.Proot) return null
         if (version != null) {
             return javaCandidates(version).map { "$it/bin/java" }
                 .firstOrNull {
@@ -3397,6 +4538,9 @@ class TermuxRuntime(context: Context) {
             outFile.absolutePath
         } catch (e: Exception) {
             Log.e(TAG, "createSnapshot failed: ${e.message}", e)
+            // 失败必须删掉半截 zip：它的名字匹配 listSnapshots 的 *.zip 枚举，
+            // 留着会被当成一份合法快照，直到还原时才炸。
+            runCatching { outFile.delete() }
             null
         }
     }
@@ -3428,6 +4572,41 @@ class TermuxRuntime(context: Context) {
 
     companion object {
         private const val TAG = "TermuxRuntime"
+
+        /**
+         * 宿主服务端目录在 PRoot 来宾里的挂载点。
+         *
+         * 整个方案的关键约定：`--bind=<宿主 serverDir>:/srv/mineserve`
+         * 让服务端目录**原地**进入容器，因此世界、插件、配置、备份、日志
+         * 都还在原本的宿主路径上，Worlds / BackupManager / PluginManager /
+         * 文件管理 / FTP / MCP 全部无需改动。
+         *
+         * 提为常量是因为它被启动、installer、孤儿清理三处共用；
+         * 任何一处写成别的字面量都会造成「孤儿进程匹配不到」这类静默问题。
+         */
+        const val GUEST_SERVER_DIR = "/srv/mineserve"
+
+        /**
+         * 应用侧捕获服务端控制台输出的文件（相对 serverDir）。
+         *
+         * 刻意不用 `logs/latest.log`：那个文件归服务端的 log4j 所有，
+         * 应用往里 append 会出现每行两份。
+         */
+        private const val MC_CONSOLE_LOG_NAME = "logs/mineserve-console.log"
+
+        /**
+         * 用户手动点「停止」后等待服务端自行退出的时长。
+         *
+         * 取 3 分钟：远大于大世界落盘所需的十几秒，又不会让「停止中」无限转下去。
+         * 超时不会强杀，而是把「要不要强制停止」交给用户（见 [stopMcGraceful]）。
+         */
+        private const val STOP_GRACE_DEFAULT_MS = 180_000L
+
+        /** 无人值守路径（备份 / 前台服务）的兜底等待时长：超时就强杀，见 [stopMc]。 */
+        private const val STOP_GRACE_FALLBACK_MS = 5_000L
+
+        /** 强制停止后等待进程真的消失的时间；等不到也照常返回。 */
+        private const val STOP_FORCE_WAIT_MS = 3_000L
     }
 }
 
@@ -3438,6 +4617,22 @@ class TermuxRuntime(context: Context) {
  * 命令里不会出现 `-jar` / `-cp`。识别这个标记是为了不把合法启动判成"命令不完整"。
  */
 private val ARG_FILE_REFERENCE = Regex("""(^|\s)@[^\s'"]+""")
+
+/**
+ * 把若干预加载库拼成**一条** `export LD_PRELOAD='a:b'; ` 片段（空列表返回空串）。
+ *
+ * 为什么必须是一个函数而不是各写各的：`LD_PRELOAD` 是普通环境变量，
+ * **后一条 export 覆盖前一条，而不是追加**。所以「先 heaptagfix 再 ipv6fix」
+ * 写两遍 export 的结果是只剩最后一个，前一个被静默丢掉 —— 没有任何报错，
+ * 只能靠「内存怎么又比别人高」这种间接现象事后发现。
+ *
+ * 纯函数，便于单元测试（见 `TermuxRuntimePreloadTest`）。
+ */
+internal fun preloadExportFragment(libs: List<String>): String {
+    val cleaned = libs.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    if (cleaned.isEmpty()) return ""
+    return "export LD_PRELOAD='${cleaned.joinToString(":")}'; "
+}
 
 /**
  * 判断拼好的启动命令是否**完整**（纯函数，便于单元测试）；返回问题列表，空表示通过。

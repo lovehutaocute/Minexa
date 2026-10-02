@@ -77,10 +77,11 @@
 
     <ImageView
         android:id="@+id/widget_refresh_btn"
-        android:layout_width="24dp"
-        android:layout_height="24dp"
-        android:layout_marginStart="6dp"
+        android:layout_width="28dp"
+        android:layout_height="28dp"
+        android:layout_marginStart="8dp"
         android:src="@drawable/widget_refresh_icon"
+        android:background="@drawable/widget_icon_btn"
         android:contentDescription="@string/widget_refresh_cd"
-        android:padding="4dp" />
+        android:padding="7dp" />
 </LinearLayout>

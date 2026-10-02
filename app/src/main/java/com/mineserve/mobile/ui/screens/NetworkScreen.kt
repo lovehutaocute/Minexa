@@ -94,8 +94,10 @@ import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
 import com.mineserve.mobile.ui.theme.TrackBg
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -246,7 +248,20 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
             Spacer(Modifier.height(8.dp))
             DebouncedTextField(
                 value = config.localPort.toString(),
-                onValueChange = { v -> v.toIntOrNull()?.let { vm.setLocalPort(it) } },
+                onValueChange = { v ->
+                    // 端口标准与 FtpScreen / McpScreen 一致：1024–65535，超界自动收敛并提示
+                    v.toIntOrNull()?.let { raw ->
+                        val port = raw.coerceIn(1024, 65535)
+                        if (port != raw) {
+                            android.widget.Toast.makeText(
+                                context,
+                                context.getString(R.string.net_local_port_range_hint),
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        vm.setLocalPort(port)
+                    }
+                },
                 sanitize = { it.filter(Char::isDigit) },
                 singleLine = true,
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
@@ -329,6 +344,10 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
 
             if (config.tunnelType == TunnelType.SakuraFrp) {
                 SakuraFrpConfigSection(vm = vm, config = config)
+            }
+
+            if (config.tunnelType == TunnelType.MeFrp) {
+                MeFrpConfigSection(vm = vm, config = config)
             }
 
         }
@@ -575,6 +594,7 @@ private fun GuideSection(tunnelType: TunnelType) {
                     TunnelType.Frp -> FrpGuide()
                     TunnelType.Bore -> BoreGuide()
                     TunnelType.SakuraFrp -> SakuraGuide()
+                    TunnelType.MeFrp -> MeFrpGuide()
                 }
             }
         }
@@ -588,6 +608,17 @@ private fun SakuraGuide() {
         GuideStep("2", stringResource(R.string.sakura_guide_2_t), stringResource(R.string.sakura_guide_2_d))
         GuideStep("3", stringResource(R.string.sakura_guide_3_t), stringResource(R.string.sakura_guide_3_d))
         GuideStep("4", stringResource(R.string.sakura_guide_4_t), stringResource(R.string.sakura_guide_4_d))
+    }
+}
+
+@Composable
+private fun MeFrpGuide() {
+    GuideBlock(title = "ME Frp 使用指南") {
+        GuideStep("1", "注册账号", "浏览器打开 mefrp.com 注册并登录；免费用户也能创建隧道，实名认证后会解锁更多节点与端口")
+        GuideStep("2", "复制访问令牌", "进入「用户中心 → 个人资料」，复制访问令牌（Token）粘贴到上方输入框")
+        GuideStep("3", "创建隧道", "在 ME Frp 网站「隧道管理」新建一条 TCP 隧道：本地地址 127.0.0.1，本地端口填服务器的端口（默认 25565）")
+        GuideStep("4", "选中并启动", "回到本页点「拉取隧道列表」，选中刚创建的隧道，再点「启动隧道」即可")
+        GuideStep("5", "把地址发给玩家", "启动成功后上方会显示公网地址，把它发给朋友就能连进来了")
     }
 }
 
@@ -664,7 +695,8 @@ private val freeFrpPlatforms = listOf(
     FrpPlatform("OpenFrp", "https://www.openfrp.net/"),
     FrpPlatform("ChmlFrp", "https://www.chmlfrp.cn/"),
     FrpPlatform("StarryFrp（星空FRP）", "https://frp.starryfrp.com/"),
-    FrpPlatform("SakuraFrp（樱花映射）", "https://www.natfrp.com/")
+    FrpPlatform("SakuraFrp（樱花映射）", "https://www.natfrp.com/"),
+    FrpPlatform("ME Frp", "https://www.mefrp.com/")
 )
 
 @Composable
@@ -722,14 +754,24 @@ private fun SakuraFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile
 
     fun refresh(withNodes: Boolean) {
         if (token.isBlank() || loading) return
-        scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        // scope 是 Main 作用域：网络请求切到 IO，Compose 状态只在 Main 线程赋值
+        scope.launch {
             loading = true
             message = ""
             try {
-                val info = com.mineserve.mobile.server.tunnel.SakuraFrpApi.userInfo(token)
+                val info = withContext(Dispatchers.IO) {
+                    com.mineserve.mobile.server.tunnel.SakuraFrpApi.userInfo(token)
+                }
+                val list = withContext(Dispatchers.IO) {
+                    com.mineserve.mobile.server.tunnel.SakuraFrpApi.tunnelList(token)
+                }
                 account = info
-                tunnels = com.mineserve.mobile.server.tunnel.SakuraFrpApi.tunnelList(token)
-                if (withNodes) nodes = com.mineserve.mobile.server.tunnel.SakuraFrpApi.nodeList(token, info.level)
+                tunnels = list
+                if (withNodes) {
+                    nodes = withContext(Dispatchers.IO) {
+                        com.mineserve.mobile.server.tunnel.SakuraFrpApi.nodeList(token, info.level)
+                    }
+                }
             } catch (e: Exception) {
                 message = e.message ?: "拉取失败"
             } finally {
@@ -829,12 +871,15 @@ private fun SakuraFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile
             onDismiss = { showCreate = false },
             onConfirm = { node, name, type, port ->
                 showCreate = false
-                scope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                // scope 是 Main 作用域：请求切到 IO，Compose 状态只在 Main 线程赋值
+                scope.launch {
                     loading = true
                     try {
-                        com.mineserve.mobile.server.tunnel.SakuraFrpApi.createTunnel(
-                            token, node.id, name, type, "127.0.0.1", port
-                        )
+                        withContext(Dispatchers.IO) {
+                            com.mineserve.mobile.server.tunnel.SakuraFrpApi.createTunnel(
+                                token, node.id, name, type, "127.0.0.1", port
+                            )
+                        }
                         refresh(withNodes = false)
                     } catch (e: Exception) {
                         message = e.message ?: "创建失败"
@@ -844,6 +889,124 @@ private fun SakuraFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile
                 }
             }
         )
+    }
+}
+
+// ── ME Frp 配置区（Token + 隧道列表） ─────────────────────────
+
+@Composable
+private fun MeFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile.data.McConfig) {
+    val scope = androidx.compose.runtime.rememberCoroutineScope()
+    val token = config.meFrpToken.trim()
+
+    // 结果与令牌绑定：remember(token) 让令牌一变就整体作废，避免把上一个账号的隧道
+    // 显示成当前令牌可用的隧道（否则用户可以选中一条自己无权启动的隧道）。
+    var account by remember(token) { mutableStateOf<com.mineserve.mobile.server.tunnel.MeFrpApi.Account?>(null) }
+    var proxies by remember(token) { mutableStateOf<List<com.mineserve.mobile.server.tunnel.MeFrpApi.Proxy>>(emptyList()) }
+    var message by remember(token) { mutableStateOf("") }
+    var loading by remember { mutableStateOf(false) }
+
+    fun refresh() {
+        if (token.isBlank() || loading) return
+        // scope 是 Main 作用域：网络请求切到 IO，Compose 状态只在 Main 线程赋值
+        scope.launch {
+            loading = true
+            message = ""
+            try {
+                val acc = withContext(Dispatchers.IO) {
+                    com.mineserve.mobile.server.tunnel.MeFrpApi.userInfo(token)
+                }
+                val list = withContext(Dispatchers.IO) {
+                    com.mineserve.mobile.server.tunnel.MeFrpApi.proxyList(token)
+                }
+                account = acc
+                proxies = list
+            } catch (e: Exception) {
+                message = e.message ?: "拉取失败"
+            } finally {
+                loading = false
+            }
+        }
+    }
+
+    Column {
+        Text("ME Frp 访问令牌（Token）", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+        Spacer(Modifier.height(6.dp))
+        DebouncedTextField(
+            value = config.meFrpToken,
+            onValueChange = { v -> vm.updateConfig { it.copy(meFrpToken = v.trim()) } },
+            placeholder = { Text("在 mefrp.com 用户中心复制") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { refresh() },
+            enabled = token.isNotBlank() && !loading,
+            colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+            shape = RoundedCornerShape(10.dp),
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            if (loading) {
+                CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
+                Spacer(Modifier.size(6.dp))
+            }
+            Text("拉取隧道列表", fontSize = 12.sp)
+        }
+        message.takeIf { it.isNotBlank() }?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, color = Coral, fontSize = 11.sp)
+        }
+        account?.let { acc ->
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "账号：${acc.username}（${acc.group}）· 隧道 ${proxies.size}${acc.maxTunnels?.let { "/$it" } ?: ""}",
+                color = Muted, fontSize = 11.sp
+            )
+        }
+        if (proxies.isEmpty() && !loading) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "暂无隧道。请先在 mefrp.com 网站创建一条 TCP 隧道（本地地址 127.0.0.1，本地端口填服务器端口），再回到这里拉取。",
+                color = Muted, fontSize = 11.sp
+            )
+        }
+        proxies.forEach { p ->
+            val selected = config.meFrpTunnelId == p.id
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (selected) IndigoSoft else Color.Transparent)
+                    .clickable {
+                        vm.updateConfig { it.copy(meFrpTunnelId = p.id, meFrpToken = token) }
+                    }
+                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Box(
+                    Modifier
+                        .size(8.dp)
+                        .background(if (p.online) Color(0xFF4CAF50) else Color(0xFFBDBDBD), CircleShape)
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(p.name + if (selected) "（已选）" else "", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        buildString {
+                            if (p.nodeName.isNotBlank()) append("节点 ${p.nodeName} · ")
+                            append("${p.type} · 本地 ${p.localIp}:${p.localPort} · ")
+                            append(p.remoteAddress.ifBlank { p.remotePort?.toString() ?: "自动分配" })
+                        },
+                        color = Muted, fontSize = 10.sp
+                    )
+                }
+            }
+        }
+        if (config.meFrpTunnelId.isNotBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Text("点击上方「启动隧道」将拉取该隧道的官方配置并启动 frpc", color = Muted, fontSize = 10.sp)
+        }
     }
 }
 

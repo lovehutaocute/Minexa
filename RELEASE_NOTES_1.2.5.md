@@ -3,7 +3,7 @@
 ## MCP 服务（Model Context Protocol）
 
 - 内嵌 MCP 服务器（Streamable HTTP，默认关闭，Bearer 令牌鉴权）：局域网内 AI 助手（Claude、ZCode 等 MCP 客户端）可连接手机远程管理服务器。
-- 20 个工具：服务器管理（状态/列表/切换/启停）、MC 控制台（命令、最多 2000 行日志）、Termux 命令执行、服务器文件管理（列/读/写/删/改名/建目录/上传/解压/导入新服务器）、模组（Modrinth 搜索/安装/列表）。
+- 57 个工具：服务器管理（状态/列表/切换/启停）、MC 控制台（命令、最多 2000 行日志）、Termux 命令执行、服务器文件管理（列/读/写/删/改名/建目录/上传/解压/导入新服务器）、模组（Modrinth 搜索/安装/列表）。
 - 「更多」页新增「MCP 服务」入口：开关、端口、令牌管理、端点与客户端配置一键复制。
 
 ## FTP 文件管理
@@ -18,7 +18,7 @@
 
 - 新增 PocketMine-MP 与 Allay 核心（按钮样式与 PowerNukkitX 一致）：
   - PocketMine-MP：pmmp 官方通道版本（自动过滤与内置 PHP 运行时不兼容的版本），首次启动自动下载 Android 原生 PHP 运行环境；
-  - Allay：GitHub Release 版本，需要 Java 21+（自动切换），首次启动自动生成配置并禁用 IPv6 绑定。
+  - Allay：GitHub Release 版本，需要 Java 21+（自动切换），首次启动自动生成配置；IPv6 绑定按设备能否监听 IPv6 条件处理（能则保留 `enablev6: true`，确实绑不上才禁用）。
 
 ## 界面改版
 

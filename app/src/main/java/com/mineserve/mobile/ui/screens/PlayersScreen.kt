@@ -316,7 +316,7 @@ fun PlayersScreen(
     if (showHistory) {
         PlayerHistoryDialog(
             history = playerHistory,
-            summaries = vm.playerActivitySummaries(),
+            summaries = activitySummaries,
             onDismiss = { showHistory = false },
             onExport = { historyExportLauncher.launch("player_activity.csv") },
             onClear = vm::clearPlayerHistory,

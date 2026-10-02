@@ -9,204 +9,28 @@
     <string name="tab_download">下载</string>
     <string name="tab_server_management">服务器管理</string>
     <string name="tab_players">玩家</string>
-    <string name="tab_plugins">插件与模组</string>
     <string name="tab_files">文件</string>
     <string name="tab_terminal">终端</string>
-    <string name="tab_network">网络</string>
-    <string name="tab_backup">世界与备份</string>
-    <string name="tab_config">配置</string>
     <string name="tab_settings">设置</string>
 
-    <string name="s1">开机自启：拉起前台保活服务</string>
-    <string name="s2">开机自启失败: %1$s</string>
     <string name="s3">崩溃时间: %1$s</string>
     <string name="s4">线程: %1$s</string>
     <string name="s5">异常: %1$s: %2$s</string>
-    <string name="s6">[crash] 上次崩溃日志:\n%1$s</string>
     <string name="s7">未知错误</string>
     <string name="s8">初始化失败，请查看下方日志了解原因后重试</string>
-    <string name="s9">自建服务器，功能最全，支持自定义端口</string>
-    <string name="s10">自建服务器，协议最简，纯手机端运行无需下载二进制</string>
-    <string name="s11">自动（镜像优先）</string>
-    <string name="s12">GitHub 直连</string>
-    <string name="s13">清华镜像 (TUNA)</string>
-    <string name="s14">阿里云镜像</string>
-    <string name="s15">中科大镜像 (USTC)</string>
-    <string name="s16">南京大学镜像</string>
-    <string name="s17">Termux 官方</string>
-    <string name="s18">JDK 17 运行环境</string>
-    <string name="s19">Wget 下载工具</string>
-    <string name="s20">Frp 内网穿透</string>
-    <string name="s21">Rclone 远程挂载</string>
-    <string name="s22">PRoot 兼容层</string>
-    <string name="s23">性能优化版，兼容大部分插件</string>
-    <string name="s24">开始删除 Termux 运行环境...</string>
-    <string name="s25">Termux 运行环境已删除</string>
-    <string name="s26">Termux 环境已就绪</string>
-    <string name="s27">补充配置（旧版本初始化时未生成）...</string>
-    <string name="s28">开始下载 Termux 运行环境</string>
-    <string name="s29">缓存的 rootfs 损坏，重新下载</string>
-    <string name="s30">已存在缓存的 rootfs，跳过下载</string>
-    <string name="s31">清除上次失败的提取...</string>
-    <string name="s32">开始解压...</string>
-    <string name="s33">解压完成</string>
-    <string name="s34">错误: bin/bash 不存在！解压失败</string>
-    <string name="s35">bin/ 目录内容: %1$s</string>
-    <string name="s36">bin/ 目录不存在</string>
-    <string name="s37">rootDir 内容: %1$s</string>
-    <string name="s38">解压后 bin/bash 不存在</string>
-    <string name="s39">bash 文件大小: %1$s 字节</string>
-    <string name="s40">bash ELF 魔数: %1$s</string>
-    <string name="s41">无效!</string>
-    <string name="s42">初始化配置...</string>
-    <string name="s43">Termux 环境初始化完成</string>
-    <string name="s44">初始化失败: %1$s</string>
-    <string name="s45">ZIP 提取完成: %1$s 个文件, %2$s 个条目</string>
-    <string name="s46">前20个条目: %1$s</string>
-    <string name="s47">处理符号链接 (SYMLINKS.txt)...</string>
-    <string name="s48">符号链接失败: %1$s → %2$s: %3$s</string>
-    <string name="s49">创建了 %1$s 个符号链接, %2$s 个失败</string>
-    <string name="s50">警告: SYMLINKS.txt 不存在!</string>
-    <string name="s51">下载 Termux 运行环境 (~30MB)...</string>
-    <string name="s52">镜像%1$s</string>
-    <string name="s53">尝试 %1$s: %2$s...</string>
-    <string name="s54">校验文件完整性...</string>
-    <string name="s55">SHA256 校验失败</string>
-    <string name="s56">校验通过</string>
-    <string name="s57">%1$s 失败: %2$s</string>
-    <string name="s58">所有镜像源均下载失败: %1$s</string>
-    <string name="s59">发现旧版本解压的错误目录，开始修复...</string>
-    <string name="s60">错误目录已修复</string>
-    <string name="s61">修复错误目录失败: %1$s</string>
-    <string name="s62">创建兼容符号链接: %1$s -> %2$s</string>
-    <string name="s63">创建兼容符号链接失败: %1$s</string>
-    <string name="s64">合并 Android 系统 CA 证书...</string>
-    <string name="s65">CA 证书合并完成: %1$s 字节</string>
-    <string name="s66">CA 证书合并失败: %1$s</string>
-    <string name="s67">警告: Android CA 证书目录不存在: %1$s</string>
-    <string name="s68">已下载 %1$s%% (%2$sMB)</string>
-    <string name="s69">已下载 %1$sMB</string>
     <string name="s70">下载 Linux 文件系统</string>
     <string name="s71">解压文件系统</string>
     <string name="s72">初始化配置</string>
     <string name="s73">完成</string>
-    <string name="s74">[bootstrap] 环境已就绪，跳过依赖安装</string>
-    <string name="s75">[bootstrap] 安装依赖包（JDK-25/wget）...</string>
-    <string name="s76">[bootstrap] 警告: 未找到 openjdk 安装目录，跳过符号链接修复</string>
-    <string name="s77">[bootstrap] 警告: %1$s 不存在</string>
-    <string name="s78">[bootstrap] 警告: 创建 %1$s wrapper 异常: %2$s</string>
-    <string name="s79">[bootstrap] 警告: batch chmod 失败: %1$s</string>
-    <string name="s80">[bootstrap] openjdk-17 wrapper 脚本创建完成: %1$s 个命令已就绪</string>
-    <string name="s81">[startMc] 错误: java 未找到，openjdk 可能未安装。请删除 Termux 环境后重新初始化</string>
-    <string name="s82">[startMc] java 路径: %1$s</string>
-    <string name="s83">[startMc] 错误: java 未找到，请检查 openjdk-17 是否已安装</string>
-    <string name="s84">createSnapshot: world 目录不存在</string>
-    <string name="s85">快照已创建: %1$s (%2$s 字节)</string>
-    <string name="s86">cleanupOldSnapshots: 删除失败 %1$s</string>
-    <string name="s87">cleanupOldSnapshots: 删除异常 %1$s: %2$s</string>
-    <string name="s88">cleanupOldSnapshots: 已清理 %1$s 个旧快照（保留 %2$s 个）</string>
-    <string name="s89">MineServeMobile 崩溃报告</string>
-    <string name="s90">时间: %1$s</string>
-    <string name="s91">退出码: %1$s</string>
-    <string name="s92">进程状态: 异常退出</string>
-    <string name="s93">--- 最近日志 (最后 200 行) ---</string>
-    <string name="s94">(读取 latest.log 失败: %1$s)</string>
-    <string name="s95">(latest.log 不存在)</string>
-    <string name="s96">--- MC 原生崩溃报告 ---</string>
-    <string name="s97">(来源: %1$s)</string>
-    <string name="s98">(读取原生崩溃报告失败: %1$s)</string>
-    <string name="s99">(无 MC 原生崩溃报告)</string>
-    <string name="s100">Termux 环境未初始化，请等待初始化完成</string>
-    <string name="s101">[install] 正在执行 %1$s installer，首次安装需下载依赖，请耐心等待...</string>
-    <string name="s102">NeoForge installer 执行失败 (exit=%1$s)</string>
-    <string name="s103">Quilt installer 执行失败 (exit=%1$s)</string>
-    <string name="s104">[install] %1$s 安装完成</string>
-    <string name="s105">[download] 开始下载 %1$s %2$s</string>
-    <string name="s106">[download] 保存路径: %1$s</string>
-    <string name="s107">[download] 第 %1$s 次尝试失败: HTTP %2$s</string>
-    <string name="s108">[download] 进度: %1$s (%2$sMB / %3$sMB, %4$sMB/s)</string>
-    <string name="s109">下载文件过小 (%1$s 字节)，可能下载失败</string>
-    <string name="s110">[download] 下载完成: %1$sMB</string>
-    <string name="s111">[download] 第 %1$s 次失败: %2$s</string>
-    <string name="s112">[download] 等待 %1$sms 后重试...</string>
-    <string name="s113">下载失败（已重试3次）: %1$s</string>
-    <string name="s114">依赖安装失败，请先安装依赖后再启动服务器</string>
-    <string name="s115">未选择要启动的服务端核心，请先在「下载」Tab 下载或选择</string>
-    <string name="s116">核心 %1$s 的 server.jar 不存在，请重新下载</string>
-    <string name="s117">server.jar 不存在，请先在「下载」Tab 下载服务端核心</string>
-    <string name="s118">NeoForge 启动文件缺失，请重新下载安装核心</string>
-    <string name="s119">Quilt 启动文件缺失，请重新下载安装核心</string>
-    <string name="s120">崩溃报告已保存: %1$s</string>
-    <string name="s121">[crash] 检测到异常退出(exit=%1$s)，崩溃报告已保存: %2$s</string>
-    <string name="s122">捕获崩溃报告失败: %1$s</string>
-    <string name="s123">崩溃自动重启中... (attempt %1$s/%2$s)</string>
-    <string name="s124">崩溃重启失败: %1$s</string>
-    <string name="s125">已达到最大重试次数(%1$s)，停止重启</string>
-    <string name="s126">精选</string>
     <string name="s127">本地</string>
     <string name="s128">下载文件过小或为空（%1$s bytes），可能 URL 失效</string>
     <string name="s129">无法打开文件 Uri: %1$s</string>
     <string name="s130">文件过小，可能上传失败</string>
     <string name="s131">未知</string>
-    <string name="s132">未找到 tag_name 字段</string>
-    <string name="s133">HTTP %1$s 下载失败: %2$s</string>
-    <string name="s134">%1$s 后端尚未实现</string>
-    <string name="s135">[tunnel] 错误: %1$s 后端尚未实现</string>
-    <string name="s136">[tunnel] %1$s 启动失败: %2$s</string>
-    <string name="s137">[tunnel] frpc 未安装，从 GitHub 下载...</string>
-    <string name="s138">[tunnel] frpc 已安装，跳过</string>
-    <string name="s139">[tunnel] 正在通过 apt 安装 frp...</string>
-    <string name="s140">[tunnel] 尝试下载 frpc: %1$s...</string>
-    <string name="s141">[tunnel] frpc 下载完成: %1$s</string>
-    <string name="s142">[tunnel] %1$s 下载失败: %2$s</string>
-    <string name="s143">[tunnel] GitHub 下载失败，尝试 apt 安装...</string>
-    <string name="s144">请填写 bore 服务端地址</string>
-    <string name="s145">[bore] 正在连接 %1$s:%2$s ...</string>
-    <string name="s146">正在连接 bore 服务端...</string>
-    <string name="s147">[bore] 已发送 Hello(localPort=%1$s)</string>
-    <string name="s148">bore 服务端无响应</string>
-    <string name="s149">bore 服务端返回异常: %1$s</string>
-    <string name="s150">[bore] 隧道已建立，公网地址: %1$s</string>
-    <string name="s151">[bore] 外部连接到达: %1$s</string>
-    <string name="s152">[bore] 服务端错误: %1$s</string>
-    <string name="s153">bore 连接断开</string>
-    <string name="s154">[bore] 启动失败: %1$s</string>
-    <string name="s155">[bore] 隧道已停止</string>
-    <string name="s156">[bore] 连接 %1$s 处理失败: %2$s</string>
-    <string name="s157">请粘贴完整的 frpc.toml 配置文本或导入配置文件</string>
-    <string name="s158">frpc 配置已写入 (%1$s 字符)</string>
-    <string name="s159">已自动移除 autoTLS 字段（旧版 frpc 不兼容）</string>
-    <string name="s160">frpc 版本过旧，不支持配置中的字段（如 autoTLS）。正在自动下载最新版 frpc，请重试。</string>
-    <string name="s161">无法连接 frp 服务端，请检查配置中的 serverAddr 和 serverPort 是否正确</string>
-    <string name="s162">认证失败：Token 与服务端不匹配</string>
-    <string name="s163">端口已被占用，请更换 remotePort</string>
-    <string name="s164">连接超时，请检查服务端地址是否可达</string>
-    <string name="s165">正在准备 %1$s...</string>
-    <string name="s166">%1$s 二进制不可用</string>
-    <string name="s167">启动命令: %1$s</string>
-    <string name="s168">启动失败: %1$s</string>
-    <string name="s169">%1$s 已停止</string>
-    <string name="s170">获取到公网地址: %1$s</string>
-    <string name="s171">隧道进程已退出 (code=%1$s)</string>
-    <string name="s172">监控异常: %1$s</string>
-    <string name="s173">进程 %1$sms 内未获取到公网地址，判定超时</string>
-    <string name="s174">启动超时，可能网络不通或配置有误</string>
-    <string name="s175">隧道进程退出 (code=%1$s)</string>
-    <string name="s176">MC 服务运行中</string>
-    <string name="s177">点击查看实时状态</string>
-    <string name="s178">概览</string>
-    <string name="s179">下载</string>
-    <string name="s180">玩家</string>
-    <string name="s181">插件与模组</string>
-    <string name="s182">文件</string>
-    <string name="s183">网络</string>
-    <string name="s184">备份</string>
-    <string name="s185">配置</string>
     <string name="s186">设置</string>
     <string name="s187">无法获取局域网 IP，请确认已连接 WiFi</string>
     <string name="s188">已复制：%1$s</string>
     <string name="s189">进服</string>
-    <string name="s190">离服</string>
     <string name="s191">配置保存失败: %1$s</string>
     <string name="s192">Termux 环境仍在初始化，请稍候...</string>
     <string name="s193">依赖安装完成</string>
@@ -217,8 +41,6 @@
     <string name="s198">服务器停止指令已发送</string>
     <string name="s199">服务器停止失败: %1$s</string>
     <string name="s200">隧道正在启动中，请稍候...</string>
-    <string name="s201">隧道已启动，公网地址: %1$s</string>
-    <string name="s202">隧道已启动</string>
     <string name="s203">隧道正在启动，请查看日志...</string>
     <string name="s204">隧道启动失败: %1$s</string>
     <string name="s205">隧道指令已发送</string>
@@ -236,29 +58,22 @@
     <string name="s217">删除模组失败: %1$s</string>
     <string name="s218">模组上传完成: %1$s</string>
     <string name="s219">模组上传失败: %1$s</string>
-    <string name="s220">无法解析最新版本下载地址</string>
     <string name="s221">%1$s 安装完成</string>
     <string name="s222">%1$s 安装失败: %2$s</string>
     <string name="s223">未找到相关模组，请尝试其他关键词或筛选条件</string>
-    <string name="s224">该模组不支持当前 MC 版本/加载器</string>
     <string name="s225">%1$s 安装完成</string>
     <string name="s226">%1$s 安装失败: %2$s</string>
     <string name="s227">%1$s 正在下载中，请稍候</string>
-    <string name="s228">无法解析 %1$s 最新版本下载地址</string>
     <string name="s229">%1$s 安装完成</string>
     <string name="s230">%1$s 安装失败: %2$s</string>
     <string name="s231">插件 %1$s 上传成功</string>
     <string name="s232">插件上传失败: %1$s</string>
-    <string name="s233">%1$s 已删除（含数据目录）</string>
-    <string name="s234">%1$s 已删除</string>
     <string name="s235">删除失败：文件不存在或被占用</string>
     <string name="s236">删除失败: %1$s</string>
     <string name="s237">已禁用</string>
     <string name="s238">已启用</string>
     <string name="s239">切换状态失败：文件不存在</string>
     <string name="s240">切换状态失败: %1$s</string>
-    <string name="s241">检测完成：%1$s 个插件有更新</string>
-    <string name="s242">检测完成：所有精选插件均为最新版本</string>
     <string name="s243">更新检测失败: %1$s</string>
     <string name="s244">URL 和文件名不能为空</string>
     <string name="s245">已有下载任务进行中，请稍候</string>
@@ -271,7 +86,6 @@
     <string name="s252">快照恢复失败</string>
     <string name="s253">恢复快照失败: %1$s</string>
     <string name="s254">快照文件不存在</string>
-    <string name="s255">无法打开导出目标</string>
     <string name="s256">快照已导出: %1$s</string>
     <string name="s257">导出失败: %1$s</string>
     <string name="s258">已删除快照: %1$s</string>
@@ -283,18 +97,9 @@
     <string name="s264">保存 server.properties 失败: %1$s</string>
     <string name="s265">刷新玩家数据失败: %1$s</string>
     <string name="s266">服务器未运行，无法发送命令</string>
-    <string name="s267">已为 %1$s 添加 OP</string>
-    <string name="s268">已为 %1$s 设置 OP（等级 %2$s）</string>
-    <string name="s269">已取消 %1$s 的 OP</string>
-    <string name="s270">已将 %1$s 加入白名单</string>
-    <string name="s271">已将 %1$s 移出白名单</string>
     <string name="s272">白名单已开启</string>
     <string name="s273">白名单已关闭</string>
     <string name="s274">服务器未运行，无法切换白名单</string>
-    <string name="s275">已踢出 %1$s</string>
-    <string name="s276">已永久封禁 %1$s</string>
-    <string name="s277">已限时封禁 %1$s（%2$s）</string>
-    <string name="s278">已解除 %1$s 的封禁</string>
     <string name="s279">已请求在线玩家列表，结果将显示在日志中</string>
     <string name="s280">服务器未运行</string>
     <string name="s281">生存</string>
@@ -302,7 +107,6 @@
     <string name="s283">冒险</string>
     <string name="s284">旁观</string>
     <string name="s285">已将 %1$s 设为%2$s 模式</string>
-    <string name="s286">已给予 %1$s %2$s 经验</string>
     <string name="s287">加载崩溃报告失败: %1$s</string>
     <string name="s288">读取崩溃报告失败: 文件不存在</string>
     <string name="s289">读取崩溃报告失败: %1$s</string>
@@ -314,7 +118,6 @@
     <string name="s295">请输入核心名称</string>
     <string name="s296">服务端核心「%1$s」下载完成</string>
     <string name="s297">服务端核心下载失败: %1$s</string>
-    <string name="s298">核心 %1$s 不存在</string>
     <string name="s299">删除核心文件夹失败: %1$s</string>
     <string name="s300">已删除核心「%1$s」</string>
     <string name="s301">删除核心失败: %1$s</string>
@@ -322,7 +125,6 @@
     <string name="s303">MC 终端已就绪，输入 help 查看可用命令</string>
     <string name="s304">已删除: %1$s</string>
     <string name="s305">删除失败: %1$s</string>
-    <string name="s306">无法打开文件</string>
     <string name="s307">文件上传成功</string>
     <string name="s308">上传失败: %1$s</string>
     <string name="s309">导出完成</string>
@@ -331,24 +133,13 @@
     <string name="s312">创建目录失败（可能已存在）</string>
     <string name="s313">创建目录失败: %1$s</string>
     <string name="s314">启动保活服务失败: %1$s</string>
-    <string name="s315">正在启动服务端 · %1$s</string>
-    <string name="s316">服务器运行中 · %1$s</string>
-    <string name="s317">服务器未启动</string>
     <string name="s318">在线</string>
-    <string name="s319">内存</string>
-    <string name="s320">运行时长</string>
-    <string name="s321">服务端启动通常需要 30 秒~数分钟，日志见「MC 终端」...</string>
-    <string name="s322">%1$s分钟</string>
-    <string name="s323">%1$s秒</string>
     <string name="s324">备份与还原</string>
-    <string name="s325">创建备份</string>
-    <string name="s326">将 world 目录打包为 zip，保存到 home/snapshots/</string>
     <string name="s327">已发送 save-all</string>
     <string name="s328">保存</string>
     <string name="s329">已创建: %1$s</string>
     <string name="s330">创建失败</string>
     <string name="s331">新建备份</string>
-    <string name="s332">备份列表 (%1$s)</string>
     <string name="s333">刷新</string>
     <string name="s334">暂无备份</string>
     <string name="s335">导出</string>
@@ -357,16 +148,6 @@
     <string name="s338">已删除 %1$s</string>
     <string name="s339">删除</string>
     <string name="s340">云控面板</string>
-    <string name="s341">设备状态</string>
-    <string name="s342">设备内存</string>
-    <string name="s343">存储</string>
-    <string name="s344">电池</string>
-    <string name="s345">%1$s%% 充电中</string>
-    <string name="s346">总下载</string>
-    <string name="s347">总上传</string>
-    <string name="s348">下载速度</string>
-    <string name="s349">上传速度</string>
-    <string name="s350">▶ 打开 MC 终端</string>
     <string name="s351">初始化运行环境</string>
     <string name="s352">正在下载并解压 Termux 环境（%1$s%%）</string>
     <string name="s353">下载 Termux 运行环境（约 50MB）</string>
@@ -383,7 +164,6 @@
     <string name="s364">环境初始化中...</string>
     <string name="s365">安装中...</string>
     <string name="s366">开始安装</string>
-    <string name="s367">删除 Termux 运行环境</string>
     <string name="s368">启动服务端</string>
     <string name="s369">尚未下载服务端核心</string>
     <string name="s370">请切换到「下载」Tab 下载服务端核心</string>
@@ -393,14 +173,11 @@
     <string name="s374">切换服务器核心：%1$s</string>
     <string name="s375">▼ 选择服务器核心</string>
     <string name="s376">已选用「%1$s」</string>
-    <string name="s377">服务控制</string>
     <string name="s378">启动设置</string>
     <string name="s379">启动中...</string>
     <string name="s380">启动</string>
     <string name="s381">停止中...</string>
     <string name="s382">停止</string>
-    <string name="s383">状态：运行中</string>
-    <string name="s384">状态：已停止</string>
     <string name="s385">首次启动需下载运行文件，请耐心等待</string>
     <string name="s386">服务器地址</string>
     <string name="s387">局域网</string>
@@ -409,19 +186,11 @@
     <string name="s390">已安装插件</string>
     <string name="s391">暂无已安装插件</string>
     <string name="s392">%1$s 个插件已安装</string>
-    <string name="s393">重新安装中...</string>
-    <string name="s394">重新安装依赖</string>
     <string name="s395">服务器启动设置</string>
     <string name="s396">崩溃自动重启</string>
     <string name="s397">MC 进程异常退出时自动重启（默认关闭省电）</string>
     <string name="s398">JVM 内存上限：%1$s MB（在设置页修改）</string>
-    <string name="s399">删除运行环境</string>
-    <string name="s400">将删除 Termux 运行环境（依赖包与缓存），存档与服务器核心（世界、插件、配置）会保留。「确认删除」= 删除后自动重新初始化；「强制删除」= 彻底卸载（更彻底），需手动重新安装。此操作不可撤销。</string>
     <string name="s401">确认删除</string>
-    <string name="force_delete">强制删除</string>
-    <string name="delete_deps">删除依赖</string>
-    <string name="delete_deps_title">删除依赖</string>
-    <string name="delete_deps_content">将直接删除 Termux 运行环境与所有依赖（Java 等）的文件，存档与服务器核心（世界、插件、配置）会保留，且不会自动重装，需要时请手动重新安装。此操作不可撤销。</string>
     <string name="s402">取消</string>
     <string name="s403">下载慢?查看解决方式 →</string>
     <string name="s404">返回</string>
@@ -464,7 +233,6 @@
     <string name="s441">重启应用，环境会自动识别已存在的文件跳过下载</string>
     <string name="s442">如何判断当前速度？</string>
     <string name="s443">在下载过程中，本应用会实时显示下载速度（如 2.35 MB/s）。一般来说：</string>
-    <string name="s444">速度参考</string>
     <string name="s445">极快（直连或优质代理）</string>
     <string name="s446">较快（镜像源加速）</string>
     <string name="s447">一般（正常国内访问）</string>
@@ -474,19 +242,9 @@
     <string name="s451">已安装核心列表</string>
     <string name="s452">尚未下载任何服务端核心</string>
     <string name="s453">当前选用</string>
-    <string name="s454">%1$s %2$s  ·  文件夹: %3$s</string>
     <string name="s455">选用</string>
     <string name="s456">下载路径：home/servers/{名称}/server.jar（每个核心独立目录）</string>
     <string name="s457">1. 选择核心类型</string>
-    <string name="s458">PaperMC：高性能优化核心，兼容大部分插件，推荐用于生产环境</string>
-    <string name="s459">Purpur：Paper 分支，额外提供更多原版特性开关，插件兼容</string>
-    <string name="s460">Fabric：轻量级模组加载器，支持最新版本快速更新</string>
-    <string name="s461">Forge：老牌模组加载器，生态丰富，适合大型整合包</string>
-    <string name="s462">NeoForge：Forge 继任者，模组生态活跃（下载后自动执行 installer）</string>
-    <string name="s463">Quilt：Fabric 分支模组加载器，注重社区驱动（下载后自动执行 installer）</string>
-    <string name="s464">Vanilla：Minecraft 官方原版服务端</string>
-    <string name="s465">Velocity：高性能代理端，可连接多个后端服务器（不支持插件/模组）</string>
-    <string name="s466">BungeeCord：经典代理端，支持子服务器间切换（不支持插件/模组）</string>
     <string name="s467">✓ 支持插件</string>
     <string name="s468">✗ 不支持插件</string>
     <string name="s469">✓ 支持模组</string>
@@ -501,7 +259,6 @@
     <string name="s478">当前选择：%1$s</string>
     <string name="s479">3. 下载服务端核心</string>
     <string name="s480">从官方源下载服务端 JAR</string>
-    <string name="s481">Termux 环境初始化中，请等待完成后再下载...</string>
     <string name="s482">将下载 %1$s %2$s 到独立目录</string>
     <string name="s483">核心名称（用于区分不同核心）</string>
     <string name="s484">如 生存服-1.20.4</string>
@@ -575,7 +332,6 @@
     <string name="s552">每 15 分钟检查保活服务是否存活，被系统杀死后自动重新拉起（WorkManager）</string>
     <string name="s553">MC 服务器进程异常退出时自动重启（默认关闭省电）</string>
     <string name="s554">说明</string>
-    <string name="s555">Android 系统对后台进程有严格限制，保活能力受系统版本与厂商策略影响。\n</string>
     <string name="s556">前台服务通知常驻可显著降低被杀概率；请勿在系统设置中限制本应用后台运行。</string>
     <string name="s557">控制台日志</string>
     <string name="s558">已复制 %1$s 行日志</string>
@@ -652,7 +408,6 @@
     <string name="s629">去阿里云、腾讯云或 Oracle Cloud（有免费的 ARM 实例）租一台云服务器，最便宜的就够用。关键是要有「公网 IP」。</string>
     <string name="s630">在服务器上装 frp 服务端</string>
     <string name="s631" formatted="false">登录服务器后，去 GitHub 搜 fatedier/frp，下载对应版本，解压后编辑 frps.toml 文件：\nbindPort = 7000\nauth.method = "token"\nauth.token = "随便设个密码"\n然后运行 ./frps -c frps.toml 启动服务端。</string>
-    <string name="s632">随便设个密码</string>
     <string name="s633">在手机上填配置</string>
     <string name="s634">把服务器的公网 IP 填到上面「frp 服务端地址」，端口填 7000，Token 填你刚才设的密码（要跟服务端一模一样）。</string>
     <string name="s635">点启动就行</string>
@@ -672,8 +427,6 @@
     <string name="s649">启动后状态卡片显示公网地址（serverIP:端口），复制发给朋友在 MC 直接连接粘贴即可。</string>
     <string name="s650">优点和限制</string>
     <string name="s651">优点：极轻量（~300 行代码），秒启动。限制：仅 TCP，需自建服务器。适合追求低延迟和轻量体验的用户。</string>
-    <string name="s652">StarryFrp（星空FRP）</string>
-    <string name="s653">SakuraFrp（樱花映射）</string>
     <string name="s654">免费 FRP 平台</string>
     <string name="s655">不想自建服务器？以下免费 frp 平台注册后即可使用：把平台提供的节点地址、端口与 Token 填入上方 frpc.toml 配置即可启动。</string>
     <string name="s656">打开官网</string>
@@ -694,7 +447,6 @@
     <string name="s671">4 - 最高（完整权限）</string>
     <string name="s672">玩家管理</string>
     <string name="s673">玩家历史记录</string>
-    <string name="s674">已复制：%1$s</string>
     <string name="s675">管理员踢出</string>
     <string name="s676">管理员封禁</string>
     <string name="s677">玩家进服/离服记录</string>
@@ -718,11 +470,8 @@
     <string name="s695">等级 %1$s · %2$s...</string>
     <string name="s696">添加 OP</string>
     <string name="s697">玩家名</string>
-    <string name="s698">注：op 命令带等级参数需 MC 1.20.2+ 才支持，旧版服务器统一为默认 4 级</string>
     <string name="s699">服务器未运行，无法添加 OP</string>
     <string name="s700">添加 OP（等级 %1$s）</string>
-    <string name="s701">白名单 %1$s</string>
-    <string name="s702">已关闭</string>
     <string name="s703">仅白名单内玩家可加入</string>
     <string name="s704">所有玩家均可加入（开启后可限制）</string>
     <string name="s705">搜索白名单玩家...</string>
@@ -760,12 +509,9 @@
     <string name="s737">插件</string>
     <string name="s738">模组</string>
     <string name="s739">老牌大型插件资源平台，绝大多数 Bukkit/Spigot 插件首发站点，含免费与付费资源（全英文、国内访问较慢）</string>
-    <string name="s740">Hangar（Paper 官方）</string>
     <string name="s741">Paper 官方搭建平台，面向 Paper / Velocity / Waterfall，界面简洁、筛选完善</string>
     <string name="s742">现代化开源资源平台，收录插件/模组/数据包，下载快，可按游戏版本与加载器筛选</string>
-    <string name="s743">BuiltByBit（原 MC-Market）</string>
     <string name="s744">商业付费插件聚集地，也提供免费资源与成套服务端配置方案</string>
-    <string name="s745">CurseForge Bukkit 分区</string>
     <string name="s746">老牌资源站点，插件总数略少于 SpigotMC Resources</string>
     <string name="s747">全部</string>
     <string name="s748">启用</string>
@@ -794,24 +540,6 @@
     <string name="s771">当前核心尚未安装任何插件，可前往「精选推荐」或「本地上传」安装</string>
     <string name="s772">搜索插件名称...</string>
     <string name="s773">没有符合筛选条件的插件</string>
-    <string name="s774">  ·  已禁用</string>
-    <string name="s775">精选插件推荐</string>
-    <string name="s776">检测中...</string>
-    <string name="s777">检查更新</string>
-    <string name="s778">内置 8 款常用插件，自动从 GitHub Releases 跟随最新版本下载</string>
-    <string name="s779">✓ 本核心支持插件</string>
-    <string name="s780">✗ 本核心不支持插件</string>
-    <string name="s781">✓ 本核心支持模组</string>
-    <string name="s782">✗ 本核心不支持模组</string>
-    <string name="s783">强制重新检测（清空缓存）</string>
-    <string name="s784">有更新</string>
-    <string name="s785">作者：%1$s</string>
-    <string name="s786">最新: </string>
-    <string name="s787">  ·  当前: </string>
-    <string name="s788">下载中，请耐心等待...</string>
-    <string name="s789">更新到最新</string>
-    <string name="s790">已安装（最新）</string>
-    <string name="s791">下载安装</string>
     <string name="s792">本地上传插件</string>
     <string name="s793">支持上传 Bukkit / Spigot / Paper 服务端插件（.jar 格式）</string>
     <string name="s794">上传后会自动复制到当前核心的 plugins/ 目录，需要 reload 或重启服务器后生效</string>
@@ -1028,7 +756,6 @@
     <string name="s1005">修改后需重启服务器生效（-Xmx 为 JVM 启动参数）</string>
     <string name="s1006">最大堆 (MB)</string>
     <string name="s1007">下载源设置</string>
-    <string name="s1008">Termux 运行环境下载源（约 50MB），影响初始化速度</string>
     <string name="s1009">Termux 下载源</string>
     <string name="s1010">APT 软件源</string>
     <string name="s1011">影响 apt 安装依赖（JDK/wget/frp/proot）的下载速度</string>
@@ -1044,11 +771,9 @@
     <string name="s1021">下载帮助</string>
     <string name="s1022">下载慢？查看解决方案</string>
     <string name="s1023">关于</string>
-    <string name="s1024">MC 云控面板 · v1.0.0</string>
     <string name="s1025">基于 Termux 开源组件二次封装，proot-distro 无 root 运行。</string>
     <string name="s1026">意见反馈</string>
     <string name="s1027">遇到问题或有建议？欢迎发送邮件反馈，我们会尽快处理。</string>
-    <string name="s1028">MineServeMobile 意见反馈</string>
     <string name="s1029">发送邮件反馈（167245484@qq.com）</string>
     <string name="s1030">即将删除文件：\n</string>
     <!-- OP 等级选择 -->
@@ -1093,12 +818,6 @@
     <string name="update_notif_text">点击查看更新内容并安装</string>
     <string name="update_check">检查更新</string>
     <string name="update_current_version">当前版本</string>
-    <string name="update_title">发现新版本 v%1$s</string>
-    <string name="update_notes">更新内容</string>
-    <string name="update_download">下载更新</string>
-    <string name="update_github">去 GitHub 更新</string>
-    <string name="update_inapp">应用内更新</string>
-    <string name="update_backup">📦 先备份存档</string>
     <string name="update_backup_done">已备份存档：%1$s</string>
     <string name="update_backup_empty">未找到世界存档，跳过备份</string>
     <string name="backup_ext_perm_title">外部备份权限</string>
@@ -1120,9 +839,6 @@
     <string name="backup_conflict_title">检测到重名服务器</string>
     <string name="backup_conflict_content">目标服务器目录「%1$s」已存在，还原将覆盖它（当前世界与配置会丢失）。确定覆盖吗？</string>
     <string name="backup_conflict_overwrite">覆盖还原</string>
-    <string name="update_later">稍后再说</string>
-    <string name="update_installing">安装中…</string>
-    <string name="update_checking">正在检查更新…</string>
     <string name="update_available">发现新版本 %1$s</string>
     <string name="update_check_failed">检查失败（网络异常）</string>
     <string name="mirror_switch_requested">已请求切换镜像源</string>
@@ -1147,7 +863,6 @@
     <string name="hero_uptime">运行时长</string>
     <string name="hero_cpu">服务端CPU</string>
     <string name="hero_refresh">刷新状态</string>
-    <string name="hero_refreshing">正在刷新…</string>
     <string name="widget_refresh_cd">刷新状态</string>
     <string name="hero_online_mode_warning">正版验证未关闭，离线玩家无法进入</string>
     <string name="s1061">版本</string>
@@ -1173,8 +888,6 @@
 <string name="ui_autostart_title">自启动引导</string>
 <string name="ui_autostart_hint">引导开启系统自启动权限（不同厂商入口不同，按机型自动跳转）</string>
 <string name="ui_autostart_btn">去开启自启动</string>
-<string name="ui_pixel_title">一像素保活</string>
-<string name="ui_pixel_hint">1×1 透明窗口常驻，配合前台服务提升存活率（受系统版本与厂商策略影响，效果尽力而为）</string>
 <string name="cmd_time_day">白天</string>
 <string name="cmd_time_night">夜晚</string>
 <string name="cmd_weather_clear">天气晴</string>
@@ -1194,43 +907,25 @@
     <string name="ui_server_icon">服务器图标</string>
     <string name="ui_server_icon_change">更换图标</string>
     <string name="ui_server_icon_reset">恢复默认</string>
-    <string name="ui_server_icon_hint">玩家在多人游戏列表看到的图标（64×64，重启服务器后生效）</string>
     <string name="ui_server_icon_updated">服务器图标已更新，重启服务器后生效</string>
     <string name="ui_server_icon_reset_done">已恢复默认图标</string>
-    <string name="ui_server_icon_running_warn">⚠️ 更换图标后生效步骤：① 重启服务器 ② 客户端删除该服务器重新添加（或重启游戏 / 重进服务器后退出）</string>
     <string name="ui_server_icon_fail">图标更新失败: %1$s</string>
-    <string name="ui_server_icon_default">默认</string>
     <string name="mc_terminal">MC 终端</string>
     <string name="termux_terminal">Termux 终端</string>
     <string name="termux_hint">输入命令，如 ls、pkg update</string>
-    <string name="termux_busy">执行中…</string>
     <string name="termux_placeholder">输入命令开始使用终端</string>
 
-    <string name="import_server_title">导入服务器</string>
-    <string name="import_server_hint">从手机中选择现成的服务器文件夹或压缩包，导入为新的服务器（支持 zip / tar / tar.gz / tar.xz / tar.bz2 / 7z）</string>
-    <string name="import_server_folder">从文件夹导入</string>
-      <string name="import_server_archive">从压缩包导入</string>
-      <string name="download_import_title">导入服务器</string>
-      <string name="download_import_tip">支持导入服务器文件、压缩包（.zip/.tar.gz）或 JAR 文件</string>
-      <string name="download_import_jar">JAR 文件</string>
-      <string name="download_import_rules">压缩包需包含核心及 plugins/、worlds/ 等必要目录；文件夹需包含完整服务端结构；JAR 将自动创建 plugins/、world(s)、logs/ 和默认配置文件，支持 PowerNukkitX、Nukkit、Paper、Forge 等核心。</string>
-    <string name="import_server_busy">正在导入，请稍候…</string>
-    <string name="import_server_strip_hint">压缩包内若只有一个顶层服务器文件夹会自动剥离，避免多层嵌套；导入后自动识别核心与版本。</string>
     <string name="import_server_done">服务器导入完成：%1$s</string>
     <string name="import_server_core">识别核心：%1$s</string>
     <string name="import_server_core_unknown">未能识别核心类型，可在「下载」页为该服务器下载核心</string>
     <string name="import_server_failed">服务器导入失败：%1$s</string>
 
     <!-- Dashboard 概览 -->
-    <string name="dash_diag_title">运行诊断</string>
     <string name="dash_diag_repairing">正在执行安全修复，完成后会自动复检</string>
     <string name="dash_diag_running">正在检查当前服务端和运行环境</string>
     <string name="dash_diag_not_run">尚未执行诊断</string>
     <string name="dash_diag_pass">当前运行环境检查通过</string>
     <string name="dash_diag_issues">发现 %1$d 项需要注意的问题</string>
-    <string name="dash_diag_detail">查看详情</string>
-    <string name="dash_diag_repairing_btn">修复中</string>
-    <string name="dash_diag_repair_btn">一键安全修复</string>
     <string name="dash_res_title">服务端资源</string>
     <string name="dash_res_mem">进程内存</string>
     <string name="dash_res_not_running">未运行</string>
@@ -1239,19 +934,11 @@
     <string name="dash_res_java_ready">%1$s 已就绪</string>
     <string name="dash_res_java_unavail">%1$s 不可用</string>
     <string name="dash_res_dir_usage">服务端目录占用：%1$s</string>
-    <string name="dash_import_existing">导入已有服务器（文件夹 / 压缩包）</string>
     <string name="dash_bedrock_udp">基岩版 · UDP</string>
     <string name="dash_pnx_java_note">注意：PowerNukkitX 更推荐使用 Java 25；当前 Java 版本可能不兼容，实际要求以核心文档和启动日志为准。</string>
     <string name="dash_java_title">Java 运行环境</string>
-    <string name="dash_java_versions_hint">仅提供 Java 8、Java 17、Java 25</string>
-    <string name="dash_java8_note">注意：Java 8 使用 Ubuntu ARM64 glibc 原生运行库，非 Termux 官方源；需要 Ubuntu 容器。</string>
     <string name="dash_java_installed">已安装</string>
     <string name="dash_java_not_installed">未安装</string>
-    <string name="dash_java_install_btn">安装</string>
-    <string name="dash_java_reinstall">清除并重装 Java</string>
-    <string name="dash_java_all_installed">三个 Java 版本均已安装，卡片已自动置于页面底部</string>
-    <string name="dash_java_reset_pos">恢复默认位置</string>
-    <string name="dash_java_move_bottom">将卡片移至页面底部</string>
     <!-- 更新对话框 -->
     <string name="upd_checking">正在检查更新</string>
     <string name="upd_cancel">取消</string>
@@ -1304,23 +991,6 @@
     <string name="widget_settings_refresh">立即刷新组件</string>
     <string name="widget_settings_refresh_done">已请求刷新所有 MineServe 桌面组件。</string>
     <!-- 备份页 -->
-    <string name="bk_auto_title">自动备份</string>
-    <string name="bk_auto_hint">仅在服务端运行时写入公共备份目录，自动清理仅作用于同服务器、同类型的自动备份。</string>
-    <string name="bk_off">关闭</string>
-    <string name="bk_30min">30分钟</string>
-    <string name="bk_1hour">1小时</string>
-    <string name="bk_3hours">3小时</string>
-    <string name="bk_interval_custom">自定义间隔（分钟）</string>
-    <string name="bk_max_keep">自动保留数量</string>
-    <string name="bk_auto_hint2">间隔范围 5–10080 分钟；保留数量范围 1–100。输入 0 可关闭自动备份。</string>
-    <string name="bk_manual_world">手动世界备份</string>
-    <string name="bk_save_to">保存到 /storage/emulated/0/世界与服务器的备份/</string>
-    <string name="bk_kind_world">世界备份</string>
-    <string name="bk_kind_server">完整服务器</string>
-    <string name="bk_hist">历史</string>
-    <string name="bk_core_prefix"> · 核心: %1$s</string>
-    <string name="bk_dir_prefix">目录: %1$s</string>
-    <string name="bk_unknown_time">未知时间</string>
     <!-- 诊断页 -->
     <string name="diag_back_title">运行诊断</string>
     <string name="diag_eyebrow">SERVER HEALTH</string>
@@ -1341,50 +1011,13 @@
     <string name="diag_crash_collapse">收起</string>
     <string name="diag_crash_clear">清空记录</string>
     <!-- 终端页 -->
-    <string name="term_title">终端</string>
-    <string name="term_settings">终端设置</string>
-    <string name="term_copy_done">已复制当前日志</string>
-    <string name="term_copy_log">复制当前日志</string>
-    <string name="term_new_session">新建会话</string>
-    <string name="term_close">关闭</string>
-    <string name="term_input_mc">输入指令…</string>
-    <string name="term_input_shell">输入命令…</string>
-    <string name="term_send">发送</string>
-    <string name="term_localize_hint">关键日志汉化
-仅改变终端显示，保留原始日志</string>
-    <string name="term_done">完成</string>
-    <string name="term_cmd_sunny">晴天</string>
-    <string name="term_cmd_rain">下雨</string>
-    <string name="term_cmd_day">白天</string>
-    <string name="term_cmd_night">夜晚</string>
-    <string name="term_cmd_difficulty">难度普通</string>
-    <string name="term_cmd_creative">创造模式</string>
-    <string name="term_cmd_kill">杀死实体</string>
-    <string name="term_cmd_list">玩家列表</string>
-    <string name="term_cmd_tps">TPS 卡顿检测</string>
-    <string name="term_cmd_say">公告</string>
-    <string name="term_cmd_save">保存世界</string>
-    <string name="term_cmd_stop">停止服务端</string>
 
-    <string name="import_server_confirm_hint">即将导入为新的服务器，可修改服务器名称</string>
-    <string name="import_server_name_label">服务器名称</string>
-    <string name="import_server_detect_hint">导入完成后将自动识别核心类型与版本</string>
-    <string name="import_server_confirm">开始导入</string>
-    <string name="import_server_cancel">取消</string>
-    <string name="import_server_progress">正在导入 %1$d%%</string>
 
-    <string name="bk_rename_title">重命名备份</string>
-    <string name="bk_rename_label">新文件名（.zip）</string>
     <string name="bk_rename_done">已重命名: %1$s</string>
     <string name="bk_rename_fail">重命名失败（名称冲突或格式不正确）</string>
     <string name="bk_validate_done">校验通过: %1$s</string>
     <string name="bk_validate_fail">校验失败（文件可能已损坏）: %1$s</string>
-    <string name="bk_ok">确定</string>
-    <string name="bk_cancel">取消</string>
-    <string name="bk_validate_btn">校验</string>
-    <string name="bk_rename_btn">重命名</string>
 
-    <string name="term_clear">清空日志</string>
 
     <string name="dl_core_verify">校验修复</string>
 
@@ -1400,8 +1033,7 @@
     <string name="err_java_unsupported">Java 版本不支持：%1$s</string>
     <string name="msg_java_installed">%1$s 安装完成</string>
     <string name="err_java_install_fail">%1$s 安装失败</string>
-    <string name="err_java_running">服务端运行中，请先停止服务端再重装 Java</string>
-    <string name="msg_java_reinstalled">Java 已清除并重装</string>
+    <string name="err_java_running">服务端运行中，请先停止服务端，再改动 Java 运行环境</string>
     <string name="err_java_reinstall_fail">Java 重装失败</string>
     <string name="msg_version_corrected">已将 %1$s Minecraft 版本 %2$s 纠正为 %3$s</string>
     <string name="err_backup_fail">备份失败: %1$s</string>
@@ -1442,6 +1074,7 @@
     <string name="err_apk_corrupt">更新 APK 已损坏或不是有效安装包，请重新下载</string>
     <string name="err_apk_read_pkg">无法读取更新 APK 的包信息，请重新下载</string>
     <string name="err_apk_pkg_mismatch">更新 APK 包名不匹配，已拒绝安装</string>
+    <string name="err_apk_sig_mismatch">更新 APK 签名与本应用不一致，已拒绝安装（下载来源可能被篡改，请重新下载）</string>
     <string name="err_no_installer">未找到系统安装器，请检查设备是否允许安装 APK</string>
     <string name="diag_check_scan">运行诊断</string>
     <string name="diag_check_scan_fail">无法完成诊断</string>
@@ -1454,14 +1087,12 @@
     <string name="diag_check_commands">关键运行命令</string>
     <string name="diag_check_commands_none">当前服务端无需额外运行命令检查</string>
     <string name="diag_check_commands_ready">%1$s 命令已就绪</string>
-    <string name="diag_check_commands_missing">缺少 %1$s 命令</string>
     <string name="diag_check_core">当前服务端</string>
     <string name="diag_check_core_none">未选择已安装的服务端核心</string>
     <string name="diag_check_storage">服务端目录空间</string>
     <string name="diag_check_storage_none">未选择服务端，无法检查</string>
     <string name="diag_check_port">本地端口</string>
     <string name="diag_check_core_dir_bad">服务端目录不存在或不可读写</string>
-    <string name="diag_check_core_jar_missing">server.jar 不存在，需要重新下载核心</string>
     <string name="diag_check_core_entry_missing">入口文件 %1$s 不存在，请检查导入目录</string>
     <string name="diag_check_fonts">字体运行库</string>
     <string name="diag_check_fonts_not_needed">当前核心不需要 installer 字体运行库</string>
@@ -1477,8 +1108,6 @@
     <string name="diag_check_crash_found">检测到 %1$s，请在日志页查看详情</string>
     <string name="diag_check_crash_none">未检测到应用生成的崩溃报告</string>
     <string name="msg_java_warning">%1$s 当前选择 Java %2$s，但日志要求至少 Java %3$s</string>
-    <string name="evt_join">进服</string>
-    <string name="evt_leave">离服</string>
     <string name="msg_java_op_installing">正在安装 %1$s，首次下载可能需要数分钟</string>
     <string name="msg_java_op_reinstall">正在清除并重装已安装的 Java 版本</string>
     <string name="err_parse_latest_url">无法解析最新版本下载地址</string>
@@ -1495,7 +1124,6 @@
     <string name="ver_restored">还原</string>
     
     <string name="msg_repair_fail">运行环境修复失败</string>
-    <string name="diag_check_port_bad">端口异常，请检查端口配置</string>
     <string name="msg_java_install_fail2">Java 安装失败</string>
     <string name="msg_java_reinstall_fail2">Java 重装失败</string>
     <string name="msg_mt_enabled">已启用多线程下载</string>
@@ -1531,8 +1159,6 @@
     <string name="st_mirror_hint">Termux 运行环境下载源（约 50MB），影响初始化速度</string>
     <string name="st_threads_count">%1$d 线程</string>
     <string name="st_feedback_subject">MineServeMobile 意见反馈</string>
-    <string name="net_frp_starry">StarryFrp（星空FRP）</string>
-    <string name="net_frp_sakura">SakuraFrp（樱花映射）</string>
     <string name="crash_title">崩溃报告</string>
     <string name="crash_empty">暂无崩溃报告</string>
     <string name="crash_finding">%1$s: %2$s</string>
@@ -1554,13 +1180,8 @@
     <string name="fmt_hours_min">%1$d 小时 %2$d 分</string>
     <string name="fmt_minutes">%1$d 分</string>
     <string name="fmt_seconds">%1$d 秒</string>
-    <string name="pl_source_hangar">Hangar（Paper 官方）</string>
-    <string name="pl_source_builtbybit">BuiltByBit（原 MC-Market）</string>
-    <string name="pl_source_curseforge">CurseForge Bukkit 分区</string>
     <string name="pl_pnx_mods_hint">PowerNukkitX 可管理 plugins/ 中的 PNX 插件；Java Edition 模组功能暂不适用。</string>
     <string name="pl_disabled_suffix">  ·  已禁用</string>
-    <string name="pl_core_supports">✓ 本核心支持插件</string>
-    <string name="pl_core_unsupported">✗ 本核心不支持插件</string>
     
     <string name="crash_back">返回</string>
 
@@ -1657,20 +1278,7 @@
     <string name="crash_export">导出</string>
     <string name="player_clear_hint">仅清空当前服务器的玩家活动记录，无法恢复。</string>
 
-    <string name="sm_title">服务器管理</string>
-    <string name="sm_active">%1$s · %2$s %3$s</string>
-    <string name="sm_no_core">请先选择服务器核心</string>
     <string name="sm_running">服务器运行中</string>
-    <string name="sm_stopped">服务器未运行</string>
-    <string name="sm_mods">模组与插件</string>
-    <string name="sm_mods_desc">安装、更新和管理服务器插件或模组</string>
-    <string name="sm_config">服务器配置</string>
-    <string name="sm_config_desc">编辑当前核心对应的配置文件</string>
-    <string name="sm_icon">服务器图标</string>
-      <string name="sm_icon_desc">更换 Java Edition 的 server-icon.png</string>
-      <string name="sm_backup">世界与备份</string>
-      <string name="sm_backup_desc">世界管理、备份、恢复与导出</string>
-    <string name="sm_pnx_icon_warn">PowerNukkitX 暂不支持 Java Edition 的服务器图标。</string>
     <string name="si_java_title">Java Edition 服务器图标</string>
     <string name="si_hint">图片会裁剪并缩放为 64x64 PNG，重启服务器后生效。</string>
     <string name="tfe_refresh">刷新</string>
@@ -1679,7 +1287,6 @@
     <string name="mcapp_more">更多</string>
     <string name="sc_minutes">%1$d分钟</string>
     <string name="sc_seconds">%1$d秒</string>
-    <string name="bk_snapshots_title">历史私有快照（%1$d）</string>
     <string name="fm_edit_text">编辑文本</string>
     <string name="ka_bg_hint">Android 系统对后台进程有严格限制，保活能力受系统版本与厂商策略影响。\n</string>
     
@@ -1722,15 +1329,10 @@
     <string name="notif_schedule_start_fail_text">原因：%1$s，请在应用内检查服务器配置。</string>
 
     <!-- 桌面组件 -->
-    <string name="widget_app_desc">Minecraft 服务器状态</string>
     <string name="widget_status_running">服务器运行中</string>
     <string name="widget_status_stopped">服务器已停止</string>
     <string name="widget_status_starting">服务器启动中…</string>
     <string name="widget_status_failed">启动失败</string>
-    <string name="widget_tps_label">TPS</string>
-    <string name="widget_memory_label">内存</string>
-    <string name="widget_uptime_label">运行时长</string>
-    <string name="widget_cpu_label">CPU</string>
     <string name="widget_btn_start">启动</string>
     <string name="widget_btn_stop">停止</string>
     <string name="widget_btn_save">存档保存</string>
@@ -1782,6 +1384,13 @@
     <string name="mcp_client_config_desc">将以下片段加入 MCP 客户端配置（IP 为手机局域网地址，需与手机同一网络）</string>
     <string name="mcp_tools">提供的工具</string>
     <string name="mcp_tools_hint">AI 助手可调用以下工具：</string>
+    <string name="mcp_skill">AI 技能（Skill）</string>
+    <string name="mcp_skill_desc">导出本应用的 AI 操作手册（SKILL.md）：把它交给 AI 客户端，对方就能直接通过 MCP 操作这台手机上的服务器。文件内已写入端点与访问令牌，请只交给可信的客户端。</string>
+    <string name="mcp_skill_export">导出 SKILL.md</string>
+    <string name="mcp_skill_copy">复制内容</string>
+    <string name="mcp_skill_exported">已导出 SKILL.md，可将其交给 AI 客户端</string>
+    <string name="mcp_skill_export_failed">导出失败：%1$s</string>
+    <string name="mcp_skill_open_failed">无法打开所选位置</string>
     <string name="mcp_security_note">安全提示：访问令牌等同服务器控制权，请勿泄露；建议仅在可信局域网内使用，不使用时可在上方关闭服务。</string>
     <string name="msg_scan_registered">检测到 %1$d 个未登记的服务器目录，已自动添加到服务器列表</string>
     <string name="msg_scan_skipped_empty">检测到 %1$d 个空文件夹，已跳过登记。如需清理可在文件管理中删除</string>
@@ -1804,7 +1413,8 @@
     <string name="env_confirm_title">确认卸载</string>
     <string name="env_confirm_ok">卸载</string>
     <string name="env_java_hint">点按版本行可切换管理对象，操作作用于所选版本</string>
-    <string name="env_java_selected">当前选用</string>
+    <string name="env_java_not_installed">未安装</string>
+    <string name="env_java_running_block">服务器运行中，停止后才能改动 Java 运行环境</string>
     <string name="env_java_need">启动服务器需要 %1$s，请先安装</string>
     <string name="env_java_install_btn">安装 Java</string>
     <string name="env_deps_hint">wget / frp / rclone / proot（服务器与穿透所需）</string>
@@ -1878,7 +1488,6 @@
     <string name="env_php_not_installed">未安装</string>
     <string name="env_php_running_block">服务端运行中，请先停止服务端再操作 PHP 运行环境。</string>
     <string name="env_php_uninstall_confirm">将直接删除 home/php-pmmp 目录下的 PHP 运行环境。PocketMine 服务端下次启动会重新下载（约 10MB）。此操作不可撤销。</string>
-    <string name="msg_php_installing">正在下载 PHP 运行环境…</string>
     <string name="msg_php_op_installing">正在安装 PHP 运行环境</string>
     <string name="msg_php_op_deleting">正在卸载 PHP 运行环境</string>
     <string name="msg_php_installed">%1$s 运行环境安装完成</string>
@@ -1888,7 +1497,6 @@
     <string name="err_php_delete_fail">%1$s 运行环境删除失败</string>
 
     <!-- PHP 版本选择（环境与依赖管理顶部入口，与启动控制卡片同源） -->
-    <string name="env_php_version_picker">PHP 版本：%1$s</string>
     <string name="env_php_version_title">选择 PHP 版本</string>
     <string name="env_php_version_desc">PocketMine-MP 对 PHP 版本有硬性要求，目前上游只提供以下构建。</string>
     <string name="php_note_pmmp_required">PocketMine-MP 5 要求的运行时（内置 pmmp/ext-encoding 0.4.x）</string>
@@ -1899,9 +1507,90 @@
     <string name="dash_runtime_php">PHP</string>
     <string name="dash_php_not_installed_note">PHP 运行环境尚未安装，启动 PocketMine 服务端时会自动下载。</string>
 
+    <!-- 启动控制卡片：Java 运行环境来源分组 -->
+    <string name="java_group_termux">Termux JDK</string>
+    <string name="java_group_fcl">Pojav JRE</string>
+    <string name="java_group_termux_note">Termux 环境里的 openjdk，由 apt 安装，直接在 Termux 中运行（Java 8 不在这里，它属于下面的 PRoot 容器）</string>
+    <string name="java_group_fcl_note">PojavLauncher 构建的 Android 原生 JRE，App 内在线下载（约 37–62 MB），自带 IPv6 支持</string>
+    <string name="java_note_proot_java8">仅 Ubuntu 20.04（focal）提供此项；发行版切到 22.04 后它不再可用</string>
+    <string name="java_group_proot">PRoot 容器</string>
+    <string name="java_note_proot_unavailable">该容器不提供</string>
+    <string name="java_group_proot_note">标准 glibc Linux 容器（Ubuntu 20.04 / 22.04），App 内下载 rootfs 后用 apt 安装 JDK；不提供 Root 权限</string>
+    <string name="java_group_selected">已选 %1$s</string>
+    <string name="java_note_proot_container">容器内为 glibc 环境，不支持 IPv6 监听；可安装版本取决于所选发行版</string>
+    <string name="java_vendor_termux">Termux</string>
+    <string name="java_vendor_fcl">Pojav</string>
+    <string name="java_vendor_proot">PRoot</string>
+
     <!-- 运行环境选择弹窗 -->
-    <string name="runtime_picker_title">选择运行环境</string>
-    <string name="runtime_picker_apply">确定</string>
-    <string name="runtime_picker_mismatch">注意：当前核心更适配 %1$s 环境。你的选择会完全生效，启动时不再自动更改。</string>
     <string name="err_runtime_kind_mismatch">核心 %1$s 需要 %2$s 运行环境，请在「运行环境」中切换后重试。</string>
+
+    <!-- 下载页：删除服务器核心二次确认 -->
+    <string name="dl_core_delete_title">删除服务器核心</string>
+    <string name="dl_core_delete_content">确定删除核心「%1$s」吗？将删除该核心目录下的世界存档、插件与配置，且不可恢复。</string>
+    <string name="dl_core_delete_running">服务端运行中，需先停止服务器才能删除核心。</string>
+
+    <!-- 备份页：历史私有快照还原 / 删除二次确认 -->
+    <string name="backup_snapshot_restore_title">还原快照</string>
+    <string name="backup_snapshot_restore_content">确定用快照「%1$s」还原吗？会用旧快照覆盖当前服务器数据，且不可撤销。</string>
+    <string name="backup_snapshot_delete_title">删除快照</string>
+    <string name="backup_snapshot_delete_content">确定删除快照「%1$s」吗？此操作不可撤销。</string>
+
+    <!-- 环境与依赖管理：卸载 / 重装二次确认 -->
+    <string name="env_java_uninstall_confirm">将卸载 %1$s，只影响这一项，其他来源与其他 Java 版本都会保留，存档不受影响。此操作不可撤销。</string>
+    <string name="env_java_reinstall_confirm">将先卸载当前所选这一份 Java，再重新下载安装；其他版本会保留。此操作不可撤销。</string>
+    <string name="env_proot_delete_container_confirm">将删除整个 %1$s 容器（含容器内已安装的全部 Java 版本），回收约 %2$s 磁盘空间。服务端存档不在容器内，不受影响。此操作不可撤销。</string>
+    <string name="msg_proot_container_deleted">%1$s 容器已删除</string>
+    <string name="err_proot_container_delete_fail">%1$s 容器删除失败</string>
+    <string name="env_proot_delete_container_action">删除容器</string>
+
+    <!-- 诊断页：PRoot 容器分层状态 -->
+    <string name="diag_check_proot_container">PRoot 容器（%1$s）</string>
+    <string name="diag_proot_none">未安装任何 PRoot 容器</string>
+    <string name="diag_proot_rootfs_missing">rootfs 未下载或已被删除，进入「依赖与环境管理」安装即可</string>
+    <string name="diag_proot_shell_broken">rootfs 存在但不含可用 shell（解压不完整或文件被破坏），需重新安装该容器</string>
+    <string name="diag_proot_ready_installed">容器可用；已装 Java：%1$s</string>
+    <string name="diag_proot_ready_empty">容器可用，但尚未安装任何 Java 版本</string>
+    <string name="env_deps_reinstall_confirm">将先删除现有的依赖文件，再重新安装。此操作不可撤销。</string>
+    <string name="env_php_delete_action">删除（下次启动自动重装）</string>
+
+    <!-- 区间校验提示 -->
+    <string name="set_max_heap_range_hint">内存上限需在 256–65536 MB 之间，已自动调整。</string>
+    <string name="net_local_port_range_hint">端口需在 1024–65535 之间，已自动调整。</string>
+    <string name="fm_new_dir_invalid_name">名称不能包含斜杠、反斜杠或 .. ，且首尾不能为空白。</string>
+
+    <!-- FTP：匿名访问风险提示 -->
+    <string name="ftp_anonymous_risk">风险提示：匿名用户无需密码即可访问并修改服务器目录，请仅在可信局域网内开启。</string>
+
+    <!-- 插件 / 模组：服务端运行中禁止操作 -->
+    <string name="pl_running_block">服务端运行中，需先停止服务器才能启用/禁用或删除插件与模组。</string>
+
+    <!-- 世界切换：区分「目标实例在运行」与「配置确实写不进去」 -->
+    <string name="world_switch_blocked_running">该服务端正在运行，请先停止服务器再切换世界。</string>
+    <string name="world_switch_failed">切换世界失败：配置文件不可写。</string>
+    <!-- 启动卡片：长条启停按钮 + 底部启动设置抽屉 -->
+    <string name="dash_env_termux_java">Termux Java</string>
+    <string name="dash_env_fcl_java">Pojav JRE</string>
+    <string name="dash_env_proot_java">PRoot Linux 容器</string>
+    <string name="dash_env_php">PHP</string>
+    <string name="dash_env_version_termux_java">Termux Java 版本</string>
+    <string name="dash_env_version_fcl_java">Pojav JRE 版本</string>
+    <string name="dash_env_version_proot_java">容器内 Java 版本</string>
+    <string name="dash_env_version_php">PHP 版本</string>
+    <string name="dash_env_distro_label">Linux 发行版</string>
+    <string name="dash_env_distro_note">决定该容器可安装的 Java 版本与软件源</string>
+    <string name="dash_current_env">当前运行环境</string>
+    <string name="dash_start_settings_subtitle">改动只影响下一次启动，不会打断正在运行的服务端</string>
+    <string name="dash_custom_command_title">使用自定义启动命令</string>
+    <string name="dash_custom_command_note">关闭后由应用自动生成启动命令</string>
+    <string name="dash_custom_command_label">完整启动命令</string>
+    <string name="dash_custom_command_placeholder">java -Xmx1024M -jar server.jar nogui</string>
+    <string name="dash_skip_startup_progress">跳过启动中进度</string>
+    <string name="dash_skip_startup_progress_note">开启后概览页不展示启动阶段进度，直接按运行中显示</string>
+    <string name="dash_force_stop">强制停止</string>
+    <string name="dash_force_stop_confirm_title">强制停止服务端？</string>
+    <string name="dash_force_stop_confirm_msg">强制停止会立刻结束服务端进程，尚未写入磁盘的世界数据可能丢失。建议优先使用「停止」，等它自己正常关停。</string>
+    <string name="dash_force_stop_confirm_ok">确认强制停止</string>
+    <string name="dash_force_stop_done">已强制停止服务端</string>
+    <string name="dash_stop_timeout_hint">服务端仍在关停中，可点「强制停止」立即结束（有丢失未保存数据的风险）</string>
 </resources>

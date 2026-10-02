@@ -193,11 +193,6 @@ object SakuraFrpApi {
         post("/tunnels", token, body.toString())
     }
 
-    /** 删除隧道（ids 为逗号分隔的隧道 ID 字符串，最多 10 条） */
-    fun deleteTunnel(token: String, tunnelId: String) {
-        post("/tunnel/delete", token, """{"ids":"$tunnelId"}""")
-    }
-
     /** 获取隧道配置文件（POST /tunnel/config，响应为 text/plain 或 text/toml，非 JSON）。
      *  query 为启动目标：隧道 ID（如 114514）或 n 前缀节点 ID（如 n233）。 */
     fun tunnelConfig(token: String, query: String): String {

@@ -39,6 +39,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
@@ -79,7 +80,9 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
     val snackbarHostState = remember { SnackbarHostState() }
 
     var portText by remember { mutableStateOf(prefs.getInt(KEY_PORT, DEFAULT_PORT).toString()) }
-    var anonymous by remember { mutableStateOf(prefs.getBoolean(KEY_ANONYMOUS, true)) }
+    // 匿名访问默认关闭：服务端侧匿名用户不校验密码且绑定 0.0.0.0，默认开启风险过高。
+    // 仍从 prefs 读取既有值，老用户已保存的设置不受影响。
+    var anonymous by remember { mutableStateOf(prefs.getBoolean(KEY_ANONYMOUS, false)) }
     var writable by remember { mutableStateOf(prefs.getBoolean(KEY_WRITABLE, true)) }
     var username by remember { mutableStateOf(prefs.getString(KEY_USER, "mc") ?: "mc") }
     var password by remember { mutableStateOf(prefs.getString(KEY_PASSWORD, "") ?: "") }
@@ -128,6 +131,21 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
             FtpServerManager.stop()
             start()
         }
+    }
+
+    // 用户名/密码是否被聚焦过（用于忽略 onFocusChanged 首次进入时的初始 false）
+    var credentialsTouched by remember { mutableStateOf(false) }
+
+    /**
+     * 用户名 / 密码在失焦时才落盘，运行中才重启：
+     * 逐键重启会每敲一个字符重启一次 FTP；只落盘不重启则改了密码后服务仍用旧凭据。
+     */
+    fun commitCredentialsAndRestart() {
+        prefs.edit()
+            .putString(KEY_USER, username)
+            .putString(KEY_PASSWORD, password)
+            .apply()
+        restartIfRunning()
     }
 
     fun stop() {
@@ -224,28 +242,41 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                         prefs.edit().putBoolean(KEY_ANONYMOUS, it).apply()
                         restartIfRunning()
                     }
+                    // 开启匿名后醒目提示风险：无密码即可访问并修改服务器目录
+                    if (anonymous) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            stringResource(R.string.ftp_anonymous_risk),
+                            color = Coral, fontSize = 10.sp, lineHeight = 14.sp
+                        )
+                    }
                     if (!anonymous) {
                         OutlinedTextField(
                             value = username,
-                            onValueChange = {
-                                username = it
-                                prefs.edit().putString(KEY_USER, it).apply()
-                                restartIfRunning()
-                            },
+                            onValueChange = { username = it },
                             label = { Text(stringResource(R.string.ftp_username)) },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { state ->
+                                    // 仅在失焦时落盘并重启，避免逐键重启；忽略首次组合的初始 false
+                                    if (state.isFocused) credentialsTouched = true
+                                    else if (credentialsTouched) commitCredentialsAndRestart()
+                                }
                         )
                         OutlinedTextField(
                             value = password,
-                            onValueChange = {
-                                password = it
-                                prefs.edit().putString(KEY_PASSWORD, it).apply()
-                            },
+                            onValueChange = { password = it },
                             label = { Text(stringResource(R.string.ftp_password)) },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
-                            modifier = Modifier.fillMaxWidth()
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onFocusChanged { state ->
+                                    // 与用户名行为一致：失焦时才落盘并重启，改动密码立即生效
+                                    if (state.isFocused) credentialsTouched = true
+                                    else if (credentialsTouched) commitCredentialsAndRestart()
+                                }
                         )
                         if (running) {
                             Text(stringResource(R.string.ftp_running_lock), color = Muted, fontSize = 10.sp)

@@ -30,18 +30,26 @@ class ConsoleSocketServer(
     private val installer: BootstrapInstaller,
     private val onLog: (String) -> Unit
 ) {
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * 工作作用域。
+     *
+     * **必须每次 [start] 重建**：`stop()` 会 `cancel()` 它，而在一个已取消的
+     * CoroutineScope 上 `launch` 不会执行协程体（也不抛异常、不打日志）。
+     * 旧写法把它声明成 `val`，`stop()` 里 cancel 之后就不再管，
+     * 于是「先 stop 再 start」表现为 running=true、静默无声，但 LocalServerSocket
+     * 永远不 accept，所有客户端连接全部失败。
+     */
+    private var scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var serverJob: Job? = null
     private val clients = ConcurrentLinkedQueue<ClientConn>()
     private val running = AtomicBoolean(false)
-
-    /** 是否有客户端连接（即 MC 进程是否在写入日志） */
-    val isProcessAlive: Boolean get() = clients.any { it.alive }
 
     private var serverSocket: LocalServerSocket? = null
 
     fun start() {
         if (!running.compareAndSet(false, true)) return
+        // 上一次 stop() 已经把 scope cancel 掉了，这里必须换一个新的。
+        scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         serverJob = scope.launch {
             // 使用抽象命名空间 socket（Android LocalServerSocket(String) 的标准方式）
             // APP 与 proot 共享同一 Linux 内核，抽象命名空间 socket 可跨进程访问
@@ -72,16 +80,6 @@ class ConsoleSocketServer(
         clients.forEach { it.close() }
         clients.clear()
         scope.cancel()
-    }
-
-    /** 向所有连接的 MC 控制台 stdin 广播指令 */
-    fun broadcastCommand(line: String) {
-        clients.forEach { c ->
-            runCatching {
-                c.writer?.println(line)
-                c.writer?.flush()
-            }
-        }
     }
 
     private suspend fun handleClient(conn: ClientConn) {
