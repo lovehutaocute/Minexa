@@ -1882,6 +1882,30 @@ class McViewModel(
         repo.termuxRuntime.prootContainerSizeBytes(distro)
 
     /**
+     * 各发行版容器占用空间（字节），**异步**填充。
+     *
+     * 为什么不直接在 Composable 里调 [prootContainerSizeBytes]：
+     * 它内部是 `walkTopDown()` 全量递归 rootfs（数万个文件），属于重量级 IO。
+     * 旧代码在 EnvManagerScreen 里同步调用，且 remember 的 key 含每次刷新
+     * 都会换新实例的 `installed`，于是进页面、切发行版、每次刷新 Java 状态
+     * 都会重新扫一遍整个 rootfs —— 这就是依赖管理页卡顿的主因。
+     *
+     * 现在改为：进页面时在 IO 线程算一次，结果放进 StateFlow 供 UI 读取。
+     */
+    private val _prootContainerSizes = MutableStateFlow<Map<ProotDistro, Long>>(emptyMap())
+    val prootContainerSizes: StateFlow<Map<ProotDistro, Long>> = _prootContainerSizes.asStateFlow()
+
+    /** 刷新所有发行版容器占用（IO 线程，供依赖管理页展示「删除可回收多少空间」）。 */
+    fun refreshProotContainerSizes() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val sizes = ProotDistro.entries.associateWith { distro ->
+                repo.termuxRuntime.prootContainerSizeBytes(distro)
+            }
+            _prootContainerSizes.value = sizes
+        }
+    }
+
+    /**
      * 删除整个 PRoot 容器（连同容器内已装的全部 Java 版本）。
      *
      * 与 [deleteJava] 是**两个不同粒度**的操作，所以入口也分开：

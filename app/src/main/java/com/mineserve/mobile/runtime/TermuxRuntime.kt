@@ -699,7 +699,19 @@ class TermuxRuntime(context: Context) {
         return removed
     }
 
-    /** 容器 rootfs 占用的磁盘字节数（供「删除以回收空间」的提示使用）。 */    fun prootContainerSizeBytes(distro: ProotDistro): Long {
+    /**
+     * 容器 rootfs 占用的磁盘字节数（供「删除以回收空间」的提示使用）。
+     *
+     * ⚠️ 这是**重量级 IO**：`walkTopDown()` 要递归遍历整个 Ubuntu rootfs
+     * （数万个文件），真机上足以造成明显掉帧。因此：
+     * - 绝不能在 Composable 里直接调用（旧代码在 EnvManagerScreen 里这么做了，
+     *   且 remember 的 key 含每次刷新都换新实例的 `installed`，
+     *   结果进页面/切发行版都会重扫 rootfs → 卡顿）；
+     * - 应通过 McViewModel 的异步入口在 IO 线程算完再回传。
+     *
+     * 保留本方法供后台线程与 MCP 工具同步调用。
+     */
+    fun prootContainerSizeBytes(distro: ProotDistro): Long {
         val template = distro.availableJavaVersions.firstOrNull() ?: return 0L
         val rootfs = ProotContainerProfile(distro, template).rootfsDir(installer.rootDir)
         if (!rootfs.isDirectory) return 0L

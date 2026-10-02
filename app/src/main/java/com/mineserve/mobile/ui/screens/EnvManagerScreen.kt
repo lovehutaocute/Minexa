@@ -248,6 +248,8 @@ private fun JavaModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> 
 
     // 进页刷新一次：FCL 来源的 JRE 不依赖 Termux 环境，环境未就绪时也可能已经装好了
     LaunchedEffect(Unit) { vm.refreshJava() }
+    // 容器占用要递归整个 rootfs，单独放后台算，避免阻塞首帧
+    LaunchedEffect(Unit) { vm.refreshProotContainerSizes() }
 
     McCard(title = stringResource(R.string.env_tab_java)) {
         Text(stringResource(R.string.env_java_hint), color = Muted, fontSize = 11.sp)
@@ -310,9 +312,10 @@ private fun JavaModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> 
         // 用户点「卸载 Java 17」就会连带清掉 Java 8/11，属于静默数据丢失。
         if (selected.vendor == JavaVendor.Proot) {
             val distro = config.prootDistro
-            val sizeText = remember(distro, installed) {
-                formatBytes(vm.prootContainerSizeBytes(distro))
-            }
+            // 容器占用是重量级 IO（递归整个 rootfs），必须走 ViewModel 的异步 State，
+            // 绝不能在 Composable 里同步调用 —— 那会让进页面/切发行版时掉帧。
+            val sizes by vm.prootContainerSizes.collectAsState()
+            val sizeText = formatBytes(sizes[distro] ?: 0L)
             val confirmText = stringResource(
                 R.string.env_proot_delete_container_confirm,
                 distro.displayName,
@@ -346,8 +349,12 @@ private fun DependenciesModule(vm: McViewModel, requestConfirm: (String, () -> U
     val serverState by vm.serverState.collectAsState()
     val depsUninstallConfirmText = stringResource(R.string.env_deps_uninstall_confirm)
     val depsReinstallConfirmText = stringResource(R.string.env_deps_reinstall_confirm)
-    val steps = serverState.installSteps.filter { it.step != com.mineserve.mobile.data.InstallStep.Jdk }
-    val anyInstalled = steps.any { it.status == StepStatus.Done }
+    // remember 住：installSteps 每次 serverState 变化都会换新 List 实例，
+    // 不 remember 的话每次重组都要重新 filter + any 遍历一遍。
+    val steps = remember(serverState.installSteps) {
+        serverState.installSteps.filter { it.step != com.mineserve.mobile.data.InstallStep.Jdk }
+    }
+    val anyInstalled = remember(steps) { steps.any { it.status == StepStatus.Done } }
 
     McCard(title = stringResource(R.string.env_tab_deps)) {
         Text(stringResource(R.string.env_deps_hint), color = Muted, fontSize = 11.sp)
