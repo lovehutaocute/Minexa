@@ -933,7 +933,9 @@ class McServerController(
         return resp["versions"]?.jsonArray
             ?.map { it.jsonPrimitive.content }
             ?.filter { !it.contains("rc") && !it.contains("pre") }
-            ?.sortedDescending() ?: DEFAULT_MC_VERSIONS
+            // 必须语义排序：纯字符串 sortedDescending 会把 1.21.4 排在 1.21.10 前面，
+            // 下拉列表顶部因此显示的未必是真正的最新版。
+            ?.sortedWith(mcVersionComparator) ?: DEFAULT_MC_VERSIONS
     }
 
     private fun fetchLeavesVersions(): List<String> = fetchProjectVersions("https://api.leavesmc.org/v2/projects/leaves")
@@ -944,7 +946,8 @@ class McServerController(
         fetchJson(url)["versions"]?.jsonArray
             ?.map { it.jsonPrimitive.content }
             ?.filter { it.isNotBlank() }
-            ?.sortedDescending()
+            // 先语义排序再截断：先 take 会在 API 返回顺序有偏差时丢掉最新的版本。
+            ?.sortedWith(mcVersionComparator)
             ?.take(30)
             ?.takeIf { it.isNotEmpty() }
     }.getOrNull() ?: DEFAULT_MC_VERSIONS
@@ -954,7 +957,7 @@ class McServerController(
         val resp = fetchJson("https://fill.papermc.io/v3/projects/velocity")
         return resp["versions"]?.jsonArray
             ?.map { it.jsonPrimitive.content }
-            ?.sortedDescending() ?: DEFAULT_MC_VERSIONS
+            ?.sortedWith(mcVersionComparator) ?: DEFAULT_MC_VERSIONS
     }
 
     private fun fetchBungeeVersions(): List<String> = listOf("latest")
@@ -1233,7 +1236,8 @@ class McServerController(
             .mapNotNull { it.jsonObject["version"]?.jsonPrimitive?.content }
             .filter { it.isNotBlank() }
         if (versions.isEmpty()) return@runCatching DEFAULT_MC_VERSIONS
-        versions.take(60)
+        // 按语义排序后再截断，保证 60 条里包含的是真正最新的版本。
+        versions.sortedWith(mcVersionComparator).take(60)
     }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MC_VERSIONS
 
     private fun fetchPaperVersions(): List<String> {
@@ -1251,16 +1255,20 @@ class McServerController(
                 }
             }
         }
-        return allVersions.sortedDescending()
+        return allVersions.sortedWith(mcVersionComparator)
     }
 
     private fun fetchVanillaVersions(): List<String> {
         val manifest = fetchJson("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
         val versions = manifest["versions"]?.jsonArray
             ?: return DEFAULT_MC_VERSIONS
+        // manifest 本身按新→旧排列，但过滤掉快照/pre/rc 后必须重新语义排序再截断，
+        // 否则「只取前 30 个」会把 1.21.x 系列里的新版本切掉。
         return versions.map { it.jsonObject["id"]?.jsonPrimitive?.content ?: "" }
             .filter { it.isNotEmpty() && !it.contains("experimental") && !it.contains("pre") && !it.contains("rc") }
-            .take(30)  // 只取前30个正式版
+            .filter { it.count { c -> c == '.' } >= 1 }
+            .sortedWith(mcVersionComparator)
+            .take(60)
     }
 
     /**
@@ -1276,7 +1284,8 @@ class McServerController(
             .mapNotNull { it.jsonObject["version"]?.jsonPrimitive?.content }
             .filter { it.isNotBlank() }
         if (versions.isEmpty()) return@runCatching DEFAULT_MC_VERSIONS
-        versions.take(60)
+        // 按语义排序后再截断，保证 60 条里包含的是真正最新的版本。
+        versions.sortedWith(mcVersionComparator).take(60)
     }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MC_VERSIONS
 
     /**
@@ -2234,10 +2243,22 @@ class McServerController(
             return candidate
         }
 
-        /** 默认 MC 版本列表（当 API 获取失败时回退使用） */
+        /**
+         * 默认 MC 版本列表（当 API 获取失败时回退使用）。
+         *
+         * ⚠️ 这是**网络失败时的兜底**，必须跟上真实版本进度：
+         * 用户报「偶尔最高只显示到 1.21.4」，正是因为旧列表最高只到 1.21.4，
+         * 一旦某个 API 超时/被墙走到这条回退，列表就被截断在 1.21.4。
+         * 新增正式版时同步维护这里。
+         */
         private val DEFAULT_MC_VERSIONS = listOf(
-            "1.21.4", "1.21", "1.20.6", "1.20.4", "1.20.1",
-            "1.19.4", "1.19.2", "1.18.2", "1.17.1", "1.16.5"
+            "1.21.11", "1.21.10", "1.21.9", "1.21.8", "1.21.7", "1.21.6",
+            "1.21.5", "1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21",
+            "1.20.6", "1.20.5", "1.20.4", "1.20.3", "1.20.2", "1.20.1", "1.20",
+            "1.19.4", "1.19.3", "1.19.2", "1.19.1", "1.19",
+            "1.18.2", "1.18.1", "1.18",
+            "1.17.1", "1.17",
+            "1.16.5", "1.16.4", "1.16.3", "1.16.2", "1.16.1", "1.16"
         )
 
         /** 服务端工作目录必须是 ASCII，避免 Forge/Java 25 解析 file URI 时出现 Bad escape。 */
