@@ -334,10 +334,35 @@ class ProotContainerCatalogTest {
     @Test
     fun resolvConfIsPerDistro() {
         // 两个容器抢同一个 resolv.conf 会互相覆盖 DNS 配置
-        val tmp = java.io.File("/tmp")
+        val prefix = java.io.File("/prefix")
         val focal8 = ProotContainerProfile(ProotDistro.Focal, JavaVersion.Java8)
         val jammy17 = ProotContainerProfile(ProotDistro.Jammy, JavaVersion.Java17)
-        assertTrue(focal8.hostResolvConf(tmp) != jammy17.hostResolvConf(tmp))
+        assertTrue(focal8.hostResolvConf(prefix) != jammy17.hostResolvConf(prefix))
+    }
+
+    @Test
+    fun hostResolvConfLivesBesideRootfsNotInTmp() {
+        // 2026-10-02 真机事故：resolv.conf 落在 filesDir/tmp 下，
+        // 那个目录是「缓存」语义（deleteBootstrap(force) 会清、系统也会回收），
+        // 结果 mkdirs() 刚返回 true，紧接着 open 就 ENOENT，点启动直接崩。
+        // 现在与 rootfs 同级（var/lib/mineserve/），生命周期一致。
+        val prefix = java.io.File("/prefix")
+        val jammy = ProotContainerProfile(ProotDistro.Jammy, JavaVersion.Java17)
+        val resolv = jammy.hostResolvConf(prefix)
+
+        assertEquals(
+            "/prefix/var/lib/mineserve/jammy-rootfs-resolv.conf",
+            resolv.invariantSeparatorsPath
+        )
+        assertTrue(
+            "resolv.conf 不能落在临时目录下（会被当缓存回收）",
+            !resolv.invariantSeparatorsPath.contains("/tmp/")
+        )
+        assertEquals(
+            "必须与 rootfs 同级",
+            jammy.rootfsDir(prefix).parentFile.invariantSeparatorsPath,
+            resolv.parentFile.invariantSeparatorsPath
+        )
     }
 
     // ── 构造函数守卫 ────────────────────────────────────────────

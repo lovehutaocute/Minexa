@@ -109,8 +109,19 @@ data class ProotContainerProfile(
      * 本发行版的 resolv.conf 宿主文件。
      *
      * 按发行版分开，避免两个容器抢同一个文件。
+     *
+     * ⚠️ **不能落在 `filesDir/tmp` 下**：那个目录是"缓存"语义，
+     * `BootstrapInstaller.deleteBootstrap(force = true)` 会清它，
+     * 系统在存储紧张时也会回收应用私有目录下的 tmp。
+     * 实测（2026-10-02 真机）：`mkdirs()` 刚返回 true，紧接着
+     * `FileOutputStream` 就在 open 阶段抛 ENOENT —— 因为这中间目录又被回收了，
+     * 而这一步在「用户点启动」的路径上，会让整个启动失败。
+     *
+     * 改放到 rootfs **同级**（`var/lib/mineserve/`）：它由容器安装流程
+     * 主动创建，生命周期与 rootfs 一致，本就要 bind 进容器，不该是缓存。
      */
-    fun hostResolvConf(tmpDir: File): File = File(tmpDir, "${distro.dirName}-resolv.conf")
+    fun hostResolvConf(prefix: File): File =
+        File(prefix, "var/lib/mineserve/${distro.dirName}-resolv.conf")
 
     companion object {
         /** 首期所有可用的「发行版 × Java 版本」组合（已过滤掉装不上的）。 */

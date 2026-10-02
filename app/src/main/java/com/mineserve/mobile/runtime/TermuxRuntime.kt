@@ -694,6 +694,8 @@ class TermuxRuntime(context: Context) {
         profile.readyMarker(installer.rootDir).delete()
         // PRoot glue 文件（PROOT_TMP_DIR）也一并回收
         profile.prootTmpDir(installer.rootDir).deleteRecursively()
+        // 该发行版的宿主 resolv.conf 与 rootfs 同生共死，否则会留下残骸
+        profile.hostResolvConf(installer.rootDir).delete()
         return removed
     }
 
@@ -1588,7 +1590,11 @@ class TermuxRuntime(context: Context) {
         } else {
             val rootfs = containerRootfs(profile)
             val shm = File(rootfs, "tmp").apply { mkdirs() }
-            val resolver = prepareUbuntuDns(rootfs, profile.hostResolvConf(installer.tmpDir))
+            val resolver = prepareUbuntuDns(
+                rootfs,
+                profile.hostResolvConf(installer.rootDir),
+                "${profile.distro.dirName}-resolv.conf"
+            )
             val args = mutableListOf(
                 "proot",
                 "--kill-on-exit",
@@ -1622,57 +1628,77 @@ class TermuxRuntime(context: Context) {
         }
 
     /** Give the isolated rootfs Android's active DNS servers. */
-    private fun prepareUbuntuDns(rootfs: File, hostResolv: File? = null): File {
+    private fun prepareUbuntuDns(
+        rootfs: File,
+        hostResolv: File? = null,
+        fileName: String = "resolv.conf"
+    ): File {
         val addresses = (1..4).mapNotNull { index ->
             readAndroidDns("net.dns$index").takeIf { it.isNotBlank() && it.none(Char::isWhitespace) }
         }.distinct()
         val nameservers = if (addresses.isNotEmpty()) addresses else listOf("223.5.5.5", "119.29.29.29")
         val content = nameservers.joinToString(separator = "\n", postfix = "\n") { "nameserver $it" }
-        val resolver = hostResolv ?: File(installer.tmpDir, "java8-resolv.conf")
-        writeResolverFile(resolver, content)
+        val resolver = writeResolverFile(resolverCandidates(hostResolv, fileName), content)
 
         // Ubuntu Base ships /etc/resolv.conf as a systemd-resolved symlink.
         // The target does not exist in this PRoot container, so replace it with
         // a regular file before binding the same resolver for every invocation.
         val guestResolver = File(rootfs, "etc/resolv.conf")
         guestResolver.delete()
-        writeResolverFile(guestResolver, content)
+        writeResolverFile(listOf(guestResolver), content)
         return resolver
     }
 
     /**
-     * 写一个 resolv.conf 宿主文件，**写完必须复验**。
+     * 写 resolv.conf，返回**真正写成功**的文件。
      *
-     * 这里不能只靠 `writeText` 的返回值：Android 在应用私有目录被清理、
-     * 或磁盘写满时，会在 `FileOutputStream.open()` 阶段抛
-     * `FileNotFoundException: ... ENOENT`（错误现场是 `/data/user/0/.../files/tmp/<distro>-resolv.conf`），
-     * 而这一步位于「用户点启动」的路径上 —— 一旦抛出，整个启动直接失败，
-     * 只会看到一句 `ENOENT`，完全看不出是「临时目录没了」还是「DNS 写不进去」。
+     * 为什么不能只写一个固定路径就完事（2026-10-02 真机复现）：
+     * 这一步在「用户点启动」的路径上，而在应用私有目录里创建文件并不能保证
+     * 后续 open 一定成功 —— `mkdirs()` 刚返回 true，紧接着 `FileOutputStream`
+     * 就在 open 阶段抛 `ENOENT`（目录在这两步之间被系统回收 / 存储受限）。
+     * 单一落点一旦写不进去，用户看到的就是「点启动就崩」，且无路可走。
      *
-     * 目录先 `mkdirs()`，写失败再补建目录重试一次；两次都不成就明确报错，
-     * 把路径带进消息里，便于用户按提示自查（这也是旧版 `java8-resolv.conf`
-     * 时代就依赖的语义，泛化成按发行版命名后不能丢）。
+     * 因此：**依次尝试多个候选落点，谁先写成就用谁**。候选按可靠性排序
+     * （容器目录 > files 根 > cache），任何一个可用即可启动，不必因
+     * 某个目录被回收而失败。全部失败时才报错，并把每个落点的失败原因
+     * 一并列出 —— 这样真出了问题时，日志本身就能定位是哪种存储故障。
      */
-    private fun writeResolverFile(target: File, content: String) {
-        var lastError: Throwable? = null
-        repeat(2) { attempt ->
-            lastError = runCatching {
+    private fun writeResolverFile(candidates: List<File>, content: String): File {
+        val failures = mutableListOf<String>()
+        candidates.forEach { target ->
+            val error = runCatching {
                 target.parentFile?.mkdirs()
                 FileOutputStream(target).use { it.write(content.toByteArray(Charsets.UTF_8)) }
             }.exceptionOrNull()
-            if (target.isFile && target.length() > 0) return
-            if (attempt == 0) {
-                emitLog(
-                    "[proot] resolv.conf 写入失败，重建目录后重试：${target.absolutePath}" +
-                        (lastError?.let { "（${it.message}）" } ?: "")
-                )
+            if (target.isFile && target.length() > 0) {
+                if (failures.isNotEmpty()) {
+                    emitLog("[proot] resolv.conf 改用备用落点：${target.absolutePath}")
+                }
+                return target
             }
+            failures += "${target.absolutePath} -> ${error?.message ?: "写入后文件为空"}"
         }
         throw RuntimeException(
-            "无法写入 DNS 配置 ${target.absolutePath}（目录不可写或存储空间不足），" +
-                "请确认应用存储可用后重试",
-            lastError
+            "无法写入 DNS 配置，已尝试 ${candidates.size} 个落点均失败：" +
+                failures.joinToString("；") +
+                "。请确认设备存储空间充足后重试"
         )
+    }
+
+    /**
+     * 宿主 resolv.conf 的候选落点，按可靠性从高到低。
+     *
+     * [preferred] 是容器目录（`var/lib/mineserve/`，与 rootfs 同级，
+     * 生命周期一致）；后两个是私有目录下的兜底，用于容器目录意外不可写时
+     * 仍能启动（PRoot 只要求这个文件**存在且可读**，位置不重要）。
+     */
+    private fun resolverCandidates(preferred: File?, fileName: String): List<File> {
+        val filesDir = appContext.filesDir
+        return listOfNotNull(
+            preferred,
+            File(filesDir, "mineserve-runtime/$fileName"),
+            File(appContext.cacheDir, fileName)
+        ).distinctBy { it.absolutePath }
     }
 
     private fun readAndroidDns(property: String): String = runCatching {
@@ -3308,7 +3334,11 @@ class TermuxRuntime(context: Context) {
             setWritable(true, false)
             setExecutable(true, false)
         }
-        val resolver = prepareUbuntuDns(rootfs, profile.hostResolvConf(installer.tmpDir))
+        val resolver = prepareUbuntuDns(
+            rootfs,
+            profile.hostResolvConf(installer.rootDir),
+            "${profile.distro.dirName}-resolv.conf"
+        )
         val proot = listOf(
             File(installer.rootDir, "bin/proot"),
             File(installer.rootDir, "usr/bin/proot")
