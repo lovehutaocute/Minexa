@@ -23,8 +23,9 @@ class MeFrpBackend(
     /**
      * 最近一次拉到的成品配置文本。
      *
-     * [prepareConfig]（IO 线程）写、[onProcessState]（引擎输出线程）读，跨线程访问，
-     * 必须 @Volatile 才有可见性。
+     * [prepareConfig] 由 [com.mineserve.mobile.server.tunnel.FrpcBackend.start] 在
+     * `withContext(Dispatchers.IO)` 内调用（IO 线程）；[onProcessState] 由引擎输出
+     * 线程读取。跨线程访问，必须 @Volatile 才有可见性。
      */
     @Volatile
     private var lastConfigText: String = ""

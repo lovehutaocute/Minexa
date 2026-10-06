@@ -27,8 +27,8 @@ android {
         applicationId = "com.mineserve.mobile"
         minSdk = 26
         targetSdk = 28
-        versionCode = 54
-        versionName = "1.2.8"
+        versionCode = 55
+        versionName = "1.2.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -115,6 +115,12 @@ android {
         abortOnError = false
         disable += "ExpiredTargetSdkVersion"
     }
+    testOptions {
+        unitTests {
+            // Robolectric 需要真实的资源与 manifest（它要构造一个可用的 Context）。
+            isIncludeAndroidResources = true
+        }
+    }
 }
 
 dependencies {
@@ -142,6 +148,11 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)
+    // Robolectric：让纯 JVM 单测能拿到真实的 android.content.Context，
+    // 从而直接实例化 FrpcBackend / FrpcRuntime 这类依赖 Android 的类型。
+    // 用于验证「隧道启动是否把网络请求切出主线程」—— 见 FrpcBackendStartThreadTest。
+    testImplementation(libs.robolectric)
+    testImplementation(libs.kotlinx.coroutines.test)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

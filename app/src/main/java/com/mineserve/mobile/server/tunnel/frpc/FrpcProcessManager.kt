@@ -206,6 +206,11 @@ class FrpcProcessManager private constructor(private val appContext: Context) {
         // 本次启动的所有者：进程状态只投递给它的回调。
         // 不在这里认领的话，共用本管理器的三个 frp 后端里会有一个（初始化时最后
         // attach 的那个）永久劫持状态回调，发起启动的后端反而收不到任何通知。
+        //
+        // 注意 owner 必须是后端的实例本身。FrpcBackend.start() 里要在
+        // withContext(Dispatchers.IO) **块外**捕获后端再传进来 —— 块内的 `this`
+        // 是协程作用域（DispatchedCoroutine），拿它当 owner 会让 stateSinks 查不到，
+        // 状态全被丢弃、界面永远停在「启动中」。
         if (owner != null) stateOwner = owner
 
         if (!configFile.isFile) {

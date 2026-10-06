@@ -93,8 +93,25 @@ class TunnelManager(
         activeBackend = backend
         _state.value = backend.state.value
         val result = backend.start(config)
+
+        // start() 返回后必须**同步**把后端的最新状态搬过来。
+        //
+        // init 里虽然为每个后端起了收集协程，但那是 `scope.launch` 异步启动的，
+        // 且以 `backend == activeBackend` 为条件 —— 判定发生在 activeBackend 赋值
+        // 之前的那一轮。后端在 start() 内部同步推进的状态（Starting → Failed /
+        // Running）可能赶在收集协程就绪之前就过去了，于是 _state 永远停在
+        // 上面第 94 行读到的那个 Starting，界面就一直显示「启动中」。
+        //
+        // 真机表现：引擎日志已经 `login to server success` → `start proxy success`，
+        // 隧道实际已通，界面却卡在「启动中」；失败时也同样是停在「启动中」，
+        // 连错误都看不到。这里直接拉取，把状态更新与 start() 的返回对齐。
+        _state.value = backend.state.value
+
         result.onFailure { e ->
-            logSink("[tunnel] ${config.tunnelType.displayName} 启动失败: ${e.message}")
+            // 与 FrpcBackend.onFailure 同样的回退：message 为 null 的异常
+            // （如 NetworkOnMainThreadException）不能只打印 "null"，否则无法定位。
+            val reason = e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName
+            logSink("[tunnel] ${config.tunnelType.displayName} 启动失败: $reason")
         }
     }
 

@@ -1,5 +1,35 @@
 # 更新日志
 
+## 1.2.9
+
+### 修复：隧道启动卡在「启动中」——状态认领错给了协程对象
+
+- **问题**：点「启动隧道」后隧道实际已经跑通（引擎日志 `login to server success` → `proxy added` → `start proxy success`，节点也能连上），但界面始终显示「启动中」，日志里反复出现「进程状态变更(Starting/Running)，但没有后端认领本进程，界面不会更新」。
+- **原因**：`FrpcBackend.start()` 把 `processManager.start(..., owner = this)` 写在了 `withContext(Dispatchers.IO) { ... }` 的 lambda **内部**。该 lambda 里的 `this` 是协程的 `CoroutineScope`（运行时为 `DispatchedCoroutine`），**不是** `FrpcBackend`。于是进程管理器的 `stateOwner` 指向一个从未 `attach` 过的对象，`stateSinks[stateOwner]` 查不到，引擎推送的所有状态被静默丢弃。
+- **现在的行为**：在 `withContext` **块外**先用 `val self = this` 捕获后端自身，再把 `self` 作为 owner 传入。认领恢复正确，`Running` 能正常推到界面。
+- **为什么之前没被测出来**：缺少引擎文件时 `processManager.start()` 会提前抛异常，已有的线程归属测试根本走不到传 owner 那一行。新增 `FrpcBackendOwnerIdentityTest` 专门断言 `start()` 之后 `stateOwner` 必须是后端自身、不得是协程对象。
+
+### 修复：隧道启动路径的主线程网络请求
+
+- **问题**：点「启动隧道」直接失败，日志只有一句「启动失败：null」，无从定位。
+- **原因**：`FrpcBackend.start()` 会调用 `prepareConfig()`，而 SakuraFrp / ME Frp 两家的 `prepareConfig` 里是**同步** HTTP 请求（内部为阻塞的 `HttpURLConnection`）。调用方 `McViewModel.startTunnel()` 用的是 `viewModelScope.launch`（默认 `Dispatchers.Main`），启动路径却漏了 `withContext(Dispatchers.IO)` —— 网络请求因此落在主线程，被 Android 拦下抛 `NetworkOnMainThreadException`。该异常在 AOSP 里没有 message，所以日志只剩「启动失败：null」。同一界面里「拉取隧道列表」的调用点是切了 IO 的，唯独启动路径漏了。
+- **现在的行为**：`FrpcBackend.start()` 整体包进 `withContext(Dispatchers.IO)`，三个 frp 系后端（自建 Frp / SakuraFrp / ME Frp）共用同一份保证。
+- 顺带修正失败信息的可读性：异常 message 为空时回退到**异常类名**，不再产出「null」这种无法定位的日志。`TunnelManager` 与 `FrpcBackend` 两处失败路径一并处理。
+
+### 修复：隧道启动失败后界面仍停在「启动中」
+
+- **问题**：启动失败时 `TunnelManager` 对外暴露的状态仍是 `Starting`，界面既不显示错误也不结束等待。
+- **原因**：`TunnelManager.start()` 只在调用后端之前读了一次状态；后端在 `start()` 内部把状态推进到 `Failed` 后，没有同步回 `_state`。`init` 里的状态收集协程是 `scope.launch` 异步启动的，时机上可能错过这次变化。
+- **现在的行为**：`start()` 返回后**同步**拉取后端最新状态写入 `_state`，状态更新与 `start()` 返回对齐。
+
+### 测试
+
+- 新增 `FrpcBackendStartThreadTest`：用名为 `main` 的单线程执行器模拟主线程，断言 `prepareConfig` 不在其上执行。已通过反向验证（移除 `withContext` 后该测试确实失败）。
+- 新增 `FrpcBackendOwnerIdentityTest`：断言 `start()` 之后 `stateOwner` 是后端自身。已通过反向验证（把 `owner = this` 放回块内后，报错为「实际=DispatchedCoroutine」，与真机日志一致）。
+- 新增 `TunnelManagerStatePropagationTest`：断言启动失败后状态不得停留在 `Starting`。
+- 新增 `TunnelFailureMessageTest`、`FrpcProcessManagerOwnerTest`。
+- 引入 Robolectric 与 kotlinx-coroutines-test 作为测试依赖，使这类依赖 `Context` 的调度/线程问题可在纯 JVM 单测中验证，无需真机与账号。
+
 ## 1.2.8
 
 ### 修复：隧道排障日志——配置原文回显与 frpc 版本自报

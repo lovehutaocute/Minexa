@@ -6,9 +6,11 @@ import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.server.tunnel.frpc.FrpcProcessManager
 import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntime
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withContext
 import java.io.File
 
 /**
@@ -84,25 +86,52 @@ abstract class FrpcBackend(
     private var stoppingIntentionally = false
 
     final override suspend fun start(config: McConfig): Result<Unit> = runCatching {
-        updateState(TunnelStatus.Starting, errorMessage = "正在准备 ${type.displayName}...")
+        // withContext(Dispatchers.IO) 是必需的，不能省。
+        //
+        // prepareConfig() 在 SakuraFrp / MeFrp 两条链上都会**同步**发 HTTP 请求
+        // （SakuraFrpApi.tunnelConfig / MeFrpApi.proxyConfig，内部是阻塞的
+        // HttpURLConnection）。调用方 McViewModel.startTunnel() 用的是
+        // viewModelScope.launch（默认 Dispatchers.Main），一旦这里不切线程，
+        // 网络请求就跑在主线程上，被 Android 拦下抛 NetworkOnMainThreadException。
+        //
+        // 该异常在 AOSP 里没有 message，于是日志只剩「启动失败：null」，
+        // 用户完全看不出原因。同一个界面里「拉取隧道列表」的调用点
+        // （NetworkScreen）都显式包了 withContext(Dispatchers.IO)，唯独启动路径漏了。
+        //
+        // 放在这里而不是各子类的 prepareConfig 里，是为了让三个 frp 系后端
+        // （自建 Frp / SakuraFrp / MeFrp）共用同一份保证，避免再漏一个。
+        // 把后端自身捕获在 lambda 之外。
+        //
+        // 不能直接写 `owner = this`：这里的 `this` 在 withContext 的 lambda 内已经
+        // 变成协程的 CoroutineScope（运行时是 DispatchedCoroutine），不再是 FrpcBackend。
+        // 那样 processManager 会把状态投递给一个从未 attach 过的对象，
+        // dispatchState 查 stateSinks 查不到，日志报「没有后端认领本进程」，
+        // 界面永远停在「启动中」—— 而隧道其实已经跑通。
+        val self = this
+        withContext(Dispatchers.IO) {
+            updateState(TunnelStatus.Starting, errorMessage = "正在准备 ${type.displayName}...")
 
-        if (!runtime.isInstalled()) {
-            throw IllegalStateException(
-                "frpc 引擎未安装。请在「依赖管理 → 内网穿透引擎」导入 libfrpc.so（arm64 版）后重试。"
-            )
+            if (!runtime.isInstalled()) {
+                throw IllegalStateException(
+                    "frpc 引擎未安装。请在「依赖管理 → 内网穿透引擎」导入 libfrpc.so（arm64 版）后重试。"
+                )
+            }
+
+            processManager.clearLog()
+            stoppingIntentionally = false
+
+            val configFile = prepareConfig(config)
+            log("配置已写入 ${configFile.name}")
+
+            processManager.start(configFile, runtime, extraEnv(config), owner = self)
+            onProcessStarted(config)
         }
-
-        processManager.clearLog()
-        stoppingIntentionally = false
-
-        val configFile = prepareConfig(config)
-        log("配置已写入 ${configFile.name}")
-
-        processManager.start(configFile, runtime, extraEnv(config), owner = this)
-        onProcessStarted(config)
     }.onFailure { e ->
-        log("启动失败：${e.message}")
-        updateState(TunnelStatus.Failed, errorMessage = e.message ?: "未知错误")
+        // 回退到类名而不是 "null"：NetworkOnMainThreadException 这类异常在 AOSP 里
+        // message 就是 null，只打印 message 会让日志变成「启动失败：null」，无法定位。
+        val reason = e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName
+        log("启动失败：$reason")
+        updateState(TunnelStatus.Failed, errorMessage = reason)
     }
 
     final override suspend fun stop() {
