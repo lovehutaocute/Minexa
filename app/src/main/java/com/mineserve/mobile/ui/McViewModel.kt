@@ -32,6 +32,8 @@ import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.data.FrpProfile
+import com.mineserve.mobile.data.FrpProfileKind
+import com.mineserve.mobile.data.FrpLocalTarget
 import com.mineserve.mobile.data.FrpProfiles
 import com.mineserve.mobile.data.DiagnosticCheck
 import com.mineserve.mobile.data.DiagnosticReport
@@ -1337,7 +1339,9 @@ class McViewModel(
         val ip = _lanIp.value
         // 端口取真源（服务端配置文件里的 server-port），不读 config.localPort ——
         // 后者在配置文件被外部改动时可能停在旧值。
-        val port = serverPort.value
+        // 用 [realServerPort] 而不是 [serverPort] 这个 StateFlow：复制出去的是要发给别人的
+        // 地址，不能受订阅状态影响而拿到缓存里的旧端口。
+        val port = realServerPort()
         val address = if (ip == "--") {
             _errorFlow.tryEmit(str(R.string.s187))
             return
@@ -2426,8 +2430,26 @@ class McViewModel(
         }
         viewModelScope.launch {
             try {
+                // 先把端口真源读回来：用户可能刚在配置文件里改了端口，
+                // 不重读的话下面拿到的还是上一次的值（隧道会打到旧端口）。
+                refreshServerPropertiesNow()
+                val realPort = realServerPort()
+
                 // 投影：把选中的配置摊进后端认识的老字段，后端一行都不用改。
-                tunnelManager.startFrp(FrpProfiles.applyTo(profile, cfg))
+                var runtime = FrpProfiles.applyTo(profile, cfg)
+                if (profile.kind == FrpProfileKind.CustomToml) {
+                    // 自建 frp 的转发端口写在用户粘的那份文本里，多半还停在改端口之前的旧值。
+                    // 这里对齐**运行期副本**（保存的原文不动），否则隧道通了玩家也进不来。
+                    val aligned = FrpLocalTarget.align(runtime.frpConfigText, realPort)
+                    if (aligned.changed > 0) {
+                        runtime = runtime.copy(frpConfigText = aligned.text)
+                        tunnelManager.note(
+                            "配置里的转发端口 ${aligned.from} 不是游戏真实端口 $realPort，" +
+                                "本次已按 $realPort 启动（你的配置原文没有被改）"
+                        )
+                    }
+                }
+                tunnelManager.startFrp(runtime)
                 reportStart(frpState.value)
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s206, e.message))
@@ -2461,11 +2483,16 @@ class McViewModel(
                 // 这里显式覆盖成真源 serverPort。否则配置文件被外部改动后，
                 // STUN 会把玩家流量转到服务端并未监听的旧端口。
                 //
+                // 真源必须在取用**之前**读回来，而且要现算（[realServerPort]）：
+                // 用户刚改完端口就来开穿透时，读与不读就是「能进」和「connection refused」的区别。
+                //
                 // tunnelType 也一并写成 Stun：界面上已经没有「穿透方式」单选了，
                 // 不写的话它会停在默认的 Frp，配置本身自相矛盾（虽然
                 // TunnelManager 现在按通道取后端、不再依赖这个字段）。
+                refreshServerPropertiesNow()
+                val targetPort = realServerPort()
                 tunnelManager.startStun(
-                    config.value.copy(localPort = serverPort.value, tunnelType = TunnelType.Stun)
+                    config.value.copy(localPort = targetPort, tunnelType = TunnelType.Stun)
                 )
                 reportStart(stunState.value)
             } catch (e: Exception) {
@@ -3720,6 +3747,19 @@ class McViewModel(
         .firstOrNull { it.name == config.value.activeCoreName }?.core
 
     /**
+     * **此刻**服务端真正在监听的端口。
+     *
+     * 与 [serverPort] 的区别：那个是 `WhileSubscribed(5s)` 的 StateFlow，没有订阅者时
+     * `.value` 会退化成初始值，拿去启动穿透就会打到错误的端口上。启动链路上的调用方
+     * 一律用这个函数 —— 它每次现算，不经过任何缓存。
+     */
+    private fun realServerPort(): Int = ServerPort.resolve(
+        _serverProperties.value["server-port"],
+        activeCoreType() ?: config.value.selectedCore,
+        config.value.localPort
+    )
+
+    /**
      * 配置文件当前是否已生成（服务端首次启动后才会由服务端写出）。
      *
      * null 表示尚未检测完成，UI 应展示加载态而非误判为"未生成"。
@@ -3727,35 +3767,50 @@ class McViewModel(
     private val _serverPropertiesExist = MutableStateFlow<Boolean?>(null)
     val serverPropertiesExist: StateFlow<Boolean?> = _serverPropertiesExist.asStateFlow()
 
-    /** 加载 server.properties，并同步更新配置文件是否已生成的状态 */
+    /**
+     * 加载 server.properties，并同步更新配置文件是否已生成的状态。
+     *
+     * 「发出去就不管」；需要**读完再取端口**的调用方用 [refreshServerPropertiesNow]。
+     */
     fun loadServerProperties() {
+        viewModelScope.launch { refreshServerPropertiesNow() }
+    }
+
+    /**
+     * 重新读一遍服务端配置文件，并**等它读完**。
+     *
+     * 为什么必须能「等」：端口真源历史上只在进入「服务器配置」页时才被读一次。
+     * 用户在配置文件里把端口从 25565 改成别的，然后直接去开穿透 —— 隧道拿到的还是
+     * 上一次的值，于是把玩家送到 25565，一个没人监听的端口。界面上隧道「已就绪」，
+     * 日志里只有一句 `connect: connection refused`，从字面完全看不出是端口对不上。
+     * 启动前先把真源读回来，这条坑就不存在了。
+     */
+    private suspend fun refreshServerPropertiesNow() {
         if (!isBootstrapped.value) return
         val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val pnx = isPowerNukkitXActive()
-                // PNX 的真实配置是 pnx.yml，Java 系是 server.properties，两者要分别判定，
-                // 否则 PNX 下永远看 server.properties 的存在性，导致 pnx.yml 还没生成就放行表单。
-                val exists = withContext(Dispatchers.IO) {
-                    if (pnx) powerNukkitXConfigManager.exists(dirName)
-                    else propertiesManager.exists(dirName)
-                }
-                _serverPropertiesExist.value = exists
-                val loaded = withContext(Dispatchers.IO) {
-                    if (pnx) powerNukkitXConfigManager.read(dirName)
-                    else propertiesManager.readProperties(dirName)
-                }
-                _serverProperties.value = loaded
-                // 端口真源镜像：配置文件已生成且含合法端口时，把它同步回 [McConfig.localPort]。
-                // 「服务器配置」页是端口唯一编辑入口（网络页的输入框已在 1.2.8 移除），
-                // 不同步的话地址栏会一直停在旧值 —— 这正是「配置 25562、显示 19132」的成因。
-                // 只在 exists 为真时同步：文件不存在时 loaded 是空 Map，会把 localPort 误覆盖成默认值。
-                if (exists) ServerPort.parse(loaded["server-port"])?.let { port ->
-                    if (config.value.localPort != port) updateConfig { it.copy(localPort = port) }
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s261, e.message))
+        try {
+            val pnx = isPowerNukkitXActive()
+            // PNX 的真实配置是 pnx.yml，Java 系是 server.properties，两者要分别判定，
+            // 否则 PNX 下永远看 server.properties 的存在性，导致 pnx.yml 还没生成就放行表单。
+            val exists = withContext(Dispatchers.IO) {
+                if (pnx) powerNukkitXConfigManager.exists(dirName)
+                else propertiesManager.exists(dirName)
             }
+            _serverPropertiesExist.value = exists
+            val loaded = withContext(Dispatchers.IO) {
+                if (pnx) powerNukkitXConfigManager.read(dirName)
+                else propertiesManager.readProperties(dirName)
+            }
+            _serverProperties.value = loaded
+            // 端口真源镜像：配置文件已生成且含合法端口时，把它同步回 [McConfig.localPort]。
+            // 「服务器配置」页是端口唯一编辑入口（网络页的输入框已在 1.2.8 移除），
+            // 不同步的话地址栏会一直停在旧值 —— 这正是「配置 25562、显示 19132」的成因。
+            // 只在 exists 为真时同步：文件不存在时 loaded 是空 Map，会把 localPort 误覆盖成默认值。
+            if (exists) ServerPort.parse(loaded["server-port"])?.let { port ->
+                if (config.value.localPort != port) updateConfig { it.copy(localPort = port) }
+            }
+        } catch (e: Exception) {
+            _errorFlow.tryEmit(str(R.string.s261, e.message))
         }
     }
 
@@ -4994,6 +5049,15 @@ class McViewModel(
                     repo.termuxRuntime.selectedProotVendor = vendor
                     repo.termuxRuntime.selectedProotDistro = distro
                 }
+        }
+        // 起动完成后先把端口真源读一次。
+        //
+        // 历史上这份真源只在进入「服务器配置」页时才被读 —— 于是用户在配置文件里
+        // 把端口改掉之后，只要没再进过那个页面，地址栏、复制出来的地址、以及 STUN 的
+        // 转发目标就全部停在旧端口上（默认 25565）。用户看到的「本地地址没跟着变」
+        // 就是这个时间差。
+        viewModelScope.launch {
+            app.isBootstrapped.collect { ready -> if (ready) refreshServerPropertiesNow() }
         }
         viewModelScope.launch {
             var wasRunning = false

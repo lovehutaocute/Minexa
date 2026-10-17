@@ -1215,6 +1215,8 @@
     <string name="net_frp_card_title">FRP</string>
     <string name="net_frp_profile_label">Current profile</string>
     <string name="net_frp_no_profile">No FRP profile yet. Create one first, then start.</string>
+    <string name="net_frp_port_mismatch">This profile forwards to local port %1$d, but the game server actually listens on %2$d. Starting aligns it to %2$d (this run only — your saved text is not modified).</string>
+    <string name="net_frp_port_ambiguous">This profile has several different forwarding ports, so it cannot be aligned automatically. Set the proxy that should reach the game to %1$d.</string>
     <string name="net_frp_create">Create FRP profile</string>
     <string name="msg_frp_profile_required">Create and select an FRP profile on the FRP card first</string>
     <string name="net_frp_switch_hint">Tap to switch FRP profile</string>

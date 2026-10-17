@@ -182,6 +182,15 @@ class TunnelManager internal constructor(
     suspend fun stopStun() = stopLane(TunnelLane.Stun)
 
     /**
+     * 往隧道日志里写一行调用方的说明。
+     *
+     * 界面上的 Snackbar 一闪而过，而「隧道日志」是用户出问题时唯一会回头看的地方，
+     * 所以启动期做过的关键决定（例如把配置里的转发端口对齐到真实端口）必须留在这里，
+     * 否则事后从日志里读不出「为什么这次打的是另一个端口」。
+     */
+    fun note(message: String) = logSink("[tunnel] $message")
+
+    /**
      * 兼容旧入口：按 `config.tunnelType` 决定启动哪条通道。
      *
      * 网络页已改为显式调用 [startFrp] / [startStun]（因为界面上不再有

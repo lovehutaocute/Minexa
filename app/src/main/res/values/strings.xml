@@ -1597,6 +1597,8 @@
     <string name="net_frp_card_title">FRP</string>
     <string name="net_frp_profile_label">当前配置</string>
     <string name="net_frp_no_profile">还没有 FRP 配置。先创建一份，再启动。</string>
+    <string name="net_frp_port_mismatch">这份配置里写的转发端口是 %1$d，但游戏服务端实际在 %2$d。点启动时会按 %2$d 对齐（只影响这次运行，你保存的配置原文不会被改）。</string>
+    <string name="net_frp_port_ambiguous">这份配置里有多个不同的转发端口，没法自动对齐。请把要转到游戏的那个代理的端口改成 %1$d。</string>
     <string name="net_frp_create">创建 FRP 配置</string>
     <string name="msg_frp_profile_required">请先在 FRP 卡片里创建并选中一份配置</string>
     <string name="net_frp_switch_hint">点击切换 FRP 配置</string>

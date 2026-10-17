@@ -70,7 +70,9 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mineserve.mobile.data.FrpLocalTarget
 import com.mineserve.mobile.data.FrpProfile
+import com.mineserve.mobile.data.FrpProfileKind
 import com.mineserve.mobile.data.FrpProfiles
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.TunnelState
@@ -135,6 +137,9 @@ fun NetworkScreen(
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(Unit) { vm.refreshLanIp() }
+    // 端口真源也在这里补读一次：用户可能在别处（文件管理器、服务端配置页）改过端口，
+    // 只靠「服务端配置页」那一次读取的话，本页地址栏会一直显示旧端口。
+    LaunchedEffect(Unit) { vm.loadServerProperties() }
     // 收集操作结果和错误消息，通过 Snackbar 显示（修复"点击无反应"Bug的关键）
     LaunchedEffect(Unit) {
         vm.messageFlow.collectLatest { snackbarHostState.showSnackbar(it) }
@@ -179,6 +184,7 @@ fun NetworkScreen(
                 config = config,
                 frpState = frpState,
                 serverRunning = serverState.isRunning,
+                serverPort = serverPort,
                 onStart = { vm.startFrp() },
                 onStop = { vm.stopFrp() },
                 onOpenEditor = onOpenFrpEditor,
@@ -425,6 +431,7 @@ private fun FrpCard(
     config: McConfig,
     frpState: TunnelState,
     serverRunning: Boolean,
+    serverPort: Int,
     onStart: () -> Unit,
     onStop: () -> Unit,
     onOpenEditor: (String?) -> Unit,
@@ -479,6 +486,30 @@ private fun FrpCard(
                     tint = Indigo,
                     modifier = Modifier.size(18.dp)
                 )
+            }
+        }
+
+        // 配置文本里的转发端口和真实端口对不上时必须提前说：这种情况隧道会「显示已通」，
+        // 玩家却进不来，日志里只有一句 connection refused，从字面看不出是端口错了。
+        // 运行中不提示 —— 那时启动链路已经按真实端口对齐过了。
+        if (profile != null &&
+            profile.kind == FrpProfileKind.CustomToml &&
+            frpState.status != TunnelStatus.Running
+        ) {
+            val target = FrpLocalTarget.target(profile.configText)
+            // 指向别的机器的配置是用户有意为之，不该拿游戏端口去提醒他。
+            if (!target.foreignHost) {
+                val only = target.only
+                when {
+                    target.ports.isNotEmpty() && !target.single -> {
+                        Spacer(Modifier.height(8.dp))
+                        WarnNote(stringResource(R.string.net_frp_port_ambiguous, serverPort))
+                    }
+                    only != null && only != serverPort -> {
+                        Spacer(Modifier.height(8.dp))
+                        WarnNote(stringResource(R.string.net_frp_port_mismatch, only, serverPort))
+                    }
+                }
             }
         }
 
