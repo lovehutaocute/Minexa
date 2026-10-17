@@ -9,6 +9,7 @@ import com.mineserve.mobile.server.tunnel.BoreBackend
 import com.mineserve.mobile.server.tunnel.FrpBackend
 import com.mineserve.mobile.server.tunnel.MeFrpBackend
 import com.mineserve.mobile.server.tunnel.SakuraFrpBackend
+import com.mineserve.mobile.server.tunnel.StunDiagnostics
 import com.mineserve.mobile.server.tunnel.StunTunnelBackend
 import com.mineserve.mobile.server.tunnel.TunnelBackend
 import com.mineserve.mobile.server.tunnel.frpc.FrpcProcessManager
@@ -47,10 +48,22 @@ class TunnelManager(
 
     val frpcProcessManager = FrpcProcessManager.getInstance(context)
 
+    /**
+     * STUN 直连后端。单独持有引用（而不是只放进 [backends]），
+     * 是为了把它的 NAT 判定与连接诊断暴露给界面。
+     */
+    val stunBackend = StunTunnelBackend()
+
+    /**
+     * STUN 直连的实时诊断：NAT 判定、公网地址、探测耗时、空连接回收计数。
+     * 网络页的「STUN 直连」卡片订阅它。
+     */
+    val stunDiagnostics: StateFlow<StunDiagnostics> = stunBackend.diagnostics
+
     private val backends: Map<TunnelType, TunnelBackend> = mapOf(
         TunnelType.Frp to FrpBackend(frpcRuntime, frpcProcessManager),
         TunnelType.Bore to BoreBackend(),
-        TunnelType.Stun to StunTunnelBackend(),
+        TunnelType.Stun to stunBackend,
         TunnelType.SakuraFrp to SakuraFrpBackend(frpcRuntime, frpcProcessManager),
         TunnelType.MeFrp to MeFrpBackend(frpcRuntime, frpcProcessManager)
     ).onEach { (_, backend) ->

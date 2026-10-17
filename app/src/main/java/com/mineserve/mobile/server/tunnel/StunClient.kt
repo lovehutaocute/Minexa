@@ -3,7 +3,6 @@ package com.mineserve.mobile.server.tunnel
 import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
-import java.net.Inet4Address
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.StandardSocketOptions
@@ -32,12 +31,18 @@ object StunClient {
      * （stun.l.google.com、stun.miwifi.com、stun.qq.com、stun.ekiga.net 等）
      * 只提供 UDP，TCP 连得上却永远不回包，放进列表只会白等一轮超时。
      * 顺序即尝试顺序。
+     *
+     * ⚠️ **刻意不放 TURN 服务器**（原先列表里的 `turn.cloudflare.com`、
+     * `global.turn.twilio.com` 已移除）。它们同样会应答 Binding Request，看上去
+     * 完全可用，但那是 **TURN** 不是 STUN：连接被当作一次「未认证的会话」管理，
+     * 过一阵就会被服务端单方面关掉。对一次性的探测无所谓，对本功能却致命 ——
+     * 隧道把这条连接当作**保活长连接**用（见 [StunTcpSession] 的说明），被掐一次
+     * 就得整条重建、公网端口随之改变。2026-10-16 的隧道日志正是如此：
+     * 两次探测都由 `global.turn.twilio.com` 胜出，随后「保活连接已断开」。
      */
     val DEFAULT_SERVERS = listOf(
         "fwa.lifesizecloud.com",
         "stun.freeswitch.org",
-        "turn.cloudflare.com",
-        "global.turn.twilio.com",
         "stun.nextcloud.com",
         "stun.telnyx.com",
         "stun.sonetel.com",
@@ -132,7 +137,14 @@ class StunException(message: String) : IOException(message)
 class StunTcpSession private constructor(
     private val socket: Socket,
     /** 服务器标识，仅用于日志。 */
-    val server: String
+    val server: String,
+    /**
+     * 想要复用旧本地端口却没占到时，内核给出的原因。
+     *
+     * `null` = 没尝试复用，或复用成功。日志需要它才能说清「公网地址为什么变了」——
+     * 光写「实得 34808」看不出是端口被占、还是 bind 被内核拒绝。
+     */
+    val bindNote: String? = null
 ) {
 
     companion object {
@@ -156,21 +168,84 @@ class StunTcpSession private constructor(
          * 因此在 connect 之后立刻补设，后续绑定才能成功。
          *
          * 失败时抛 [StunException]，由上层换一台服务器重试。
+         *
+         * ## [reuseLocalPort]：保住公网端口的关键
+         *
+         * 指定本地端口时，新连接会**先 `bind` 到该端口再 connect**。这一步是
+         * 「隧道重建后公网地址不变」的唯一手段：本地端口相同 + STUN 服务器相同
+         * 意味着五元组完全相同，NAT 只能复用既有映射，也就给出同一个外部端口。
+         * 否则内核会随机挑一个新的临时端口，公网端口必然跟着变。
+         *
+         * `SO_REUSEADDR` **必须在 bind 之前设置**：Linux 只在该标志存在时允许
+         * `bind` 处于 `TIME_WAIT` 的端口（我们自己发起关闭时旧端口会落到该状态）。
+         * 另外，被玩家占用的已建立连接同样持有该本地端口，它们从监听套接字继承了
+         * `SO_REUSEADDR`，因此这里带上该标志才能绑得上。
+         *
+         * 端口保不住时**不影响可用性**：bind 失败会退回随机端口；bind 成功但
+         * connect 失败（个别系统不允许 bind 固定端口后再 connect，Windows 会报
+         * `Address already in use`）也会整条重试一次。地址稳定是尽力而为，
+         * 不能因此让隧道起不来。
          */
         fun connect(
             server: StunServer,
-            connectTimeoutMs: Int = 5000
+            connectTimeoutMs: Int = 5000,
+            reuseLocalPort: Int? = null
+        ): StunTcpSession {
+            if (reuseLocalPort != null) {
+                // 抢占旧端口有竞态：上一条连接（或它 accept 出来的玩家连接）刚关闭时，
+                // 端口可能还残留几十毫秒。实测 2026-10-17 的日志里就出现过一次
+                // 「原本地端口未占到（实得 34808）」，公网地址随之变化。
+                // 端口一旦丢掉就再也拿不回来（下次只能拿到另一个随机端口），
+                // 所以这里值得多试几次——只在**端口没抢到**时重试，总共约半秒。
+                var lastReason: String? = null
+                for (attempt in 0 until portReuseAttempts) {
+                    // connect 失败（服务器不可达）不在这里重试：那不是端口问题，
+                    // 多试几次只是把失败拖慢 4 倍。直接抛给上层换服务器。
+                    val reused = try {
+                        openSession(server, connectTimeoutMs, reuseLocalPort)
+                    } catch (e: Exception) {
+                        throw StunException(e.message ?: e.toString())
+                    }
+                    if (reused.localPort == reuseLocalPort) return reused
+                    // 绑到了别的端口（bind 被拒/端口被占）：关掉重来，否则这条连接会
+                    // 占着一个随机端口，反而让公网地址白白改变。
+                    lastReason = reused.bindNote ?: "内核未分配该端口"
+                    reused.close()
+                    if (attempt < portReuseAttempts - 1) {
+                        runCatching { Thread.sleep(portReuseBackoffMs[attempt].toLong()) }
+                    }
+                }
+                // 实在保不住：退回随机端口，功能不受影响（只是公网端口会变）。
+                return openSession(server, connectTimeoutMs, null, lastReason)
+            }
+            return try {
+                openSession(server, connectTimeoutMs, null)
+            } catch (e: Exception) {
+                throw StunException(e.message ?: e.toString())
+            }
+        }
+
+        /** 建立一条会话：可选先占住 [localPort]，随后 connect 并启动读线程。 */
+        private fun openSession(
+            server: StunServer,
+            connectTimeoutMs: Int,
+            localPort: Int?,
+            bindFailure: String? = null
         ): StunTcpSession {
             val socket = Socket()
+            var bindNote = bindFailure
             try {
                 socket.tcpNoDelay = true
+                // bind 失败不抛异常：此时 socket 仍是未绑定状态，随后的 connect 会让
+                // 内核重新分配随机端口，功能不受影响，只是公网端口会变。
+                if (localPort != null) bindNote = bindLocalPort(socket, localPort)
                 socket.connect(InetSocketAddress(server.host, server.port), connectTimeoutMs)
                 enableReuseAddress(socket)
             } catch (e: Exception) {
                 runCatching { socket.close() }
-                throw StunException(e.message ?: e.toString())
+                throw e
             }
-            val session = StunTcpSession(socket, server.toString())
+            val session = StunTcpSession(socket, server.toString(), bindNote)
             session.startReader()
             return session
         }
@@ -191,6 +266,25 @@ class StunTcpSession private constructor(
         private fun enableReuseAddress(socket: Socket) {
             socket.setOption(StandardSocketOptions.SO_REUSEADDR, true)
         }
+
+        /**
+         * 尽力把 socket 绑到指定本地端口。
+         *
+         * 返回 `null` 表示成功，否则返回失败原因（供日志说明「公网地址为什么变了」）。
+         * `reuseAddress` 必须**先于** `bind` 设置（见 [connect] 的说明）；这里的
+         * `InetSocketAddress(port)` 是通配地址，不限定源 IP。
+         */
+        private fun bindLocalPort(socket: Socket, port: Int): String? = try {
+            socket.reuseAddress = true
+            socket.bind(InetSocketAddress(port))
+            null
+        } catch (e: Exception) {
+            "${e.message ?: e.toString()}"
+        }
+
+        /** 占用旧端口的重试次数与间隔（毫秒）：端口残留通常只有几十毫秒。 */
+        private const val portReuseAttempts = 4
+        private val portReuseBackoffMs = intArrayOf(40, 120, 300)
     }
 
     /** 本地端口 —— NAT 映射的内侧端点，隧道监听套接字要绑定的就是它。 */
@@ -223,11 +317,16 @@ class StunTcpSession private constructor(
     private fun startReader() {
         val thread = Thread({ readLoop() }, "stun-reader")
         thread.isDaemon = true
+        // 最后一道闸：readLoop 内部已全量捕获 Throwable，但只要有任何一条漏出去，
+        // Android 就会走默认未捕获异常处理器杀掉整个进程（用户看到的是「闪退」，
+        // 而不是「隧道断了」）。这条线程只负责守护连接，出任何事都让它静默失效。
+        thread.setUncaughtExceptionHandler { _, e ->
+            shutdown("探测连接读线程异常：${e.message}")
+        }
         thread.start()
     }
 
     private fun readLoop() {
-        val input: InputStream = socket.getInputStream()
         val chunk = ByteArray(4096)
         // 与 EdgeCube 的 `_buffer`（List<int>）等价：只保存**尚未凑成完整消息的残片**，
         // 每次收到数据后立刻把完整消息切走，因此正常情况下它始终只有几字节。
@@ -235,6 +334,12 @@ class StunTcpSession private constructor(
         // 「非 STUN 服务器」而断开——这正是此前「跑一阵就重连」的原因。
         val pendingBytes = java.io.ByteArrayOutputStream()
         try {
+            // ⚠️ getInputStream() 必须在 try 内。close() 与 startReader() 之间有竞态：
+            // 并行探测（S0.3）下多台服务器几乎同时握手成功，没抢到先手的那台会被
+            // 立刻 close()，而此时它的读线程可能还没被调度到这一行。对已关闭的
+            // socket 取流会抛 SocketException("Socket is closed")，一旦逃出本线程，
+            // Android 默认未捕获异常处理器会直接杀进程（2026-10-16 实测崩溃栈）。
+            val input: InputStream = socket.getInputStream()
             while (true) {
                 val read = input.read(chunk)
                 if (read < 0) {
@@ -372,10 +477,14 @@ class StunTcpSession private constructor(
     }
 }
 
-// ── 报文编解码（文件级私有工具） ───────────────────────────────
+// ── 报文编解码（模块内可见，便于 JVM 单测做字节级断言） ────────
+//
+// 这几个函数原本是文件级 private，导致「解析不可信网络数据」这条最容易出错的
+// 路径完全无法被单测覆盖（只能靠真机联调撞）。改成 internal：外部 API 没有变化，
+// 但 StunClientTest 可以逐字节验证 XOR 解掩码、属性对齐与越界防御。
 
 /** Binding Request：类型 0x0001、长度 0、magic cookie、12 字节事务 ID。 */
-private fun buildBindingRequest(txId: ByteArray): ByteArray {
+internal fun buildBindingRequest(txId: ByteArray): ByteArray {
     val message = ByteArray(20)
     message[0] = 0x00
     message[1] = 0x01
@@ -395,7 +504,7 @@ private fun buildBindingRequest(txId: ByteArray): ByteArray {
  * 只接受 IPv4（family = 0x01）：隧道要绑定的是 IPv4 监听端口，
  * 拿到 IPv6 映射对本功能没有意义。
  */
-private fun parseMappedAddress(buffer: ByteArray, start: Int, length: Int): StunMappedAddress? {
+internal fun parseMappedAddress(buffer: ByteArray, start: Int, length: Int): StunMappedAddress? {
     val payloadLength = ((buffer[start + 2].toInt() and 0xFF) shl 8) or (buffer[start + 3].toInt() and 0xFF)
     val end = minOf(start + 20 + payloadLength, start + length)
     var offset = start + 20
@@ -433,7 +542,7 @@ private fun parseMappedAddress(buffer: ByteArray, start: Int, length: Int): Stun
 }
 
 /** 解析 ERROR-CODE（0x0009）属性，形如 `401 Unauthorized`。 */
-private fun parseErrorCode(buffer: ByteArray, start: Int, length: Int): String? {
+internal fun parseErrorCode(buffer: ByteArray, start: Int, length: Int): String? {
     val payloadLength = ((buffer[start + 2].toInt() and 0xFF) shl 8) or (buffer[start + 3].toInt() and 0xFF)
     val end = minOf(start + 20 + payloadLength, start + length)
     var offset = start + 20
@@ -456,7 +565,7 @@ private fun parseErrorCode(buffer: ByteArray, start: Int, length: Int): String? 
     return null
 }
 
-private fun ipv4ToString(ip: ByteArray): String =
+internal fun ipv4ToString(ip: ByteArray): String =
     "${ip[0].toInt() and 0xFF}.${ip[1].toInt() and 0xFF}.${ip[2].toInt() and 0xFF}.${ip[3].toInt() and 0xFF}"
 
 /** 复用 [StunClient] 的随机源，保持单一 CSPRNG 实例。 */
@@ -472,5 +581,44 @@ internal fun isIpv4Literal(text: String): Boolean =
         }
     }
 
-/** 本地 IPv4 回环地址常量，避免各处重复构造。 */
-internal val LOOPBACK_V4: Inet4Address = Inet4Address.getByName("127.0.0.1") as Inet4Address
+/**
+ * 判断一个 IPv4 字面量是否为**可被外网访问**的公网地址。
+ *
+ * ## 为什么必须有这个判断
+ *
+ * STUN 探测「成功」只说明拿到了一份映射，不代表这份映射有用。运营商 CGNAT
+ * （100.64.0.0/10）下拿到的就是一个 100.64.x.x 地址 —— 它不是公网地址，外部
+ * 连接永远到不了。此前本实现在这种情况下**照原样把地址展示给用户并宣布就绪**，
+ * 用户把地址发出去发现没人连得上，且日志里看不出任何异常。
+ *
+ * 现在改为：非公网地址一律判定为「直连不可用」，并说明是哪一段。
+ *
+ * 排除清单依据 RFC 6890（含 RFC 1918 私网、RFC 6598 CGNAT、RFC 3927 链路本地）。
+ *
+ * @return null 表示是公网地址；否则返回人类可读的排除原因。
+ */
+internal fun nonPublicIpv4Reason(text: String): String? {
+    if (!isIpv4Literal(text)) return "不是合法的 IPv4 字面量"
+    val b = text.split('.').map { it.toInt() }
+    val a = b[0]
+    val c = b[1]
+    return when {
+        a == 0 -> "保留段 0.0.0.0/8"
+        a == 10 -> "私网地址 10.0.0.0/8"
+        a == 100 && c in 64..127 -> "运营商 CGNAT 地址 100.64.0.0/10"
+        a == 127 -> "本机回环地址 127.0.0.0/8"
+        a == 169 && c == 254 -> "链路本地地址 169.254.0.0/16"
+        a == 172 && c in 16..31 -> "私网地址 172.16.0.0/12"
+        a == 192 && c == 0 && b[2] == 0 -> "保留段 192.0.0.0/24"
+        a == 192 && c == 0 && b[2] == 2 -> "文档用地址 192.0.2.0/24"
+        a == 192 && c == 168 -> "私网地址 192.168.0.0/16"
+        a == 198 && (c == 18 || c == 19) -> "基准测试段 198.18.0.0/15"
+        a == 198 && c == 51 && b[2] == 100 -> "文档用地址 198.51.100.0/24"
+        a == 203 && c == 0 && b[2] == 113 -> "文档用地址 203.0.113.0/24"
+        a >= 224 -> "组播/保留段（224.0.0.0/4 及以上）"
+        else -> null
+    }
+}
+
+/** [nonPublicIpv4Reason] 的布尔形式。 */
+internal fun isPublicIpv4Address(text: String): Boolean = nonPublicIpv4Reason(text) == null

@@ -215,8 +215,15 @@ class BoreBackend : TunnelBackend {
                 forwardSockets.add(ls)
 
                 // 双向转发（登记线程，stop() 时统一打断）
-                val thread1 = Thread { pipe(cs.getInputStream(), ls.getOutputStream(), "bore→local") }
-                val thread2 = Thread { pipe(ls.getInputStream(), cs.getOutputStream(), "local→bore") }
+                // ⚠️ 四条流必须在建线程之前取好：写在 Thread {} 里的话，stop() 关掉
+                // socket 后线程才被调度，getInputStream() 会抛 SocketException 逃出
+                // 线程，在 Android 上直接杀进程（与 stun-reader 崩溃同源）。
+                val csIn = cs.getInputStream()
+                val csOut = cs.getOutputStream()
+                val lsIn = ls.getInputStream()
+                val lsOut = ls.getOutputStream()
+                val thread1 = Thread { pipe(csIn, lsOut, "bore→local") }
+                val thread2 = Thread { pipe(lsIn, csOut, "local→bore") }
                 thread1.isDaemon = true; thread2.isDaemon = true
                 t1 = thread1; t2 = thread2
                 forwardThreads.add(thread1)
@@ -248,7 +255,9 @@ class BoreBackend : TunnelBackend {
                 dst.write(buf, 0, n)
                 dst.flush()
             }
-        } catch (_: Exception) {}
+        } catch (_: Throwable) {
+            // 捕 Throwable：这条线程上任何逃逸异常都会终结进程。
+        }
     }
 
     /** 发送以 null 结尾的 JSON 消息 */
