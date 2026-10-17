@@ -1627,6 +1627,35 @@
     <string name="stun_servers">自定义 STUN 服务器</string>
     <string name="stun_servers_hint">每行一条，如 stun.example.com 或 stun.example.com:3478</string>
     <string name="stun_servers_note">留空使用内置列表（均已验证支持 TCP 3478）。注意：仅支持 UDP 的 STUN 服务器对本功能无效。</string>
+    <string name="stun_config_moved">STUN 的目标端口、保活间隔、并发上限等配置已移至上方「STUN 直连」卡片。</string>
+
+    <!-- STUN 直连独立卡片 -->
+    <string name="stun_card_title">STUN 直连</string>
+    <string name="stun_card_not_selected">当前穿透方式为「%1$s」。STUN 直连只能在自己被选中时启动。</string>
+    <string name="stun_card_switch">切换为 STUN 直连</string>
+    <string name="stun_card_address">公网直连地址</string>
+    <string name="stun_card_address_hint">该地址由运营商分配，断线重连或换网后会失效。</string>
+    <string name="stun_card_address_drift">公网地址已变化 %1$d 次：端口会随每次重建而改变，需要重新把新地址发给玩家。</string>
+    <string name="stun_card_start">启动 STUN</string>
+    <string name="stun_card_stop">停止</string>
+    <string name="stun_verdict_unknown_t">尚未探测</string>
+    <string name="stun_verdict_unknown_d">启动隧道后会在这里给出 NAT 判定与公网地址。</string>
+    <string name="stun_verdict_public">全锥形 NAT（NAT1）· 地址可被外网访问</string>
+    <string name="stun_verdict_non_public">地址不可用（内网 / CGNAT）</string>
+    <string name="stun_verdict_unreachable">STUN 直连不可用</string>
+    <string name="stun_verdict_bind_failed">已取到映射，但无法监听该端口</string>
+    <string name="stun_fail_unreachable">全部 STUN 服务器都连接不上，请检查网络后重试。</string>
+    <string name="stun_fail_no_response">服务器 TCP 可达但均无响应，多为只支持 UDP 的服务器，请更换自定义服务器。</string>
+    <string name="stun_fail_server_rejected">服务器拒绝了请求，请更换自定义服务器。</string>
+    <string name="stun_fail_no_mapping">服务器未返回可用的映射地址，请更换自定义服务器。</string>
+    <string name="stun_fail_non_public">运营商分配的是内网 / CGNAT 地址，外网无法访问，请改用 frp 或平台隧道。</string>
+    <string name="stun_fail_bind">映射端口被占用或不可绑定，请稍后重试。</string>
+    <string name="stun_stat_probe">探测耗时 %1$d ms（%2$d 台尝试 / %3$d 台连通）</string>
+    <string name="stun_stat_conn">当前连接 %1$d</string>
+    <string name="stun_stat_idle">已回收空连接 %1$d（连上后未发数据）</string>
+    <string name="stun_stat_limit">已达并发上限被拒 %1$d</string>
+    <string name="stun_advanced">高级设置</string>
+    <string name="stun_advanced_hide">收起设置</string>
     <string name="net_log_empty">暂无隧道日志，点「启动穿透」后这里会出现运行输出</string>
     <!-- STUN 直连 -->
     <string name="stun_guide_title">STUN 直连使用指南</string>

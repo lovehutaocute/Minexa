@@ -22,6 +22,7 @@ import com.mineserve.mobile.data.JavaRuntime
 import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.MinecraftVersionNormalizer
+import com.mineserve.mobile.data.ServerPort
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.ServerState
 import com.mineserve.mobile.data.StartupPhase
@@ -45,6 +46,7 @@ import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PlayerManager
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
+import com.mineserve.mobile.server.tunnel.StunDiagnostics
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
 import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntimeDownloader
 import com.mineserve.mobile.server.PowerNukkitXConfigManager
@@ -541,6 +543,12 @@ class McViewModel(
     val lanIp: StateFlow<String> = _lanIp.asStateFlow()
     /** 隧道运行状态，UI 层订阅展示 */
     val tunnelState: StateFlow<TunnelState> = tunnelManager.state
+
+    /**
+     * STUN 直连专属诊断：NAT 判定 / 公网地址 / 探测耗时 / 空连接回收计数。
+     * 通用 [tunnelState] 要给五种后端共用，NAT 判定只对 STUN 有意义，故分开放。
+     */
+    val stunDiagnostics: StateFlow<StunDiagnostics> = tunnelManager.stunDiagnostics
 
     // ── frpc 引擎（内置引擎，不依赖 Termux） ────────────────────────
 
@@ -1238,8 +1246,11 @@ class McViewModel(
             )
             val running = runtime.isMcRunning()
             val bedrock = active.core == ServerCore.PowerNukkitX
+            // 端口取真源：配置文件里的 server-port（PNX 为 pnx.yml 的 settings.port），
+            // 未生成时退回 localPort。与地址栏同源，避免「诊断说 19132、服务端其实在 25562」。
+            val port = ServerPort.resolve(_serverProperties.value["server-port"], active?.core, cfg.localPort)
             val portOk = if (running) {
-                if (bedrock) probeBedrockUdpPort(cfg.localPort) else probeLoopbackPort(cfg.localPort)
+                if (bedrock) probeBedrockUdpPort(port) else probeLoopbackPort(port)
             } else false
             val runningSince = repo.serverState.value.runningSinceMs
             val starting = running && runningSince > 0L &&
@@ -1312,7 +1323,9 @@ class McViewModel(
     /** 一键复制服务器连接地址到剪贴板，格式：IP:端口 */
     fun copyServerAddress(context: android.content.Context) {
         val ip = _lanIp.value
-        val port = config.value.localPort
+        // 端口取真源（服务端配置文件里的 server-port），不读 config.localPort ——
+        // 后者在配置文件被外部改动时可能停在旧值。
+        val port = serverPort.value
         val address = if (ip == "--") {
             _errorFlow.tryEmit(str(R.string.s187))
             return
@@ -2101,12 +2114,14 @@ class McViewModel(
     }
 
     fun selectCore(core: ServerCore) = updateConfig {
-        // 基岩版核心（PNX/PocketMine/Allay）走 UDP，默认端口切到 19132
-        if (core.isBedrock) it.copy(
-            selectedCore = core,
-            mcVersion = "latest",
-            localPort = if (it.localPort == 25565) 19132 else it.localPort
-        ) else it.copy(selectedCore = core)
+        // 基岩版核心（PNX/PocketMine/Allay）走 UDP，默认端口 19132；Java 系 25565。
+        // 迁移规则见 [ServerPort.migrateOnCoreSwitch]：只在 Java 系 ↔ 基岩系之间
+        // 对调**默认值**，用户自定义端口（如 25562）原样保留。
+        // 旧实现是单向的 `if (localPort == 25565) 19132 else localPort`：
+        // 切到基岩后 19132 再也回不去，而当时界面上已没有端口编辑框可以改回来。
+        val port = ServerPort.migrateOnCoreSwitch(it.localPort, it.selectedCore, core)
+        if (core.isBedrock) it.copy(selectedCore = core, mcVersion = "latest", localPort = port)
+        else it.copy(selectedCore = core, localPort = port)
     }
 
     fun setMcVersion(version: String) {
@@ -3574,6 +3589,27 @@ class McViewModel(
     val serverProperties: StateFlow<Map<String, String>> = _serverProperties.asStateFlow()
 
     /**
+     * 服务端真正监听的端口（端口真源）。
+     *
+     * 以服务端配置文件为准：Java 系取 `server.properties` 的 `server-port`，
+     * PowerNukkitX 取 `pnx.yml` 的 `settings.port`（见 [loadServerProperties]）。
+     * 配置文件尚未生成时退回 [McConfig.localPort]。
+     *
+     * 地址栏、复制地址、诊断检查都读这里，不再直接读 [McConfig.localPort] ——
+     * 后者可能停在旧值（历史上「配置 25562、显示 19132」就是这么来的）。
+     */
+    val serverPort: StateFlow<Int> = combine(_serverProperties, config) { props, cfg ->
+        ServerPort.resolve(props["server-port"], activeCoreType() ?: cfg.selectedCore, cfg.localPort)
+    }.distinctUntilChanged().stateIn(
+        viewModelScope, SharingStarted.WhileSubscribed(5_000),
+        ServerPort.DEFAULT_JAVA
+    )
+
+    /** 当前激活核心的类型；未选择时返回 null。 */
+    private fun activeCoreType(): ServerCore? = config.value.installedCores
+        .firstOrNull { it.name == config.value.activeCoreName }?.core
+
+    /**
      * 配置文件当前是否已生成（服务端首次启动后才会由服务端写出）。
      *
      * null 表示尚未检测完成，UI 应展示加载态而非误判为"未生成"。
@@ -3595,9 +3631,17 @@ class McViewModel(
                     else propertiesManager.exists(dirName)
                 }
                 _serverPropertiesExist.value = exists
-                _serverProperties.value = withContext(Dispatchers.IO) {
+                val loaded = withContext(Dispatchers.IO) {
                     if (pnx) powerNukkitXConfigManager.read(dirName)
                     else propertiesManager.readProperties(dirName)
+                }
+                _serverProperties.value = loaded
+                // 端口真源镜像：配置文件已生成且含合法端口时，把它同步回 [McConfig.localPort]。
+                // 「服务器配置」页是端口唯一编辑入口（网络页的输入框已在 1.2.8 移除），
+                // 不同步的话地址栏会一直停在旧值 —— 这正是「配置 25562、显示 19132」的成因。
+                // 只在 exists 为真时同步：文件不存在时 loaded 是空 Map，会把 localPort 误覆盖成默认值。
+                if (exists) ServerPort.parse(loaded["server-port"])?.let { port ->
+                    if (config.value.localPort != port) updateConfig { it.copy(localPort = port) }
                 }
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s261, e.message))
@@ -3621,18 +3665,35 @@ class McViewModel(
         }
         viewModelScope.launch {
             try {
-                val ok = withContext(Dispatchers.IO) {
+                // 返回值第二个元素是「本次实际生效的端口」：Java 系取提交值，缺省时退回
+                // 文件原值再退回核心默认端口；PNX 系还要同时写 server.properties，
+                // 那里的端口就是最终生效值。保存成功后据此回写 [McConfig.localPort]。
+                val result = withContext(Dispatchers.IO) {
+                    val current = propertiesManager.readProperties(dirName)
                     if (isPowerNukkitXActive()) {
                         val supported = props.filterKeys { it in powerNukkitXConfigManager.supportedKeys() }
                         val yamlOk = powerNukkitXConfigManager.write(dirName, supported)
-                        val serverProps = propertiesManager.readProperties(dirName).toMutableMap()
-                        serverProps["server-port"] = props["server-port"] ?: serverProps["server-port"] ?: "19132"
-                        yamlOk && propertiesManager.writeProperties(serverProps, dirName)
-                    } else propertiesManager.writeProperties(props, dirName)
+                        val effectivePort = props["server-port"] ?: current["server-port"]
+                            ?: ServerPort.defaultFor(ServerCore.PowerNukkitX).toString()
+                        val serverProps = current.toMutableMap()
+                        serverProps["server-port"] = effectivePort
+                        (yamlOk && propertiesManager.writeProperties(serverProps, dirName)) to effectivePort
+                    } else {
+                        val core = activeCoreType() ?: config.value.selectedCore
+                        val effectivePort = props["server-port"] ?: current["server-port"]
+                            ?: ServerPort.defaultFor(core).toString()
+                        propertiesManager.writeProperties(props, dirName) to effectivePort
+                    }
                 }
-                if (ok) {
+                if (result.first) {
                     _messageFlow.tryEmit(str(R.string.s262))
                     _serverProperties.value = props
+                    // 端口真源回写：「服务器配置」页是端口唯一编辑入口（网络页的输入框已在
+                    // 1.2.8 移除）。不回写的话地址栏/穿透默认端口会停在旧值 ——
+                    // 用户改了 25562 而界面仍显示 19132 就是这么来的。
+                    ServerPort.parse(result.second)?.let { port ->
+                        if (config.value.localPort != port) updateConfig { it.copy(localPort = port) }
+                    }
                     refreshLanIp()
                 } else {
                     _errorFlow.tryEmit(str(R.string.s263))

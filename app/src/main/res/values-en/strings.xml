@@ -1257,6 +1257,35 @@
     <string name="stun_servers">Custom STUN servers</string>
     <string name="stun_servers_hint">One per line, e.g. stun.example.com or stun.example.com:3478</string>
     <string name="stun_servers_note">Leave empty to use the built-in list (all verified to support TCP 3478). Note: STUN servers that only support UDP will not work here.</string>
+    <string name="stun_config_moved">STUN target port, keep-alive interval and concurrency settings have moved into the "STUN Direct" card above.</string>
+
+    <!-- STUN direct-connection card -->
+    <string name="stun_card_title">STUN Direct</string>
+    <string name="stun_card_not_selected">Current tunnel method is "%1$s". STUN Direct can only start when it is the selected method.</string>
+    <string name="stun_card_switch">Switch to STUN Direct</string>
+    <string name="stun_card_address">Public direct address</string>
+    <string name="stun_card_address_hint">Assigned by your ISP; it stops working after a reconnect or network switch.</string>
+    <string name="stun_card_address_drift">Public address changed %1$d time(s): the port changes on every rebuild, so the new address must be sent to players again.</string>
+    <string name="stun_card_start">Start STUN</string>
+    <string name="stun_card_stop">Stop</string>
+    <string name="stun_verdict_unknown_t">Not probed yet</string>
+    <string name="stun_verdict_unknown_d">Start the tunnel and the NAT verdict and public address will appear here.</string>
+    <string name="stun_verdict_public">Full-cone NAT (NAT1) - address reachable from the internet</string>
+    <string name="stun_verdict_non_public">Address unusable (private / CGNAT)</string>
+    <string name="stun_verdict_unreachable">STUN Direct unavailable</string>
+    <string name="stun_verdict_bind_failed">Mapping obtained, but the port cannot be listened on</string>
+    <string name="stun_fail_unreachable">No STUN server could be reached. Check your network and retry.</string>
+    <string name="stun_fail_no_response">Servers are TCP-reachable but never respond - usually UDP-only servers. Try a custom server.</string>
+    <string name="stun_fail_server_rejected">The server rejected the request. Try a custom server.</string>
+    <string name="stun_fail_no_mapping">The server returned no usable mapping address. Try a custom server.</string>
+    <string name="stun_fail_non_public">Your ISP assigned a private / CGNAT address, unreachable from the internet. Switch to frp or a hosted platform.</string>
+    <string name="stun_fail_bind">The mapped port is occupied or cannot be bound. Try again later.</string>
+    <string name="stun_stat_probe">Probe took %1$d ms (%2$d tried / %3$d connected)</string>
+    <string name="stun_stat_conn">Active connections %1$d</string>
+    <string name="stun_stat_idle">Idle connections reclaimed %1$d (connected but sent nothing)</string>
+    <string name="stun_stat_limit">Rejected at concurrency cap %1$d</string>
+    <string name="stun_advanced">Advanced settings</string>
+    <string name="stun_advanced_hide">Hide settings</string>
     <string name="net_log_empty">No tunnel log yet. Tap "Start tunnel" and runtime output will show up here</string>
     <!-- STUN direct connection -->
     <string name="stun_guide_title">STUN Direct Connection Guide</string>

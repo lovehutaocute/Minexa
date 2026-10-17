@@ -874,7 +874,8 @@ private fun DashboardHeroBlock(
 
 @Composable
 private fun DashboardAddressCard(vm: McViewModel) {
-    val localPort by vm.config.map { it.localPort }.distinctUntilChanged().collectAsState(initial = 25565)
+    // 端口取真源（服务端配置文件里的 server-port），与「服务器配置」页和诊断同源。
+    val localPort by vm.serverPort.collectAsState()
     val lanIp by vm.lanIp.collectAsState()
     val tunnelState by vm.tunnelState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current

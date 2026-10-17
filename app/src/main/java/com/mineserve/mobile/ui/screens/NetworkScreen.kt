@@ -42,6 +42,7 @@ import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.automirrored.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.PlayArrow
+import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material3.Button
@@ -87,6 +88,9 @@ import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelState
+import com.mineserve.mobile.server.tunnel.StunDiagnostics
+import com.mineserve.mobile.server.tunnel.StunFailCategory
+import com.mineserve.mobile.server.tunnel.StunVerdict
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McCard
@@ -117,9 +121,12 @@ import kotlinx.coroutines.withContext
 @Composable
 fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = true) {
     val config by vm.config.collectAsState()
+    // 端口真源：服务端配置文件里的 server-port（未生成时退回 localPort）。
+    val serverPort by vm.serverPort.collectAsState()
     val lanIp by vm.lanIp.collectAsState()
     val serverState by vm.serverState.collectAsState()
     val tunnelState by vm.tunnelState.collectAsState()
+    val stunDiag by vm.stunDiagnostics.collectAsState()
     val consoleLines by vm.consoleLines.collectAsState()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -179,8 +186,8 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
             Spacer(Modifier.height(6.dp))
             AddressCopyRow(
                 label = stringResource(R.string.s588),
-                value = "127.0.0.1:${config.localPort}",
-                onCopy = { copyToClipboard(context, "MC Server", "127.0.0.1:${config.localPort}") }
+                value = "127.0.0.1:$serverPort",
+                onCopy = { copyToClipboard(context, "MC Server", "127.0.0.1:$serverPort") }
             )
             Spacer(Modifier.height(6.dp))
             Text(
@@ -193,7 +200,7 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
             // 局域网 IP（其他设备连接用）+ 端口，合并为一条可复制地址
             Text(stringResource(R.string.s590), color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.height(6.dp))
-            val lanAddress = if (lanIp == "--") "--:${config.localPort}" else "$lanIp:${config.localPort}"
+            val lanAddress = if (lanIp == "--") "--:$serverPort" else "$lanIp:$serverPort"
             AddressCopyRow(
                 label = stringResource(R.string.s592),
                 value = lanAddress,
@@ -227,6 +234,20 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
             onStart = { vm.startTunnel() },
             onStop = { vm.stopTunnel() },
             onCopyUrl = { vm.copyTunnelUrl(context) }
+        )
+
+        // STUN 直连：独立成卡。
+        // 它和 frp/bore/托管平台不是一回事——不依赖任何中转服务器，能不能用
+        // 取决于本地 NAT 类型。把它混进通用隧道状态里，用户只能看到「启动失败」，
+        // 看不到「为什么失败、该换什么」。所以状态、NAT 判定、地址与配置都收进这张卡。
+        StunDirectCard(
+            vm = vm,
+            config = config,
+            diagnostics = stunDiag,
+            tunnelState = tunnelState,
+            onStart = { vm.startTunnel() },
+            onStop = { vm.stopTunnel() },
+            onCopyText = { label, text -> copyToClipboard(context, label, text) }
         )
 
         // 隧道日志预览 + 连接日志
@@ -326,7 +347,10 @@ fun NetworkScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boolean = tr
             }
 
             if (config.tunnelType == TunnelType.Stun) {
-                StunConfigSection(vm = vm, config = config)
+                // STUN 的状态、地址、诊断与配置已全部收进上方的「STUN 直连」卡片。
+                // 这里不再摆第二份配置入口——两个入口改同一份配置，
+                // 用户会以为没生效（而且改错地方还得回滚）。
+                HintNote(stringResource(R.string.stun_config_moved))
             }
 
         }
@@ -500,9 +524,235 @@ private fun TunnelStatusCard(
     }
 }
 
+// ── STUN 直连（独立卡片） ─────────────────────────────────────
+
+/**
+ * STUN 直连专属卡片。
+ *
+ * ## 为什么单独成卡
+ *
+ * 其余四种穿透方式（frp / bore / SakuraFrp / ME Frp）都是「找一个中转服务器，
+ * 把流量绕出去」，用户只需要填好凭据就能用。STUN 不是：它不依赖任何中转，
+ * 能不能用**取决于本地 NAT 类型**，失败原因也完全不在用户填的那几栏里。
+ * 混在通用隧道状态卡里，用户只能得到一句「启动失败」，无从判断该改什么。
+ *
+ * 所以这张卡把「结论（NAT 能不能打洞）→ 地址 → 诊断计数 → 配置」串成一条线，
+ * 并且**只在选中 STUN 时**给出启停入口（否则点下去启动的是别的后端，会误导）。
+ */
+@Composable
+private fun StunDirectCard(
+    vm: McViewModel,
+    config: com.mineserve.mobile.data.McConfig,
+    diagnostics: StunDiagnostics,
+    tunnelState: TunnelState,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onCopyText: (String, String) -> Unit
+) {
+    // 折叠态放在卡片内部：切走再回来时保持展开与否，不打断用户正在改的配置。
+    var showAdvanced by remember { mutableStateOf(false) }
+
+    McCard(title = stringResource(R.string.stun_card_title)) {
+        if (config.tunnelType != TunnelType.Stun) {
+            // 没选 STUN 时，这张卡只做一件事：告诉用户为什么这里是空的、怎么进来。
+            HintNote(stringResource(R.string.stun_card_not_selected, config.tunnelType.displayName))
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { vm.setTunnelType(TunnelType.Stun) },
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(stringResource(R.string.stun_card_switch), color = Indigo, fontSize = 12.sp)
+            }
+            return@McCard
+        }
+
+        val notProbed = diagnostics.verdict == StunVerdict.Unknown
+        val usable = diagnostics.verdict == StunVerdict.PublicDirect
+        val accent = when {
+            usable -> Mint
+            notProbed -> Muted
+            else -> Coral
+        }
+        val container = when {
+            usable -> MintSoft
+            notProbed -> FieldBg
+            else -> CoralSoft
+        }
+
+        // ── 结论条：这张卡最重要的一行 ─────────────────────────
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(12.dp))
+                .background(container)
+                .then(
+                    if (notProbed) Modifier
+                    else Modifier.border(1.dp, accent, RoundedCornerShape(12.dp))
+                )
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                if (usable) Icons.Outlined.Public else Icons.Outlined.Info,
+                contentDescription = null,
+                tint = accent,
+                modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.size(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    when (diagnostics.verdict) {
+                        StunVerdict.Unknown -> stringResource(R.string.stun_verdict_unknown_t)
+                        StunVerdict.PublicDirect -> stringResource(R.string.stun_verdict_public)
+                        StunVerdict.NonPublicAddress -> stringResource(R.string.stun_verdict_non_public)
+                        StunVerdict.Unreachable -> stringResource(R.string.stun_verdict_unreachable)
+                        StunVerdict.BindFailed -> stringResource(R.string.stun_verdict_bind_failed)
+                    },
+                    color = if (notProbed) Muted else accent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
+                val detail = when (diagnostics.verdict) {
+                    StunVerdict.Unknown -> stringResource(R.string.stun_verdict_unknown_d)
+                    StunVerdict.PublicDirect -> ""
+                    StunVerdict.NonPublicAddress -> diagnostics.nonPublicAddress
+                    StunVerdict.Unreachable -> failureReasonText(diagnostics.failCategory)
+                    StunVerdict.BindFailed -> stringResource(R.string.stun_fail_bind)
+                }
+                if (detail.isNotBlank()) {
+                    Spacer(Modifier.height(3.dp))
+                    Text(detail, color = Muted, fontSize = 11.sp)
+                }
+            }
+        }
+
+        // ── 公网地址 ──────────────────────────────────────────
+        if (diagnostics.publicAddress.isNotBlank()) {
+            Spacer(Modifier.height(12.dp))
+            AddressCopyRow(
+                label = stringResource(R.string.stun_card_address),
+                value = diagnostics.publicAddress,
+                onCopy = { onCopyText("STUN", diagnostics.publicAddress) },
+                accent = if (usable) Mint else Coral,
+                containerColor = if (usable) MintSoft else CoralSoft,
+                borderColor = if (usable) Mint else Coral
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(
+                if (diagnostics.portStable) stringResource(R.string.stun_card_address_hint)
+                else stringResource(R.string.stun_card_address_drift, diagnostics.addressChanges),
+                color = Muted, fontSize = 10.sp
+            )
+        }
+
+        // ── 运行诊断 ──────────────────────────────────────────
+        Spacer(Modifier.height(12.dp))
+        if (diagnostics.probeDurationMs > 0) {
+            StatLine(
+                Icons.Outlined.Speed,
+                stringResource(
+                    R.string.stun_stat_probe,
+                    diagnostics.probeDurationMs,
+                    diagnostics.serversTried,
+                    diagnostics.serversConnected
+                )
+            )
+        }
+        StatLine(
+            Icons.Outlined.Link,
+            stringResource(R.string.stun_stat_conn, diagnostics.activeConnections)
+        )
+        // 这两项平时是 0，只有真被攻击/扫端口时才会涨——所以涨了才显示。
+        if (diagnostics.idleTimeouts > 0) {
+            StatLine(
+                Icons.Outlined.Info,
+                stringResource(R.string.stun_stat_idle, diagnostics.idleTimeouts)
+            )
+        }
+        if (diagnostics.limitRejects > 0) {
+            StatLine(
+                Icons.Outlined.Info,
+                stringResource(R.string.stun_stat_limit, diagnostics.limitRejects)
+            )
+        }
+
+        // ── 启停（只对 STUN 生效） ─────────────────────────────
+        Spacer(Modifier.height(12.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(
+                onClick = onStart,
+                enabled = tunnelState.status != TunnelStatus.Starting,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Indigo,
+                    disabledContainerColor = TrackBg
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    Icons.Outlined.PlayArrow, contentDescription = null,
+                    tint = Color.White, modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(stringResource(R.string.stun_card_start), color = Color.White)
+            }
+            Button(
+                onClick = onStop,
+                enabled = tunnelState.status == TunnelStatus.Running ||
+                    tunnelState.status == TunnelStatus.Starting,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Muted,
+                    disabledContainerColor = TrackBg
+                ),
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.weight(1f)
+            ) {
+                Icon(
+                    Icons.Outlined.Stop, contentDescription = null,
+                    tint = Color.White, modifier = Modifier.size(18.dp)
+                )
+                Spacer(Modifier.size(6.dp))
+                Text(stringResource(R.string.stun_card_stop), color = Color.White)
+            }
+        }
+
+        // ── 高级设置（折叠） ───────────────────────────────────
+        Spacer(Modifier.height(4.dp))
+        TextButton(
+            onClick = { showAdvanced = !showAdvanced },
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Icon(
+                if (showAdvanced) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = null, tint = Indigo, modifier = Modifier.size(16.dp)
+            )
+            Spacer(Modifier.size(6.dp))
+            Text(
+                if (showAdvanced) stringResource(R.string.stun_advanced_hide)
+                else stringResource(R.string.stun_advanced),
+                color = Indigo, fontSize = 12.sp
+            )
+        }
+        if (showAdvanced) {
+            StunConfigSection(vm = vm, config = config)
+        }
+    }
+}
+
+/** 把失败分类翻译成一行原因说明（结论条的第二行）。 */
+@Composable
+private fun failureReasonText(category: StunFailCategory): String = when (category) {
+    StunFailCategory.NoResponse -> stringResource(R.string.stun_fail_no_response)
+    StunFailCategory.ServerRejected -> stringResource(R.string.stun_fail_server_rejected)
+    StunFailCategory.NoMapping -> stringResource(R.string.stun_fail_no_mapping)
+    StunFailCategory.NonPublicAddress -> stringResource(R.string.stun_fail_non_public)
+    StunFailCategory.BindFailed -> stringResource(R.string.stun_fail_bind)
+    else -> stringResource(R.string.stun_fail_unreachable)
+}
+
 /** 把字节数格式化成可读文本（沿用 EdgeCube 的量级分档）。 */
-private fun formatBytes(bytes: Long): String = when {
-    bytes < 1024 -> "$bytes B"
+private fun formatBytes(bytes: Long): String = when {    bytes < 1024 -> "$bytes B"
     bytes < 1024 * 1024 -> String.format("%.1f KB", bytes / 1024.0)
     bytes < 1024L * 1024 * 1024 -> String.format("%.1f MB", bytes / (1024.0 * 1024))
     else -> String.format("%.2f GB", bytes / (1024.0 * 1024 * 1024))
@@ -809,6 +1059,8 @@ private fun FreeFrpPlatformsCard(context: Context) {
 @Composable
 private fun SakuraFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile.data.McConfig) {
     val scope = androidx.compose.runtime.rememberCoroutineScope()
+    // 隧道默认本地端口取真源，避免指向服务端并未监听的旧端口。
+    val serverPort by vm.serverPort.collectAsState()
     var account by remember { mutableStateOf<com.mineserve.mobile.server.tunnel.SakuraFrpApi.Account?>(null) }
     var tunnels by remember { mutableStateOf<List<com.mineserve.mobile.server.tunnel.SakuraFrpApi.Tunnel>>(emptyList()) }
     var nodes by remember { mutableStateOf<List<com.mineserve.mobile.server.tunnel.SakuraFrpApi.Node>>(emptyList()) }
@@ -932,7 +1184,7 @@ private fun SakuraFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile
     if (showCreate) {
         SakuraCreateTunnelDialog(
             nodes = nodes,
-            defaultPort = config.localPort,
+            defaultPort = serverPort,
             onDismiss = { showCreate = false },
             onConfirm = { node, name, type, port ->
                 showCreate = false
@@ -961,6 +1213,8 @@ private fun SakuraFrpConfigSection(vm: McViewModel, config: com.mineserve.mobile
 
 @Composable
 private fun StunConfigSection(vm: McViewModel, config: com.mineserve.mobile.data.McConfig) {
+    // 目标端口跟随真源（服务端配置文件里的 server-port），不再读 config.localPort。
+    val serverPort by vm.serverPort.collectAsState()
     val followLocalPort = config.stunLocalPort <= 0
     Column {
         // 目标端口
@@ -970,11 +1224,11 @@ private fun StunConfigSection(vm: McViewModel, config: com.mineserve.mobile.data
             Checkbox(
                 checked = followLocalPort,
                 onCheckedChange = { follow ->
-                    vm.updateConfig { it.copy(stunLocalPort = if (follow) 0 else it.localPort) }
+                    vm.updateConfig { it.copy(stunLocalPort = if (follow) 0 else serverPort) }
                 }
             )
             Text(
-                stringResource(R.string.stun_follow_local_port, config.localPort),
+                stringResource(R.string.stun_follow_local_port, serverPort),
                 color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp
             )
         }
