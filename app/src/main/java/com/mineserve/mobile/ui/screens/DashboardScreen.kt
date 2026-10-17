@@ -103,6 +103,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.data.JavaRuntime
+import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.PhpVersion
@@ -877,7 +878,8 @@ private fun DashboardAddressCard(vm: McViewModel) {
     // 端口取真源（服务端配置文件里的 server-port），与「服务器配置」页和诊断同源。
     val localPort by vm.serverPort.collectAsState()
     val lanIp by vm.lanIp.collectAsState()
-    val tunnelState by vm.tunnelState.collectAsState()
+    val frpState by vm.frpState.collectAsState()
+    val stunState by vm.stunState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) { vm.refreshLanIp() }
     McCard(title = stringResource(R.string.s386), compact = true) {
@@ -896,17 +898,38 @@ private fun DashboardAddressCard(vm: McViewModel) {
                 Icon(Icons.Outlined.ContentCopy, stringResource(R.string.s388), tint = Indigo, modifier = Modifier.size(16.dp))
             }
         }
-        if (tunnelState.publicUrl.isNotBlank()) {
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.s389), color = Muted, fontSize = 10.sp)
-                    Text(tunnelState.publicUrl, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Indigo, maxLines = 1)
-                }
-                IconButton(onClick = { vm.copyTunnelUrl(context) }) {
-                    Icon(Icons.Outlined.ContentCopy, stringResource(R.string.s388), tint = Indigo, modifier = Modifier.size(16.dp))
-                }
-            }
+        // 两条通道各自的公网地址。
+        //
+        // 只显示聚合值是不够的：FRP 与 STUN 现在可以同时在跑，聚合值只能表达其中一条，
+        // 另一条的地址就永远看不到。所以这里按通道各来一行，谁在跑显示谁。
+        DashboardTunnelAddressRow(
+            label = stringResource(R.string.net_dash_frp_address),
+            url = frpState.publicUrl.takeIf { frpState.status == TunnelStatus.Running }.orEmpty(),
+            onCopy = { vm.copyPublicUrl(context, it) }
+        )
+        DashboardTunnelAddressRow(
+            label = stringResource(R.string.net_dash_stun_address),
+            url = stunState.publicUrl.takeIf { stunState.status == TunnelStatus.Running }.orEmpty(),
+            onCopy = { vm.copyPublicUrl(context, it) }
+        )
+    }
+}
+
+/**
+ * 概览页的一条隧道公网地址。地址为空（该通道没在跑）时整行不渲染 ——
+ * 停止后地址即失效，留在界面上会被当成可用地址发给玩家。
+ */
+@Composable
+private fun DashboardTunnelAddressRow(label: String, url: String, onCopy: (String) -> Unit) {
+    if (url.isBlank()) return
+    Spacer(Modifier.height(6.dp))
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(label, color = Muted, fontSize = 10.sp)
+            Text(url, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Indigo, maxLines = 1)
+        }
+        IconButton(onClick = { onCopy(url) }) {
+            Icon(Icons.Outlined.ContentCopy, stringResource(R.string.s388), tint = Indigo, modifier = Modifier.size(16.dp))
         }
     }
 }

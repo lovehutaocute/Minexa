@@ -182,7 +182,6 @@
     <string name="s386">服务器地址</string>
     <string name="s387">局域网</string>
     <string name="s388">复制</string>
-    <string name="s389">公网穿透</string>
     <string name="s390">已安装插件</string>
     <string name="s391">暂无已安装插件</string>
     <string name="s392">%1$s 个插件已安装</string>
@@ -369,66 +368,18 @@
     <string name="s590">局域网 IP</string>
     <string name="s591">刷新 IP</string>
     <string name="s592">端口</string>
-    <string name="s593">局域网连接地址</string>
     <string name="s594">在 Minecraft Java 版「多人游戏」→「直接连接」中粘贴即可加入（仅同局域网）</string>
-    <string name="s595">本地端口</string>
-    <string name="s596">Minecraft 服务器监听端口，默认 25565</string>
-    <string name="s597">内网穿透配置</string>
-    <string name="s598">穿透类型</string>
     <string name="s599">frpc.toml 配置</string>
     <string name="s600">粘贴完整 frpc.toml 内容...</string>
     <string name="s601">粘贴完整的 frpc.toml 配置文本，或从文件管理器导入</string>
-    <string name="s602">bore 服务端地址</string>
-    <string name="s603">例如: your-vps.com:7835</string>
-    <string name="s604">bore 是纯手机端运行的轻量隧道，无需下载额外程序。在 VPS 上运行 bore server 即可。</string>
-    <string name="s605">内网穿透状态</string>
-    <string name="s606">运行中</string>
-    <string name="s607">已停止（%1$s）</string>
-    <string name="s608">已停止</string>
-    <string name="s609">未启动</string>
-    <string name="s610">公网连接地址</string>
-    <string name="s611">隧道已断开，上次地址</string>
-    <string name="s612">复制公网地址</string>
-    <string name="s613">将此地址分享给玩家，在 Minecraft「直接连接」中粘贴即可</string>
-    <string name="s614">重新启动隧道获取新地址</string>
-    <string name="s615">启动穿透</string>
-    <string name="s616">隧道日志</string>
-    <string name="s617">查看全部日志 (%1$s 条)</string>
     <string name="s618">隧道日志 (%1$s 条)</string>
     <string name="s619">暂无隧道日志</string>
     <string name="s620">关闭</string>
     <string name="s621">操作指南</string>
     <string name="s622">点击%1$s详细配置指引</string>
     <string name="s623">展开</string>
-    <string name="s624">frp 使用教程（自建服务器）</string>
-    <string name="s625">💡 不想自建服务器？页面下方「免费 FRP 平台」卡片提供 OpenFrp / ChmlFrp / StarryFrp / SakuraFrp 等免费 frp 服务：注册账号后，把平台分配的节点地址、端口与 Token 填入上方 frpc.toml 配置，点「启动穿透」即可。</string>
-    <string name="s626">啥是 frp？</string>
-    <string name="s627">简单说就是打个「隧道」：你的手机通过 frp 连到一台有公网 IP 的服务器，别人访问那台服务器就能连到你的手机。就像在墙上凿了个洞，外面的人通过洞就能看到里面的东西。</string>
-    <string name="s628">你需要一台云服务器</string>
-    <string name="s629">去阿里云、腾讯云或 Oracle Cloud（有免费的 ARM 实例）租一台云服务器，最便宜的就够用。关键是要有「公网 IP」。</string>
-    <string name="s630">在服务器上装 frp 服务端</string>
-    <string name="s631" formatted="false">登录服务器后，去 GitHub 搜 fatedier/frp，下载对应版本，解压后编辑 frps.toml 文件：\nbindPort = 7000\nauth.method = "token"\nauth.token = "随便设个密码"\n然后运行 ./frps -c frps.toml 启动服务端。</string>
-    <string name="s633">在手机上填配置</string>
-    <string name="s634">把服务器的公网 IP 填到上面「frp 服务端地址」，端口填 7000，Token 填你刚才设的密码（要跟服务端一模一样）。</string>
-    <string name="s635">点启动就行</string>
-    <string name="s636">点上面的「启动穿透」按钮，程序会自动帮你装好 frp 客户端并连接服务器。首次会通过 apt 自动安装，稍等一会儿。</string>
-    <string name="s637">告诉朋友怎么连</string>
-    <string name="s638">启动成功后，把服务器公网 IP 和端口（默认 25565）告诉朋友，在 Minecraft「多人游戏」→「直接连接」里输入 IP:25565 就能进来了。</string>
-    <string name="s639">别忘了开端口</string>
-    <string name="s640">服务器的防火墙要放行 7000（frp 通信用）和 25565（MC 用）两个端口，不然连不上。建议设 Token 密码防别人乱连。</string>
-    <string name="s641">bore 使用教程（纯手机端运行）</string>
-    <string name="s642">bore 是啥？</string>
-    <string name="s643">bore 是一个极简的 TCP 隧道工具，协议超级简单只有 3 种消息。手机端直接用纯 Kotlin 实现，无需下载任何程序，秒启动。</string>
-    <string name="s644">跟 frp 一样，需要一台有公网 IP 的 VPS。去 GitHub 搜 ekzhang/bore，下载 bore 二进制，在服务器上运行：./bore server</string>
-    <string name="s645">填服务端地址</string>
-    <string name="s646">把服务器的 IP 和端口（默认 7835）填到上面的输入框，格式如 your-vps.com:7835。</string>
-    <string name="s647">点「启动穿透」按钮，程序直接用手机网络连接 bore 服务端。不需要 Termux，不需要下载，启动只需几秒。</string>
-    <string name="s648">把地址给朋友</string>
-    <string name="s649">启动后状态卡片显示公网地址（serverIP:端口），复制发给朋友在 MC 直接连接粘贴即可。</string>
-    <string name="s650">优点和限制</string>
-    <string name="s651">优点：极轻量（~300 行代码），秒启动。限制：仅 TCP，需自建服务器。适合追求低延迟和轻量体验的用户。</string>
     <string name="s654">免费 FRP 平台</string>
-    <string name="s655">不想自建服务器？以下免费 frp 平台注册后即可使用：把平台提供的节点地址、端口与 Token 填入上方 frpc.toml 配置即可启动。</string>
+    <string name="s655">不想自建服务器？以下平台注册后即可使用：点上方「创建 FRP 配置」，选对应平台并填入访问令牌即可。</string>
     <string name="s656">打开官网</string>
     <string name="s657">在线玩家</string>
     <string name="s658">OP 列表</string>
@@ -1458,16 +1409,6 @@
     <string name="ftp_port_lock">端口修改需先停止服务</string>
     <string name="ftp_port_invalid">端口需在 1024–65535 之间</string>
     <string name="ftp_security_note">安全提示：FTP 为明文协议且匿名访问无鉴权，请仅在可信局域网内开启，用完及时停止；保持应用后台（保活服务）可维持 FTP 可访问。</string>
-    <!-- SakuraFrp 指南 -->
-    <string name="sakura_guide_title">SakuraFrp 使用说明</string>
-    <string name="sakura_guide_1_t">获取 Token</string>
-    <string name="sakura_guide_1_d">登录 natfrp.com → 用户面板 → 复制访问令牌（Token）</string>
-    <string name="sakura_guide_2_t">拉取隧道</string>
-    <string name="sakura_guide_2_d">在上方填入 Token 并点击「拉取隧道列表」</string>
-    <string name="sakura_guide_3_t">选中隧道</string>
-    <string name="sakura_guide_3_d">在列表中点选一条指向本机 MC 端口的隧道（也可点「创建隧道」新建）</string>
-    <string name="sakura_guide_4_t">启动隧道</string>
-    <string name="sakura_guide_4_d">点击「启动隧道」，应用会自动拉取官方配置并启动 frpc</string>
 
     <!-- ③ 下载核心重名拦截 -->
     <string name="dl_duplicate_name">已存在同名服务器「%1$s」，请换一个名称（同名会导致列表无法区分，且容易误操作覆盖同一目录）。</string>
@@ -1558,7 +1499,6 @@
 
     <!-- 区间校验提示 -->
     <string name="set_max_heap_range_hint">内存上限需在 256–65536 MB 之间，已自动调整。</string>
-    <string name="net_local_port_range_hint">端口需在 1024–65535 之间，已自动调整。</string>
     <string name="fm_new_dir_invalid_name">名称不能包含斜杠、反斜杠或 .. ，且首尾不能为空白。</string>
 
     <!-- FTP：匿名访问风险提示 -->
@@ -1598,9 +1538,6 @@
 
     <!-- ── 网络映射页重排（参考 EdgeCube 网络映射页的信息组织） ──
          状态胶囊、连接与流量统计、日志条数、前提提示条。 -->
-    <string name="net_section_status">连接与穿透状态</string>
-    <string name="net_section_method">穿透方式</string>
-    <string name="net_section_config">穿透配置</string>
     <string name="net_section_log">穿透日志</string>
     <string name="net_status_running">运行中</string>
     <string name="net_status_starting">启动中</string>
@@ -1608,9 +1545,6 @@
     <string name="net_status_stopped">已停止</string>
     <string name="net_status_idle">未启动</string>
     <string name="net_stats_connections">转发连接：%1$d</string>
-    <string name="net_stats_speed">实时速率 ↑ %1$s ↓ %2$s</string>
-    <string name="net_stats_traffic">累计流量 ↑ %1$s ↓ %2$s</string>
-    <string name="net_stats_no_traffic">当前方式不上报连接数与流量统计</string>
     <string name="net_log_connection">连接日志</string>
     <string name="net_log_connection_hint">本方式暂不单独上报连接日志，可在上方隧道日志中查看运行输出</string>
     <string name="net_log_expand">展开全部日志</string>
@@ -1627,30 +1561,14 @@
     <string name="stun_servers">自定义 STUN 服务器</string>
     <string name="stun_servers_hint">每行一条，如 stun.example.com 或 stun.example.com:3478</string>
     <string name="stun_servers_note">留空使用内置列表（均已验证支持 TCP 3478）。注意：仅支持 UDP 的 STUN 服务器对本功能无效。</string>
-    <string name="stun_config_moved">STUN 的目标端口、保活间隔、并发上限等配置已移至上方「STUN 直连」卡片。</string>
 
     <!-- STUN 直连独立卡片 -->
     <string name="stun_card_title">STUN 直连</string>
-    <string name="stun_card_not_selected">当前穿透方式为「%1$s」。STUN 直连只能在自己被选中时启动。</string>
-    <string name="stun_card_switch">切换为 STUN 直连</string>
     <string name="stun_card_address">公网直连地址</string>
     <string name="stun_card_address_hint">该地址由运营商分配，断线重连或换网后会失效。</string>
     <string name="stun_card_address_drift">公网地址已变化 %1$d 次：端口会随每次重建而改变，需要重新把新地址发给玩家。</string>
     <string name="stun_card_start">启动 STUN</string>
     <string name="stun_card_stop">停止</string>
-    <string name="stun_verdict_unknown_t">尚未探测</string>
-    <string name="stun_verdict_unknown_d">启动隧道后会在这里给出 NAT 判定与公网地址。</string>
-    <string name="stun_verdict_public">全锥形 NAT（NAT1）· 地址可被外网访问</string>
-    <string name="stun_verdict_non_public">地址不可用（内网 / CGNAT）</string>
-    <string name="stun_verdict_unreachable">STUN 直连不可用</string>
-    <string name="stun_verdict_bind_failed">已取到映射，但无法监听该端口</string>
-    <string name="stun_fail_unreachable">全部 STUN 服务器都连接不上，请检查网络后重试。</string>
-    <string name="stun_fail_no_response">服务器 TCP 可达但均无响应，多为只支持 UDP 的服务器，请更换自定义服务器。</string>
-    <string name="stun_fail_server_rejected">服务器拒绝了请求，请更换自定义服务器。</string>
-    <string name="stun_fail_no_mapping">服务器未返回可用的映射地址，请更换自定义服务器。</string>
-    <string name="stun_fail_non_public">运营商分配的是内网 / CGNAT 地址，外网无法访问，请改用 frp 或平台隧道。</string>
-    <string name="stun_fail_bind">映射端口被占用或不可绑定，请稍后重试。</string>
-    <string name="stun_stat_probe">探测耗时 %1$d ms（%2$d 台尝试 / %3$d 台连通）</string>
     <string name="stun_stat_conn">当前连接 %1$d</string>
     <string name="stun_stat_idle">已回收空连接 %1$d（连上后未发数据）</string>
     <string name="stun_stat_limit">已达并发上限被拒 %1$d</string>
@@ -1658,16 +1576,6 @@
     <string name="stun_advanced_hide">收起设置</string>
     <string name="net_log_empty">暂无隧道日志，点「启动穿透」后这里会出现运行输出</string>
     <!-- STUN 直连 -->
-    <string name="stun_guide_title">STUN 直连使用指南</string>
-    <string name="stun_guide_1_t">先看网络类型</string>
-    <string name="stun_guide_1_d">本方式靠 NAT 打洞，只在「全锥形 NAT（NAT1）」下成立。多数家庭宽带是这种；手机流量、公司/校园网、CGNAT 通常不行，启动后若反复探测失败请改用 frp 或平台隧道。</string>
-    <string name="stun_guide_2_t">保持服务器运行</string>
-    <string name="stun_guide_2_d">先在概览页启动 MC 服务端，再回本页点「启动穿透」。隧道只是把公网流量转到本机端口，服务端没开就没人接。</string>
-    <string name="stun_guide_3_t">把地址发给玩家</string>
-    <string name="stun_guide_3_d">探测成功后上方会显示公网直连地址，点复制按钮发给朋友即可。该地址由运营商分配，重连或换网后会变。</string>
-    <string name="stun_guide_4_t">按需调优</string>
-    <string name="stun_guide_4_d">玩家进服显示 127.0.0.1 时，可开「PROXY protocol」——但服务端必须先开对应支持，否则玩家会连不进来。并发上限与保活间隔一般不用改。</string>
-    <string name="net_method_hint">四种方式都支持 MC 的 TCP 协议；自建方式（frp / bore）带宽与稳定性取决于你选的服务器，托管平台（SakuraFrp / ME Frp）免自建但受平台限速</string>
     <string name="frpc_engine_title">frpc 引擎</string>
     <string name="frpc_engine_hint">frp 系隧道（frp / SakuraFrp / ME Frp）共用一份内置引擎，运行时不依赖 Termux 或任何外部环境。首次使用需导入一次 libfrpc.so（arm64 版），导入后长期有效。</string>
     <string name="frpc_engine_installed">已安装</string>
@@ -1682,4 +1590,77 @@
     <string name="frpc_engine_where">引擎可从 frp 官方仓库获取：用 Go 编译 `cmd/frpclib` 为 c-shared 动态库（`-buildmode=c-shared`），产物即为 libfrpc.so。</string>
     <string name="net_tunnel_server_stopped">服务端未运行：请先在概览页启动服务端，再点「启动穿透」，否则玩家连上公网地址也进不去</string>
     <string name="net_public_url_unknown">无法显示公网地址，请前往 FRP 平台查看公网地址。</string>
+
+    <!-- ── 网络页重构：FRP / STUN 两张独立卡片 + FRP 多配置 ────────── -->
+
+    <!-- FRP 卡片 -->
+    <string name="net_frp_card_title">FRP</string>
+    <string name="net_frp_profile_label">当前配置</string>
+    <string name="net_frp_no_profile">还没有 FRP 配置。先创建一份，再启动。</string>
+    <string name="net_frp_create">创建 FRP 配置</string>
+    <string name="msg_frp_profile_required">请先在 FRP 卡片里创建并选中一份配置</string>
+    <string name="net_frp_switch_hint">点击切换 FRP 配置</string>
+    <string name="net_frp_address">公网地址</string>
+    <string name="net_frp_start">启动 FRP</string>
+    <string name="net_frp_stop">停止</string>
+    <string name="net_frp_dialog_title">选择 FRP 配置</string>
+    <string name="net_frp_dialog_edit">编辑</string>
+    <string name="net_frp_dialog_delete">删除</string>
+    <string name="net_frp_delete_title">删除配置</string>
+    <string name="net_frp_delete_message">确定删除「%1$s」？该操作不可撤销。</string>
+
+    <!-- FRP 配置编辑页 -->
+    <string name="net_frp_edit_title_new">新建 FRP 配置</string>
+    <string name="net_frp_edit_title_edit">编辑 FRP 配置</string>
+    <string name="net_frp_edit_name">配置名称</string>
+    <string name="net_frp_edit_name_hint">用来区分多份配置，例如「家里的服务器」</string>
+    <string name="net_frp_edit_name_dup">已有同名配置，建议换个名字</string>
+    <string name="net_frp_edit_kind">配置类型</string>
+    <string name="net_frp_edit_kind_toml">自建 frp</string>
+    <string name="net_frp_edit_kind_sakura">SakuraFrp</string>
+    <string name="net_frp_edit_kind_me">ME Frp</string>
+    <string name="net_frp_edit_section_basic">名称与类型</string>
+    <string name="net_frp_edit_toml_note">配置里的 remotePort 就是玩家连接的端口；localPort 请填服务端端口（%1$d）。</string>
+    <string name="net_frp_edit_token">访问令牌（Token）</string>
+    <string name="net_frp_edit_token_hint_sakura">在 natfrp.com 用户面板获取</string>
+    <string name="net_frp_edit_token_hint_me">在 mefrp.com 用户中心复制</string>
+    <string name="net_frp_edit_fetch">拉取隧道列表</string>
+    <string name="net_frp_edit_create_tunnel">创建隧道</string>
+    <string name="net_frp_edit_empty_sakura">暂无隧道，点「创建隧道」新建；启动前需在列表中选中一条</string>
+    <string name="net_frp_edit_empty_me">暂无隧道。请先在 mefrp.com 网站创建一条 TCP 隧道（本地地址 127.0.0.1，本地端口填服务器端口），再回到这里拉取。</string>
+    <string name="net_frp_edit_account">账号：%1$s（%2$s）· 隧道 %3$s</string>
+    <string name="net_frp_edit_selected">（已选）</string>
+    <string name="net_frp_edit_save">保存</string>
+    <string name="net_frp_edit_delete">删除此配置</string>
+    <string name="net_frp_edit_sakura_title">创建 SakuraFrp 隧道</string>
+    <string name="net_frp_edit_sakura_node">节点</string>
+    <string name="net_frp_edit_sakura_node_pick">请选择节点</string>
+    <string name="net_frp_edit_sakura_node_empty">节点列表为空：请先关闭弹窗后重新点「创建隧道」以拉取节点</string>
+    <string name="net_frp_edit_sakura_name">隧道名称</string>
+    <string name="net_frp_edit_sakura_port">本地端口（MC 服务器端口）</string>
+    <string name="net_frp_edit_sakura_create">创建</string>
+    <string name="net_frp_edit_sakura_offline"> · 离线</string>
+
+    <!-- STUN 卡片补充 -->
+    <string name="net_stun_ip_warning">这会暴露你的家庭 IP；一般优先用 FRP。</string>
+    <string name="net_stun_idle_hint">启动后会在这里显示公网地址。</string>
+
+    <!-- 操作指南（重写） -->
+    <string name="net_guide_intro">本页有两条相互独立的通道：FRP 与 STUN，各自有启动/停止按钮，可以同时运行。</string>
+    <string name="net_guide_frp_t">创建 FRP 配置</string>
+    <string name="net_guide_frp_d">点 FRP 卡片上的「创建 FRP 配置」，选一种方式：自建 frp 填 frpc.toml；SakuraFrp / ME Frp 填访问令牌后拉取隧道列表并选中一条。填好名称再保存。</string>
+    <string name="net_guide_switch_t">切换 FRP 配置</string>
+    <string name="net_guide_switch_d">点击 FRP 卡片上的配置名称会弹出配置窗口：点任意一条即选中并自动关闭，然后点「启动 FRP」。窗口里也能创建新配置、编辑或删除已有配置。</string>
+    <string name="net_guide_frp_run_t">启动 FRP 并查看公网地址</string>
+    <string name="net_guide_frp_run_d">点「启动 FRP」。运行中会显示公网地址，点复制按钮发给玩家。没启动时不显示地址，避免把已失效的地址发出去。</string>
+    <string name="net_guide_stun_t">启动 STUN 直连</string>
+    <string name="net_guide_stun_d">STUN 不需要服务器，但它会把你的家庭 IP 直接暴露给玩家，且多数家庭宽带（运营商未分配公网地址）用不了。一般优先用 FRP。</string>
+    <string name="net_guide_both_t">两条通道同时运行</string>
+    <string name="net_guide_both_d">FRP 与 STUN 可以同时启动、互不影响，相当于给玩家准备了两个入口。注意：FRP 类（自建 frp / SakuraFrp / ME Frp）共用同一个引擎进程，同一时刻只能跑一个。</string>
+    <string name="net_guide_stop_t">停止</string>
+    <string name="net_guide_stop_d">各自的「停止」按钮只关掉自己那条通道，不会影响另一条。</string>
+
+    <!-- 概览页：两条通道的地址各显示一行 -->
+    <string name="net_dash_frp_address">FRP 公网地址</string>
+    <string name="net_dash_stun_address">STUN 公网地址</string>
 </resources>

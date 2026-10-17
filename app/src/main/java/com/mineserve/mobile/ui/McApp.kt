@@ -41,6 +41,7 @@ import com.mineserve.mobile.ui.screens.KeepAliveScreen
 import com.mineserve.mobile.ui.screens.MtGuideScreen
 import com.mineserve.mobile.ui.screens.OpLevelGuideScreen
 import com.mineserve.mobile.ui.screens.LogsScreen
+import com.mineserve.mobile.ui.screens.FrpProfileEditorScreen
 import com.mineserve.mobile.ui.screens.NetworkScreen
 import com.mineserve.mobile.ui.screens.PlayersScreen
 import com.mineserve.mobile.ui.screens.PluginsScreen
@@ -65,7 +66,7 @@ import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.Muted
 
 /** 子页面类型（从设置页进入的二级页面） */
-enum class SubPage { Properties, Network, Backup, WorldManage, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, More }
+enum class SubPage { Properties, Network, Backup, WorldManage, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, FrpProfileEditor, More }
 
 /**
  * 应用根布局：底部 6 Tab；概览页可跳转日志页；设置页可跳转子页面
@@ -81,6 +82,10 @@ fun McApp() {
     var subPage by rememberSaveable { mutableStateOf<SubPage?>(null) }
     // 依赖与环境管理页的初始模块（0=Java 1=依赖 2=Termux）
     var envManagerTab by rememberSaveable { mutableStateOf(0) }
+    // FRP 配置编辑页要编辑哪一份配置（"" 表示新建）。
+    // 单独存一个变量而不是做成带参的 SubPage：SubPage 是 enum，
+    // 而编辑目标是个可变 id，两者拆开更清楚。
+    var editFrpProfileId by rememberSaveable { mutableStateOf("") }
 
     // 把 Activity 的前台/后台状态显式推给 VM。
     // 各页面用 collectAsState（非生命周期感知）订阅日志流：Activity 停止后 Compose 组合不销毁、
@@ -109,6 +114,9 @@ fun McApp() {
     BackHandler {
         when {
             showLogs -> showLogs = false
+            // FRP 配置编辑页是从网络页点进来的：返回必须回到网络页，
+            // 否则会把用户直接甩回上一个 Tab，丢失「刚才是从哪进来的」这个上下文。
+            subPage == SubPage.FrpProfileEditor -> subPage = SubPage.Network
             subPage != null -> subPage = null
             tab != McTab.Dashboard -> {
                 tab = McTab.Dashboard
@@ -143,7 +151,7 @@ fun McApp() {
                     )
                 }
                 NavigationBarItem(
-                    selected = subPage in setOf(SubPage.More, SubPage.Network, SubPage.Backup, SubPage.Diagnostics, SubPage.KeepAlive, SubPage.DownloadHelp, SubPage.MtGuide, SubPage.OpLevelGuide, SubPage.WidgetSettings, SubPage.Mcp, SubPage.EnvManager, SubPage.Ftp),
+                    selected = subPage in setOf(SubPage.More, SubPage.Network, SubPage.FrpProfileEditor, SubPage.Backup, SubPage.Diagnostics, SubPage.KeepAlive, SubPage.DownloadHelp, SubPage.MtGuide, SubPage.OpLevelGuide, SubPage.WidgetSettings, SubPage.Mcp, SubPage.EnvManager, SubPage.Ftp),
                     onClick = { subPage = SubPage.More; showLogs = false },
                     icon = { Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.mcapp_more)) },
                     label = { Text(stringResource(R.string.mcapp_more), fontSize = 10.sp) },
@@ -164,7 +172,19 @@ fun McApp() {
                 page.second != null -> {
                     when (page.second) {
                         SubPage.Properties -> PropertiesScreen(vm = vm, onBack = { subPage = null })
-                        SubPage.Network -> NetworkScreen(vm = vm, onBack = { subPage = null })
+                        SubPage.Network -> NetworkScreen(
+                            vm = vm,
+                            onBack = { subPage = null },
+                            onOpenFrpEditor = { id ->
+                                editFrpProfileId = id.orEmpty()
+                                subPage = SubPage.FrpProfileEditor
+                            }
+                        )
+                        SubPage.FrpProfileEditor -> FrpProfileEditorScreen(
+                            vm = vm,
+                            profileId = editFrpProfileId.ifBlank { null },
+                            onBack = { subPage = SubPage.Network }
+                        )
                         SubPage.Backup -> BackupScreen(vm = vm, onBack = { subPage = null })
                         SubPage.WorldManage -> WorldsScreen(vm = vm, onBack = { subPage = null })
                         SubPage.DownloadHelp -> DownloadHelpScreen(vm = vm, onBack = { subPage = null })

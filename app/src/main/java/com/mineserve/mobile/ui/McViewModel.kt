@@ -30,7 +30,8 @@ import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.NativeLibraryBundler
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
-import com.mineserve.mobile.data.TunnelType
+import com.mineserve.mobile.data.FrpProfile
+import com.mineserve.mobile.data.FrpProfiles
 import com.mineserve.mobile.data.DiagnosticCheck
 import com.mineserve.mobile.data.DiagnosticReport
 import com.mineserve.mobile.data.DiagnosticStatus
@@ -541,12 +542,22 @@ class McViewModel(
     /** 局域网 IP（IPv4，非 loopback），用于 Network Tab 展示和一键复制 */
     private val _lanIp = MutableStateFlow("--")
     val lanIp: StateFlow<String> = _lanIp.asStateFlow()
-    /** 隧道运行状态，UI 层订阅展示 */
+    /**
+     * 聚合隧道状态（两条通道取其一），保留给不区分通道的地方。
+     * 网络页**不要**用它 —— 两张卡片各自订阅 [frpState] / [stunState]，
+     * 聚合值无法表达「两条同时在跑」。
+     */
     val tunnelState: StateFlow<TunnelState> = tunnelManager.state
 
+    /** FRP 通道状态（frp / SakuraFrp / ME Frp 共用同一通道）。 */
+    val frpState: StateFlow<TunnelState> = tunnelManager.frpState
+
+    /** STUN 通道状态。与 FRP 相互独立，可同时运行。 */
+    val stunState: StateFlow<TunnelState> = tunnelManager.stunState
+
     /**
-     * STUN 直连专属诊断：NAT 判定 / 公网地址 / 探测耗时 / 空连接回收计数。
-     * 通用 [tunnelState] 要给五种后端共用，NAT 判定只对 STUN 有意义，故分开放。
+     * STUN 直连专属诊断：公网地址、探测耗时、空连接回收计数。
+     * 通用状态要与多种后端共用，这些只对 STUN 有意义，故分开放。
      */
     val stunDiagnostics: StateFlow<StunDiagnostics> = tunnelManager.stunDiagnostics
 
@@ -2138,7 +2149,6 @@ class McViewModel(
 
     fun setLocalPort(port: Int) = updateConfig { it.copy(localPort = port) }
     fun setDomain(d: String) = updateConfig { it.copy(customDomain = d) }
-    fun setTunnelType(type: TunnelType) = updateConfig { it.copy(tunnelType = type) }
     fun setMaxHeap(mb: Int) = updateConfig { it.copy(maxHeapMb = mb) }
     fun setAutoRestart(v: Boolean) = updateConfig { it.copy(autoRestartOnCrash = v) }
 
@@ -2350,46 +2360,84 @@ class McViewModel(
     }
 
     // ── 内网穿透 ──────────────────────────────────────────────
+    //
+    // FRP 与 STUN 是两条相互独立的通道（见 TunnelLane）：各自启停、可同时运行。
+    // 因此这里没有「统一的一键启动」，而是四条分开的入口。
 
-    fun startTunnel() {
+    // ── FRP 配置（可保存多份，同一平台也可存多个令牌） ────────
+
+    /** 新增或就地更新一份 FRP 配置（按 id 判定是新增还是编辑）。 */
+    fun saveFrpProfile(profile: FrpProfile) {
+        updateConfig { cfg ->
+            val exists = cfg.frpProfiles.any { it.id == profile.id }
+            val list = if (exists) {
+                cfg.frpProfiles.map { if (it.id == profile.id) profile else it }
+            } else {
+                cfg.frpProfiles + profile
+            }
+            cfg.copy(
+                frpProfiles = list,
+                // 第一份配置自动成为当前配置：省掉「存完还得自己再选一次」这一步。
+                activeFrpProfileId = cfg.activeFrpProfileId.ifBlank { profile.id }
+            )
+        }
+    }
+
+    /** 删除一份 FRP 配置；删的正好是当前配置时自动切到剩下的第一份。 */
+    fun deleteFrpProfile(id: String) {
+        updateConfig { cfg ->
+            val left = cfg.frpProfiles.filterNot { it.id == id }
+            cfg.copy(
+                frpProfiles = left,
+                activeFrpProfileId =
+                    if (cfg.activeFrpProfileId == id) left.firstOrNull()?.id.orEmpty()
+                    else cfg.activeFrpProfileId
+            )
+        }
+    }
+
+    /** 切换当前 FRP 配置。 */
+    fun setActiveFrpProfile(id: String) = updateConfig { it.copy(activeFrpProfileId = id) }
+
+    /** 当前生效的 FRP 配置；列表为空时返回 null。 */
+    fun activeFrpProfile(): FrpProfile? = FrpProfiles.active(config.value)
+
+    // ── 启停 ─────────────────────────────────────────────────
+
+    fun startFrp() {
         if (!isBootstrapped.value) {
             _errorFlow.tryEmit(str(R.string.s192))
             return
         }
-        if (tunnelState.value.status == TunnelStatus.Starting) {
+        if (frpState.value.status == TunnelStatus.Starting) {
             _errorFlow.tryEmit(str(R.string.s200))
+            return
+        }
+        val cfg = config.value
+        val profile = FrpProfiles.active(cfg)
+        if (profile == null) {
+            _errorFlow.tryEmit(str(R.string.msg_frp_profile_required))
+            return
+        }
+        FrpProfiles.validationError(profile)?.let {
+            _errorFlow.tryEmit(it)
             return
         }
         viewModelScope.launch {
             try {
-                tunnelManager.start(config.value)
-                // 注意：STUN 等后端的 start() 是**异步就绪**的——它立即返回，
-                // 实际探测在后台进行，就绪/失败稍后经 tunnelState 反映。
-                // 因此这里只能提示「正在启动」，不能按 Running 判定成功，
-                // 否则网络慢时会误报失败。结果由界面观察 tunnelState 得出。
-                val st = tunnelState.value
-                when (st.status) {
-                    TunnelStatus.Running -> {
-                        val url = st.publicUrl
-                        _messageFlow.tryEmit(
-                            if (url.isNotBlank()) str(R.string.msg_tunnel_started_url, url)
-                            else str(R.string.msg_tunnel_started)
-                        )
-                    }
-                    TunnelStatus.Starting -> _messageFlow.tryEmit(str(R.string.s203))
-                    TunnelStatus.Failed -> _errorFlow.tryEmit(str(R.string.s204, st.errorMessage))
-                    else -> _messageFlow.tryEmit(str(R.string.s205))
-                }
+                // 投影：把选中的配置摊进后端认识的老字段，后端一行都不用改。
+                tunnelManager.startFrp(FrpProfiles.applyTo(profile, cfg))
+                reportStart(frpState.value)
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s206, e.message))
             }
         }
     }
 
-    fun stopTunnel() {
+    fun stopFrp() {
         viewModelScope.launch {
             try {
-                tunnelManager.stop()
+                tunnelManager.stopFrp()
                 _messageFlow.tryEmit(str(R.string.s207))
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s208, e.message))
@@ -2397,8 +2445,63 @@ class McViewModel(
         }
     }
 
-    fun copyTunnelUrl(context: android.content.Context) {
-        val url = tunnelState.value.publicUrl
+    fun startStun() {
+        if (!isBootstrapped.value) {
+            _errorFlow.tryEmit(str(R.string.s192))
+            return
+        }
+        if (stunState.value.status == TunnelStatus.Starting) {
+            _errorFlow.tryEmit(str(R.string.s200))
+            return
+        }
+        viewModelScope.launch {
+            try {
+                // 端口真源：StunTunnelBackend 默认取 config.localPort（镜像字段），
+                // 这里显式覆盖成真源 serverPort。否则配置文件被外部改动后，
+                // STUN 会把玩家流量转到服务端并未监听的旧端口。
+                tunnelManager.startStun(config.value.copy(localPort = serverPort.value))
+                reportStart(stunState.value)
+            } catch (e: Exception) {
+                _errorFlow.tryEmit(str(R.string.s206, e.message))
+            }
+        }
+    }
+
+    fun stopStun() {
+        viewModelScope.launch {
+            try {
+                tunnelManager.stopStun()
+                _messageFlow.tryEmit(str(R.string.s207))
+            } catch (e: Exception) {
+                _errorFlow.tryEmit(str(R.string.s208, e.message))
+            }
+        }
+    }
+
+    /**
+     * 启动调用返回后的统一提示。
+     *
+     * 注意：STUN 后端的 start() 是**异步就绪**的 —— 它立即返回，实际探测在后台
+     * 进行，就绪/失败稍后经状态流反映。所以这里只能提示「正在启动」，
+     * 不能按 Running 判定成功，否则网络慢时会误报失败。结果由界面观察状态流得出。
+     */
+    private fun reportStart(st: TunnelState) {
+        when (st.status) {
+            TunnelStatus.Running -> {
+                val url = st.publicUrl
+                _messageFlow.tryEmit(
+                    if (url.isNotBlank()) str(R.string.msg_tunnel_started_url, url)
+                    else str(R.string.msg_tunnel_started)
+                )
+            }
+            TunnelStatus.Starting -> _messageFlow.tryEmit(str(R.string.s203))
+            TunnelStatus.Failed -> _errorFlow.tryEmit(str(R.string.s204, st.errorMessage))
+            else -> _messageFlow.tryEmit(str(R.string.s205))
+        }
+    }
+
+    /** 复制任意公网地址（FRP 与 STUN 卡片各自传入自己那条通道的地址）。 */
+    fun copyPublicUrl(context: android.content.Context, url: String) {
         if (url.isBlank()) {
             _errorFlow.tryEmit(str(R.string.s209))
             return

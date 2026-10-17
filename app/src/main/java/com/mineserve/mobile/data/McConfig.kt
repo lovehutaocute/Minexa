@@ -541,11 +541,19 @@ data class McConfig(
     val localPort: Int = 25565,
     val customDomain: String = "myworld.mcserver.top",
     val tunnelType: TunnelType = TunnelType.Frp,
-    /** frp: 完整 frpc.toml 配置文本（粘贴或文件导入） */
+    /**
+     * frp: 完整 frpc.toml 配置文本。
+     *
+     * 界面不再直接编辑它 —— 值由当前 FRP 配置经 [FrpProfiles.applyTo] 投影而来，
+     * 最终仍由 `FrpBackend` 读取，所以字段本身不允许删除。
+     */
     val frpConfigText: String = "",
     /** bore: 服务端地址 (serverAddr:port) */
     val boreServerAddr: String = "",
-    /** SakuraFrp: 访问令牌（api.natfrp.com） */
+    /**
+     * SakuraFrp: 访问令牌（api.natfrp.com）。
+     * 与 [frpConfigText] 同理，是 [FrpProfile] 的投影目标，不是编辑入口。
+     */
     val sakuraToken: String = "",
     /** SakuraFrp: 选中的隧道 ID（启动时据此拉取官方配置） */
     val sakuraTunnelId: String = "",
@@ -553,6 +561,23 @@ data class McConfig(
     val meFrpToken: String = "",
     /** ME Frp: 选中的隧道（代理）ID（启动时据此拉取官方配置） */
     val meFrpTunnelId: String = "",
+    /**
+     * 已保存的 FRP 配置列表（可多份，同一平台也可以存多个令牌）。
+     *
+     * 网络页的 FRP 卡片只认这个列表：选中的那份经 [FrpProfiles.applyTo] 投影到
+     * 上面的 `frpConfigText` / `sakura*` / `meFrp*` 老字段后才交给后端，
+     * 因此后端不需要知道「配置可以有多份」这件事。
+     *
+     * 默认空列表：老配置反序列化后自然为空，不会凭空多出一份配置。
+     */
+    val frpProfiles: List<FrpProfile> = emptyList(),
+    /**
+     * 当前选中的 FRP 配置 id（对应 [frpProfiles] 里的某项）。
+     *
+     * 指向的配置不存在时由 [FrpProfiles.active] 退回列表第一份，不在这里兜底 ——
+     * 否则「删掉当前配置」还得回头改这个字段，容易漏。
+     */
+    val activeFrpProfileId: String = "",
     /**
      * STUN: 转发目标本地端口；0 表示跟随 [localPort]（MC 服务端实际监听端口）。
      */

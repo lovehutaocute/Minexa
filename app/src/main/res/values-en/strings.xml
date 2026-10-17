@@ -181,7 +181,6 @@
     <string name="s386" formatted="false">Server Address</string>
     <string name="s387" formatted="false">LAN</string>
     <string name="s388" formatted="false">Copy</string>
-    <string name="s389" formatted="false">Public Network Tunnel</string>
     <string name="s390" formatted="false">Installed Plugins</string>
     <string name="s391" formatted="false">No installed plugins</string>
     <string name="s392" formatted="false">%1$s plugins installed</string>
@@ -368,66 +367,18 @@
     <string name="s590" formatted="false">LAN IP</string>
     <string name="s591" formatted="false">Refresh IP</string>
     <string name="s592" formatted="false">Port</string>
-    <string name="s593" formatted="false">LAN Connection Address</string>
     <string name="s594" formatted="false">Paste this in Minecraft Java Edition \"Multiplayer\" → \"Direct Connect\" to join (same LAN only)</string>
-    <string name="s595" formatted="false">Local port</string>
-    <string name="s596" formatted="false">Minecraft server listening port, default 25565</string>
-    <string name="s597" formatted="false">NAT Traversal Configuration</string>
-    <string name="s598" formatted="false">Traversal type</string>
     <string name="s599" formatted="false">frpc.toml configuration</string>
     <string name="s600" formatted="false">Paste complete frpc.toml content…</string>
     <string name="s601" formatted="false">Paste the complete frpc.toml configuration text, or import from file manager</string>
-    <string name="s602" formatted="false">bore server address</string>
-    <string name="s603" formatted="false">e.g. your-vps.com:7835</string>
-    <string name="s604" formatted="false">bore is a lightweight tunnel that runs purely on the phone, no need to download additional programs. Just run bore server on your VPS.</string>
-    <string name="s605" formatted="false">NAT Traversal Status</string>
-    <string name="s606" formatted="false">Running</string>
-    <string name="s607" formatted="false">Stopped (%1$s)</string>
-    <string name="s608" formatted="false">Stopped</string>
-    <string name="s609" formatted="false">Not started</string>
-    <string name="s610" formatted="false">Public Connection Address</string>
-    <string name="s611" formatted="false">Tunnel disconnected, last address</string>
-    <string name="s612" formatted="false">Copy Public Address</string>
-    <string name="s613" formatted="false">Share this address with players, paste it in Minecraft \"Direct Connect\" to join</string>
-    <string name="s614" formatted="false">Restart tunnel to get a new address</string>
-    <string name="s615" formatted="false">Start Traversal</string>
-    <string name="s616" formatted="false">Tunnel Log</string>
-    <string name="s617" formatted="false">View all logs (%1$s entries)</string>
     <string name="s618" formatted="false">Tunnel log (%1$s entries)</string>
     <string name="s619" formatted="false">No tunnel logs yet</string>
     <string name="s620" formatted="false">Close</string>
     <string name="s621" formatted="false">Operation Guide</string>
     <string name="s622" formatted="false">Tap %1$s for detailed configuration guide</string>
     <string name="s623" formatted="false">Expand</string>
-    <string name="s624" formatted="false">frp Tutorial (Self-hosted Server)</string>
-    <string name="s625" formatted="false">💡 Don\'t want to self-host? The \"Free FRP Platforms\" card below provides free frp services such as OpenFrp / ChmlFrp / StarryFrp / SakuraFrp: after registering an account, fill in the node address, port, and Token assigned by the platform into the frpc.toml configuration above, then tap \"Start Traversal\".</string>
-    <string name="s626" formatted="false">What is frp?</string>
-    <string name="s627" formatted="false">Simply put, it creates a \"tunnel\": your phone connects through frp to a server with a public IP, and others can access your phone by connecting to that server. It\'s like making a hole in the wall — people outside can see what\'s inside through the hole.</string>
-    <string name="s628" formatted="false">You need a cloud server</string>
-    <string name="s629" formatted="false">Rent a cloud server from Alibaba Cloud, Tencent Cloud, or Oracle Cloud (which offers free ARM instances). The cheapest one is enough — the key is having a \"public IP\".</string>
-    <string name="s630" formatted="false">Install frp server on your server</string>
-    <string name="s631" formatted="false">After logging into the server, search fatedier/frp on GitHub, download the corresponding version, extract it and edit the frps.toml file:\nbindPort = 7000\nauth.method = "token"\nauth.token = "Set any password"\nThen run ./frps -c frps.toml to start the server.</string>
-    <string name="s633" formatted="false">Fill in the configuration on your phone</string>
-    <string name="s634" formatted="false">Fill the server\'s public IP in \"frp server address\" above, port 7000, and the Token with the password you just set (must be identical to the server side).</string>
-    <string name="s635" formatted="false">Just tap Start</string>
-    <string name="s636" formatted="false">Tap the \"Start Traversal\" button above, and the program will automatically install the frp client and connect to the server. The first time it will be installed automatically via apt, please wait a moment.</string>
-    <string name="s637" formatted="false">Tell your friends how to connect</string>
-    <string name="s638" formatted="false">After successful startup, give your friends the server\'s public IP and port (default 25565). Enter IP:25565 in Minecraft \"Multiplayer\" → \"Direct Connect\" to join.</string>
-    <string name="s639" formatted="false">Don\'t forget to open ports</string>
-    <string name="s640" formatted="false">The server\'s firewall must allow ports 7000 (for frp communication) and 25565 (for MC), otherwise connections will fail. It\'s recommended to set a Token password to prevent unauthorized connections.</string>
-    <string name="s641" formatted="false">bore Tutorial (Runs Purely on Phone)</string>
-    <string name="s642" formatted="false">What is bore?</string>
-    <string name="s643" formatted="false">bore is a minimalist TCP tunneling tool with a super simple protocol of only 3 message types. The mobile client is implemented in pure Kotlin, requiring no downloads and starting in seconds.</string>
-    <string name="s644" formatted="false">Like frp, you need a VPS with a public IP. Search ekzhang/bore on GitHub, download the bore binary, and run on the server: ./bore server</string>
-    <string name="s645" formatted="false">Fill in the server address</string>
-    <string name="s646" formatted="false">Fill the server\'s IP and port (default 7835) in the input box above, in the format your-vps.com:7835.</string>
-    <string name="s647" formatted="false">Tap the \"Start Traversal\" button, and the program connects directly to the bore server using your phone\'s network. No Termux needed, no downloads, starts in seconds.</string>
-    <string name="s648" formatted="false">Share the address with friends</string>
-    <string name="s649" formatted="false">After startup, the status card shows the public address (serverIP:port). Copy it and send to friends to paste in MC Direct Connect.</string>
-    <string name="s650" formatted="false">Pros and limitations</string>
-    <string name="s651" formatted="false">Pros: Extremely lightweight (~300 lines of code), starts in seconds. Limitations: TCP only, requires self-hosted server. Suitable for users seeking low latency and a lightweight experience.</string>
     <string name="s654" formatted="false">Free FRP Platforms</string>
-    <string name="s655" formatted="false">Don\'t want to self-host? Register on any of the free frp platforms below to get started: fill in the node address, port, and Token provided by the platform into the frpc.toml configuration above to start.</string>
+    <string name="s655" formatted="false">Don\'t want to self-host? Register on any of the free frp platforms below: tap "Create FRP profile" above, pick the matching platform and enter your access token.</string>
     <string name="s656" formatted="false">Open official website</string>
     <string name="s657" formatted="false">Online Players</string>
     <string name="s658" formatted="false">OP List</string>
@@ -1067,16 +1018,6 @@
     <string name="ftp_port_lock">Stop the service before changing the port</string>
     <string name="ftp_port_invalid">Port must be between 1024 and 65535</string>
     <string name="ftp_security_note">Security note: FTP is plaintext and anonymous mode has no auth — use only on trusted LANs and stop it when done. Keep the app alive (keep-alive service) to maintain FTP access.</string>
-    <!-- SakuraFrp guide -->
-    <string name="sakura_guide_title">SakuraFrp guide</string>
-    <string name="sakura_guide_1_t">Get a token</string>
-    <string name="sakura_guide_1_d">Sign in at natfrp.com → user panel → copy the access token</string>
-    <string name="sakura_guide_2_t">Fetch tunnels</string>
-    <string name="sakura_guide_2_d">Enter the token above and tap "Fetch tunnel list"</string>
-    <string name="sakura_guide_3_t">Pick a tunnel</string>
-    <string name="sakura_guide_3_d">Select a tunnel pointing at the local MC port (or tap "Create tunnel" to make one)</string>
-    <string name="sakura_guide_4_t">Start the tunnel</string>
-    <string name="sakura_guide_4_d">Tap "Start tunnel" — the app fetches the official config and launches frpc</string>
     <string name="props_not_generated_title">Configuration not generated yet</string>
     <string name="props_not_generated_desc">server.properties is created automatically on the first server startup. There is nothing to edit yet.</string>
     <string name="props_not_generated_hint">Start the server once first, then come back to edit. This avoids mismatches between your manual settings and the server own defaults.</string>
@@ -1173,7 +1114,6 @@
 
     <!-- Range validation hints -->
     <string name="set_max_heap_range_hint">Max heap must be between 256 and 65536 MB. Adjusted automatically.</string>
-    <string name="net_local_port_range_hint">Port must be between 1024 and 65535. Adjusted automatically.</string>
     <string name="fm_new_dir_invalid_name">The name cannot contain slashes, backslashes or .., and cannot start or end with spaces.</string>
 
     <!-- FTP: anonymous access risk warning -->
@@ -1228,9 +1168,6 @@
     <string name="dash_stop_timeout_hint">The server is still shutting down. Tap "Force stop" to end it now (risk of losing unsaved data).</string>
 
     <!-- Network mapping page revamp (layout borrowed from EdgeCube's port mapping page) -->
-    <string name="net_section_status">Connection &amp; Tunnel Status</string>
-    <string name="net_section_method">Tunnel Method</string>
-    <string name="net_section_config">Tunnel Settings</string>
     <string name="net_section_log">Tunnel Log</string>
     <string name="net_status_running">Running</string>
     <string name="net_status_starting">Starting</string>
@@ -1238,9 +1175,6 @@
     <string name="net_status_stopped">Stopped</string>
     <string name="net_status_idle">Not started</string>
     <string name="net_stats_connections">Forwarded connections: %1$d</string>
-    <string name="net_stats_speed">Live rate ↑ %1$s ↓ %2$s</string>
-    <string name="net_stats_traffic">Total traffic ↑ %1$s ↓ %2$s</string>
-    <string name="net_stats_no_traffic">This method does not report connection or traffic stats</string>
     <string name="net_log_connection">Connection Log</string>
     <string name="net_log_connection_hint">This method does not report a separate connection log; see the tunnel log above for runtime output</string>
     <string name="net_log_expand">Show full log</string>
@@ -1257,30 +1191,14 @@
     <string name="stun_servers">Custom STUN servers</string>
     <string name="stun_servers_hint">One per line, e.g. stun.example.com or stun.example.com:3478</string>
     <string name="stun_servers_note">Leave empty to use the built-in list (all verified to support TCP 3478). Note: STUN servers that only support UDP will not work here.</string>
-    <string name="stun_config_moved">STUN target port, keep-alive interval and concurrency settings have moved into the "STUN Direct" card above.</string>
 
     <!-- STUN direct-connection card -->
     <string name="stun_card_title">STUN Direct</string>
-    <string name="stun_card_not_selected">Current tunnel method is "%1$s". STUN Direct can only start when it is the selected method.</string>
-    <string name="stun_card_switch">Switch to STUN Direct</string>
     <string name="stun_card_address">Public direct address</string>
     <string name="stun_card_address_hint">Assigned by your ISP; it stops working after a reconnect or network switch.</string>
     <string name="stun_card_address_drift">Public address changed %1$d time(s): the port changes on every rebuild, so the new address must be sent to players again.</string>
     <string name="stun_card_start">Start STUN</string>
     <string name="stun_card_stop">Stop</string>
-    <string name="stun_verdict_unknown_t">Not probed yet</string>
-    <string name="stun_verdict_unknown_d">Start the tunnel and the NAT verdict and public address will appear here.</string>
-    <string name="stun_verdict_public">Full-cone NAT (NAT1) - address reachable from the internet</string>
-    <string name="stun_verdict_non_public">Address unusable (private / CGNAT)</string>
-    <string name="stun_verdict_unreachable">STUN Direct unavailable</string>
-    <string name="stun_verdict_bind_failed">Mapping obtained, but the port cannot be listened on</string>
-    <string name="stun_fail_unreachable">No STUN server could be reached. Check your network and retry.</string>
-    <string name="stun_fail_no_response">Servers are TCP-reachable but never respond - usually UDP-only servers. Try a custom server.</string>
-    <string name="stun_fail_server_rejected">The server rejected the request. Try a custom server.</string>
-    <string name="stun_fail_no_mapping">The server returned no usable mapping address. Try a custom server.</string>
-    <string name="stun_fail_non_public">Your ISP assigned a private / CGNAT address, unreachable from the internet. Switch to frp or a hosted platform.</string>
-    <string name="stun_fail_bind">The mapped port is occupied or cannot be bound. Try again later.</string>
-    <string name="stun_stat_probe">Probe took %1$d ms (%2$d tried / %3$d connected)</string>
     <string name="stun_stat_conn">Active connections %1$d</string>
     <string name="stun_stat_idle">Idle connections reclaimed %1$d (connected but sent nothing)</string>
     <string name="stun_stat_limit">Rejected at concurrency cap %1$d</string>
@@ -1288,15 +1206,79 @@
     <string name="stun_advanced_hide">Hide settings</string>
     <string name="net_log_empty">No tunnel log yet. Tap "Start tunnel" and runtime output will show up here</string>
     <!-- STUN direct connection -->
-    <string name="stun_guide_title">STUN Direct Connection Guide</string>
-    <string name="stun_guide_1_t">Check your NAT type first</string>
-    <string name="stun_guide_1_d">This method punches through NAT and only works on a full-cone NAT (NAT1). Most home broadband qualifies; mobile data, corporate/campus networks and CGNAT usually do not. If probing keeps failing, switch to frp or a hosted platform.</string>
-    <string name="stun_guide_2_t">Keep the server running</string>
-    <string name="stun_guide_2_d">Start the MC server from the Overview page first, then come back and tap "Start tunnel". The tunnel only forwards public traffic to your local port - with no server running, nobody answers.</string>
-    <string name="stun_guide_3_t">Send the address to players</string>
-    <string name="stun_guide_3_d">Once probing succeeds, the public direct address appears above. Tap the copy button and send it to your friends. The address is assigned by your ISP, so it changes after reconnecting or switching networks.</string>
-    <string name="stun_guide_4_t">Tune if needed</string>
-    <string name="stun_guide_4_d">If players show up as 127.0.0.1, you can enable "PROXY protocol" - but the server must already support it, or players will be unable to connect. The concurrency cap and keep-alive interval rarely need changing.</string>
-    <string name="net_method_hint">All four methods carry MC\'s TCP traffic. Self-hosted ones (frp / bore) depend on the server you pick for bandwidth and stability; hosted platforms (SakuraFrp / ME Frp) need no server but are rate-limited by the platform</string>
     <string name="net_tunnel_server_stopped">The server is not running. Start it from the Overview page before tapping "Start tunnel", or players will reach the public address but never get in</string>
+    <string name="net_public_url_unknown">Cannot display the public address; check it on your FRP platform.</string>
+
+    <!-- ── Network page rebuild: separate FRP / STUN cards + multi-profile FRP ── -->
+
+    <!-- FRP card -->
+    <string name="net_frp_card_title">FRP</string>
+    <string name="net_frp_profile_label">Current profile</string>
+    <string name="net_frp_no_profile">No FRP profile yet. Create one first, then start.</string>
+    <string name="net_frp_create">Create FRP profile</string>
+    <string name="msg_frp_profile_required">Create and select an FRP profile on the FRP card first</string>
+    <string name="net_frp_switch_hint">Tap to switch FRP profile</string>
+    <string name="net_frp_address">Public address</string>
+    <string name="net_frp_start">Start FRP</string>
+    <string name="net_frp_stop">Stop</string>
+    <string name="net_frp_dialog_title">Choose FRP profile</string>
+    <string name="net_frp_dialog_edit">Edit</string>
+    <string name="net_frp_dialog_delete">Delete</string>
+    <string name="net_frp_delete_title">Delete profile</string>
+    <string name="net_frp_delete_message">Delete "%1$s"? This cannot be undone.</string>
+
+    <!-- FRP profile editor -->
+    <string name="net_frp_edit_title_new">New FRP profile</string>
+    <string name="net_frp_edit_title_edit">Edit FRP profile</string>
+    <string name="net_frp_edit_name">Profile name</string>
+    <string name="net_frp_edit_name_hint">Used to tell profiles apart, e.g. "Home server"</string>
+    <string name="net_frp_edit_name_dup">A profile with this name already exists; consider renaming</string>
+    <string name="net_frp_edit_kind">Profile type</string>
+    <string name="net_frp_edit_kind_toml">Self-hosted frp</string>
+    <string name="net_frp_edit_kind_sakura">SakuraFrp</string>
+    <string name="net_frp_edit_kind_me">ME Frp</string>
+    <string name="net_frp_edit_section_basic">Name and type</string>
+    <string name="net_frp_edit_toml_note">remotePort in the config is the port players connect to; localPort must be the server port (%1$d).</string>
+    <string name="net_frp_edit_token">Access token</string>
+    <string name="net_frp_edit_token_hint_sakura">Get it from your natfrp.com user panel</string>
+    <string name="net_frp_edit_token_hint_me">Copy it from your mefrp.com user center</string>
+    <string name="net_frp_edit_fetch">Fetch tunnel list</string>
+    <string name="net_frp_edit_create_tunnel">Create tunnel</string>
+    <string name="net_frp_edit_empty_sakura">No tunnels yet. Tap "Create tunnel" to add one; you must select one before starting</string>
+    <string name="net_frp_edit_empty_me">No tunnels yet. Create a TCP tunnel on mefrp.com first (local address 127.0.0.1, local port = server port), then come back and fetch.</string>
+    <string name="net_frp_edit_account">Account: %1$s (%2$s) · Tunnels %3$s</string>
+    <string name="net_frp_edit_selected"> (selected)</string>
+    <string name="net_frp_edit_save">Save</string>
+    <string name="net_frp_edit_delete">Delete this profile</string>
+    <string name="net_frp_edit_sakura_title">Create SakuraFrp tunnel</string>
+    <string name="net_frp_edit_sakura_node">Node</string>
+    <string name="net_frp_edit_sakura_node_pick">Select a node</string>
+    <string name="net_frp_edit_sakura_node_empty">Node list is empty: close this dialog and tap "Create tunnel" again to fetch nodes</string>
+    <string name="net_frp_edit_sakura_name">Tunnel name</string>
+    <string name="net_frp_edit_sakura_port">Local port (MC server port)</string>
+    <string name="net_frp_edit_sakura_create">Create</string>
+    <string name="net_frp_edit_sakura_offline"> · offline</string>
+
+    <!-- STUN card additions -->
+    <string name="net_stun_ip_warning">This exposes your home IP; prefer FRP in general.</string>
+    <string name="net_stun_idle_hint">The public address will appear here once started.</string>
+
+    <!-- Operation guide (rewritten) -->
+    <string name="net_guide_intro">This page has two independent channels: FRP and STUN. Each has its own start/stop button and they can run at the same time.</string>
+    <string name="net_guide_frp_t">Create an FRP profile</string>
+    <string name="net_guide_frp_d">Tap "Create FRP profile" on the FRP card and pick a type: for self-hosted frp paste frpc.toml; for SakuraFrp / ME Frp enter the token, fetch the tunnel list and select one. Name it and save.</string>
+    <string name="net_guide_switch_t">Switch FRP profile</string>
+    <string name="net_guide_switch_d">Tap the profile name on the FRP card to open the picker: tapping any entry selects it and closes the dialog automatically, then tap "Start FRP". You can also create, edit or delete profiles there.</string>
+    <string name="net_guide_frp_run_t">Start FRP and read the public address</string>
+    <string name="net_guide_frp_run_d">Tap "Start FRP". While running, the public address is shown - tap copy and send it to players. The address is hidden when stopped so you never hand out a dead address.</string>
+    <string name="net_guide_stun_t">Start STUN direct</string>
+    <string name="net_guide_stun_d">STUN needs no server, but it exposes your home IP directly to players, and it does not work on most home broadband (no public address from the ISP). Prefer FRP in general.</string>
+    <string name="net_guide_both_t">Run both channels at once</string>
+    <string name="net_guide_both_d">FRP and STUN can be started together without interfering - effectively two entrances for players. Note: the FRP family (self-hosted frp / SakuraFrp / ME Frp) shares one engine process, so only one of them can run at a time.</string>
+    <string name="net_guide_stop_t">Stop</string>
+    <string name="net_guide_stop_d">Each Stop button only shuts down its own channel and leaves the other one alone.</string>
+
+    <!-- Overview: one address row per channel -->
+    <string name="net_dash_frp_address">FRP public address</string>
+    <string name="net_dash_stun_address">STUN public address</string>
 </resources>
