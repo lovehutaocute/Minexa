@@ -142,6 +142,25 @@ class TunnelManager internal constructor(
     private fun laneOf(backend: TunnelBackend): TunnelLane =
         if (backend.type == TunnelType.Stun) TunnelLane.Stun else TunnelLane.Frp
 
+    /**
+     * 本次启动该用哪个后端类型。
+     *
+     * **按通道判定，而不是读 `config.tunnelType`** —— 这是曾经的故障点：
+     * 旧版界面有一个「穿透方式」单选，用户点 STUN 时先写 `tunnelType = Stun`
+     * 再启动，所以后端查找读 `config.tunnelType` 没问题。改成「两张卡各自
+     * 启停」之后没人再写这个字段，而它的默认值是 [TunnelType.Frp]，
+     * 于是 `startStun()` 会去取 FrpBackend，撞上通道校验后直接失败 ——
+     * 界面表现就是「点 STUN 的启动没反应」。
+     *
+     * 现在 STUN 通道固定取 [TunnelType.Stun]；FRP 通道仍然读
+     * `config.tunnelType`（由 [FrpProfiles.applyTo] 按选中的配置写好），
+     * 因为 frp / SakuraFrp / ME Frp 是同一通道里的三种不同后端。
+     */
+    private fun typeFor(lane: TunnelLane, config: McConfig): TunnelType = when (lane) {
+        TunnelLane.Stun -> TunnelType.Stun
+        TunnelLane.Frp -> config.tunnelType
+    }
+
     // ── 启动 / 停止 ────────────────────────────────────────────
 
     /**
@@ -184,19 +203,20 @@ class TunnelManager internal constructor(
         // 这里也先停一下，保证「重复点启动」不会留下两个监听。
         currentBackend(lane)?.let { runCatching { it.stop() } }
 
-        val backend = backends[config.tunnelType]
+        val type = typeFor(lane, config)
+        val backend = backends[type]
         if (backend == null) {
-            val msg = "${config.tunnelType.displayName} 后端尚未实现"
+            val msg = "${type.displayName} 后端尚未实现"
             publish(lane, TunnelState(
                 status = TunnelStatus.Failed,
                 errorMessage = msg,
-                activeType = config.tunnelType
+                activeType = type
             ))
             logSink("[tunnel] 错误: $msg")
             return Result.failure(IllegalStateException(msg))
         }
         if (laneOf(backend) != lane) {
-            val msg = "${config.tunnelType.displayName} 不属于 ${lane.name} 通道"
+            val msg = "${type.displayName} 不属于 ${lane.name} 通道"
             logSink("[tunnel] 错误: $msg")
             return Result.failure(IllegalArgumentException(msg))
         }
@@ -222,7 +242,7 @@ class TunnelManager internal constructor(
             // 与 FrpcBackend.onFailure 同样的回退：message 为 null 的异常
             // （如 NetworkOnMainThreadException）不能只打印 "null"，否则无法定位。
             val reason = e.message?.takeIf { it.isNotBlank() } ?: e::class.java.simpleName
-            logSink("[tunnel] ${config.tunnelType.displayName} 启动失败: $reason")
+            logSink("[tunnel] ${type.displayName} 启动失败: $reason")
         }
         return result
     }

@@ -2,6 +2,7 @@ package com.mineserve.mobile.data
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -203,6 +204,94 @@ class FrpProfilesTest {
                 FrpProfiles.validationError(profile("a", "甲", kind, token = "t", tunnelId = "1"))
             )
         }
+    }
+
+    // ── 旧版单份配置的迁移 ────────────────────────────────────
+
+    @Test
+    fun `没有旧配置时不迁移`() {
+        assertNull(FrpProfiles.migrateLegacy(McConfig()))
+    }
+
+    @Test
+    fun `旧的自建 frp 配置会变成一份可用配置`() {
+        // 老用户升级后原来能用的 FRP 必须还在，否则「改之前能用、改之后不能用」。
+        val legacy = McConfig(
+            tunnelType = TunnelType.Frp,
+            frpConfigText = "[common]\nserver_addr=1.2.3.4\nserver_port=7000"
+        )
+
+        val migrated = FrpProfiles.migrateLegacy(legacy)
+
+        assertNotNull(migrated)
+        val profile = FrpProfiles.active(migrated!!)
+        assertNotNull(profile)
+        assertEquals(FrpProfileKind.CustomToml, profile!!.kind)
+        assertEquals("[common]\nserver_addr=1.2.3.4\nserver_port=7000", profile.configText)
+        // 迁移出来的配置必须能直接启动
+        assertNull(FrpProfiles.validationError(profile))
+    }
+
+    @Test
+    fun `旧的平台配置带令牌与隧道号才能迁移`() {
+        // 旧版界面点一下隧道就把 token + 隧道号一起写进配置，
+        // 所以「只用过平台」的用户迁移后应当原样可用。
+        val usable = McConfig(
+            tunnelType = TunnelType.SakuraFrp,
+            sakuraToken = "sakura-token",
+            sakuraTunnelId = "12345"
+        )
+        val usableProfile = FrpProfiles.active(FrpProfiles.migrateLegacy(usable)!!)!!
+        assertEquals(FrpProfileKind.SakuraFrp, usableProfile.kind)
+        assertEquals("sakura-token", usableProfile.token)
+        assertEquals("12345", usableProfile.tunnelId)
+        assertNull(FrpProfiles.validationError(usableProfile))
+
+        // 只有令牌、没选隧道：本来也启动不起来，迁过来只会是死配置，不如不迁。
+        val halfBaked = McConfig(sakuraToken = "sakura-token", sakuraTunnelId = "")
+        assertNull(FrpProfiles.migrateLegacy(halfBaked))
+    }
+
+    @Test
+    fun `多个平台的旧配置会被一起迁移并保留原来在用的那份`() {
+        val legacy = McConfig(
+            tunnelType = TunnelType.MeFrp,
+            frpConfigText = "[common]\nserver_addr=1.2.3.4",
+            meFrpToken = "me-token",
+            meFrpTunnelId = "67890"
+        )
+
+        val migrated = FrpProfiles.migrateLegacy(legacy)!!
+
+        assertEquals(2, migrated.frpProfiles.size)
+        // 迁移前正在用的是 ME Frp，迁移后卡片上默认显示的还得是它
+        assertEquals(FrpProfileKind.MeFrp, FrpProfiles.active(migrated)!!.kind)
+        assertTrue(migrated.frpProfiles.any { it.kind == FrpProfileKind.CustomToml })
+    }
+
+    @Test
+    fun `迁移会清空旧字段因而不会重复迁移`() {
+        val legacy = McConfig(
+            tunnelType = TunnelType.Frp,
+            frpConfigText = "[common]\nserver_addr=1.2.3.4"
+        )
+
+        val once = FrpProfiles.migrateLegacy(legacy)!!
+        // 旧字段清空了；用户之后把配置全删了也不会「自己长回来」
+        assertEquals("", once.frpConfigText)
+        assertNull(FrpProfiles.migrateLegacy(once))
+
+        // 而且删光配置之后仍然不迁移
+        assertNull(FrpProfiles.migrateLegacy(once.copy(frpProfiles = emptyList())))
+    }
+
+    @Test
+    fun `已经有多份配置时不再迁移`() {
+        val already = McConfig(
+            frpConfigText = "[common]\nserver_addr=1.2.3.4",
+            frpProfiles = listOf(profile("a", "我的配置", FrpProfileKind.CustomToml, configText = "x"))
+        )
+        assertNull(FrpProfiles.migrateLegacy(already))
     }
 
     // ── 展示文案 ──────────────────────────────────────────────

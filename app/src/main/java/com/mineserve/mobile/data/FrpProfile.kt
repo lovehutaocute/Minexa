@@ -150,6 +150,91 @@ object FrpProfiles {
     }
 
     /**
+     * 旧版「单份 FRP 配置」→ 多份配置列表的**一次性迁移**。
+     *
+     * ## 为什么必须有它
+     *
+     * 改成多份配置之前，用户的工作配置存在 [McConfig.frpConfigText] /
+     * `sakuraToken` / `meFrpToken` 这几个字段里。列表初始为空，而
+     * `McViewModel.startFrp()` 以「有配置」为前提 —— 不迁移的话，老用户一升级
+     * 就会看到原来能用的 FRP 变成「还没有配置」，启动键直接点不动。
+     *
+     * ## 迁移规则
+     *
+     * 只迁**真用得起来**的旧配置：
+     * - 有 [McConfig.frpConfigText] → 一份自建 frp 配置；
+     * - 有 `sakuraToken` **且** `sakuraTunnelId` → 一份 SakuraFrp 配置
+     *   （只有令牌、没选隧道本来也启动不起来，迁过来只会是死配置）；
+     * - 有 `meFrpToken` **且** `meFrpTunnelId` → 一份 ME Frp 配置。
+     *
+     * 用户原来正在用的那一份（按 [McConfig.tunnelType] 匹配）排在最前并设为选中，
+     * 迁移后卡片上显示的就还是他熟悉的那份。
+     *
+     * ## 幂等性
+     *
+     * 迁移结果会清空旧字段，所以落盘一次之后就再也不会命中（`frpProfiles`
+     * 已有内容 → 直接返回 null）。这同时堵住了「用户把配置全删了，重启后
+     * 旧字段又自己变出一份」这条路。id 也是固定的，即便迁移结果还没落盘
+     * 就重启，重新推导出来的仍是同一份，不会每次启动换一个 id。
+     *
+     * @return 需要迁移时返回迁移后的配置；没有旧配置可迁时返回 null。
+     */
+    fun migrateLegacy(config: McConfig): McConfig? {
+        if (config.frpProfiles.isNotEmpty()) return null
+
+        val built = mutableListOf<FrpProfile>()
+        if (config.frpConfigText.isNotBlank()) {
+            built += FrpProfile(
+                id = LEGACY_ID_TOML,
+                name = defaultName(FrpProfileKind.CustomToml, built),
+                kind = FrpProfileKind.CustomToml,
+                configText = config.frpConfigText
+            )
+        }
+        if (config.sakuraToken.isNotBlank() && config.sakuraTunnelId.isNotBlank()) {
+            built += FrpProfile(
+                id = LEGACY_ID_SAKURA,
+                name = defaultName(FrpProfileKind.SakuraFrp, built),
+                kind = FrpProfileKind.SakuraFrp,
+                token = config.sakuraToken,
+                tunnelId = config.sakuraTunnelId
+            )
+        }
+        if (config.meFrpToken.isNotBlank() && config.meFrpTunnelId.isNotBlank()) {
+            built += FrpProfile(
+                id = LEGACY_ID_ME,
+                name = defaultName(FrpProfileKind.MeFrp, built),
+                kind = FrpProfileKind.MeFrp,
+                token = config.meFrpToken,
+                tunnelId = config.meFrpTunnelId
+            )
+        }
+        if (built.isEmpty()) return null
+
+        // 原来在用的那份提到最前。sortedByDescending 是稳定排序，
+        // 匹配不上的那些保持原有顺序。
+        val ordered = built.sortedByDescending { kindToTunnelType(it.kind) == config.tunnelType }
+        val active = ordered.firstOrNull { kindToTunnelType(it.kind) == config.tunnelType }
+            ?: ordered.first()
+
+        return config.copy(
+            frpProfiles = ordered,
+            activeFrpProfileId = active.id,
+            // 清空旧字段：这是「迁移只做一次」的凭据。
+            frpConfigText = "",
+            sakuraToken = "",
+            sakuraTunnelId = "",
+            meFrpToken = "",
+            meFrpTunnelId = ""
+        )
+    }
+
+    /** 迁移来源的固定 id（不作为用户可见内容）。 */
+    const val LEGACY_ID_TOML = "legacy-toml"
+    const val LEGACY_ID_SAKURA = "legacy-sakura"
+    const val LEGACY_ID_ME = "legacy-me"
+
+    /**
      * 把平台隧道对象压成一行可读描述（列表展示用）。
      *
      * 放在这里而不是界面里，是为了让「列表里看到的东西」和「启动时用的东西」

@@ -190,6 +190,26 @@ class TunnelLaneIndependenceTest {
     }
 
     @Test
+    fun `启动 STUN 不依赖 config 里的 tunnelType`() = runBlocking {
+        // 回归测试：界面改成「两张卡各自启停」之后，不再有「穿透方式」单选，
+        // 也就没人去把 config.tunnelType 设成 Stun 了 —— 它的默认值是 Frp。
+        // 如果通道选择读的是 config.tunnelType，STUN 会去取 FrpBackend，
+        // 然后死在「不属于 Stun 通道」上，表现就是「点启动没反应」。
+        val frp = FakeBackend(TunnelType.Frp)
+        val stun = FakeBackend(TunnelType.Stun)
+        val manager = manager(frp, stun)
+
+        val result = manager.startStun(McConfig()) // tunnelType 保持默认的 Frp
+
+        assertEquals("STUN 必须被启动", 1, stun.startCalls)
+        assertEquals("不能误启动 FRP", 0, frp.startCalls)
+        assertEquals(true, result.isSuccess)
+        assertEquals(TunnelStatus.Running, manager.stunState.value.status)
+
+        manager.destroy()
+    }
+
+    @Test
     fun `聚合状态在两条都运行时优先 FRP`() = runBlocking {
         val frp = FakeBackend(TunnelType.Frp, url = "frp.example.com:25565")
         val stun = FakeBackend(TunnelType.Stun, url = "1.2.3.4:25565")

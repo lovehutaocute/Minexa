@@ -88,7 +88,7 @@ class ServerRepository(
      * 为什么不能抛：`configFlow` 被 McForegroundService、MainActivity、WidgetUpdater 多处 collect，
      * 抛出去会让 MainActivity 里的 `first()` 直接把 App 崩掉。
      */
-    private fun decodeConfigLenient(raw: String): McConfig? {
+    private fun decodeConfigRaw(raw: String): McConfig? {
         // 历史配置里的「Termux + Java 8」归一到 Proot + Java 8（focal）。
         // 放在这里而不是 configFlow：这是磁盘 → 内存的**唯一**入口，
         // configFlow 与 ensureConfigLoaded 都经过它，两处都归一才不会出现
@@ -105,6 +105,16 @@ class ServerRepository(
         configDecodeFailed = true
         return null
     }
+
+    /**
+     * [decodeConfigRaw] + 旧配置迁移。
+     *
+     * 迁移放在这一层（而不是各自的调用点），是因为 [configFlow] 与
+     * [ensureConfigLoaded] 是两条独立的读盘路径：只在其中一条迁移，
+     * 会让「界面看到的配置」和「权威内存态」对不上。
+     */
+    private fun decodeConfigLenient(raw: String): McConfig? =
+        decodeConfigRaw(raw)?.let { FrpProfiles.migrateLegacy(it) ?: it }
 
     /**
      * 配置的权威内存态：所有 updateConfig 的读改写都以它为基准。
@@ -187,7 +197,7 @@ class ServerRepository(
             }
             return
         }
-        val initial = decodeConfigLenient(raw)
+        val initial = decodeConfigRaw(raw)
         if (initial == null) {
             // ③ 解析失败：保留内存态的默认值让 UI 还能用，但**不置 configLoaded**、
             // 也不允许落盘（由 configDecodeFailed 拦住），用户磁盘上的原始内容保持不动。
@@ -195,11 +205,21 @@ class ServerRepository(
             configDecodeFailed = true
             return
         }
+        // 旧版「单份 FRP 配置」并入多份配置列表（仅在列表为空时命中，见 migrateLegacy）。
+        // 不做这一步，老用户升级后原来能用的 FRP 会变成「还没有配置」，启动键点不动。
+        val migrated = FrpProfiles.migrateLegacy(initial)
+        val effective = migrated ?: initial
         synchronized(this) {
             if (!configLoaded) {
-                _config.value = initial
+                _config.value = effective
                 configLoaded = true
             }
+        }
+        // 迁移会清空旧字段，必须立刻落盘：迁移结果只留在内存里的话，
+        // 用户在落盘前把配置删光，重启后旧字段又会把配置变回来。
+        if (migrated != null) {
+            Log.i(TAG, "已把旧版单份 FRP 配置迁移为 ${migrated.frpProfiles.size} 份配置并落盘")
+            saveChannel.trySend(effective)
         }
     }
 

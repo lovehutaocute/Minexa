@@ -30,6 +30,7 @@ import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.NativeLibraryBundler
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
+import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.data.FrpProfile
 import com.mineserve.mobile.data.FrpProfiles
 import com.mineserve.mobile.data.DiagnosticCheck
@@ -2459,7 +2460,13 @@ class McViewModel(
                 // 端口真源：StunTunnelBackend 默认取 config.localPort（镜像字段），
                 // 这里显式覆盖成真源 serverPort。否则配置文件被外部改动后，
                 // STUN 会把玩家流量转到服务端并未监听的旧端口。
-                tunnelManager.startStun(config.value.copy(localPort = serverPort.value))
+                //
+                // tunnelType 也一并写成 Stun：界面上已经没有「穿透方式」单选了，
+                // 不写的话它会停在默认的 Frp，配置本身自相矛盾（虽然
+                // TunnelManager 现在按通道取后端、不再依赖这个字段）。
+                tunnelManager.startStun(
+                    config.value.copy(localPort = serverPort.value, tunnelType = TunnelType.Stun)
+                )
                 reportStart(stunState.value)
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s206, e.message))
