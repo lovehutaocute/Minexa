@@ -5,7 +5,7 @@
     android:layout_height="match_parent"
     android:orientation="vertical"
     android:background="@drawable/widget_bg"
-    android:paddingHorizontal="10dp"
+    android:paddingHorizontal="12dp"
     android:paddingVertical="8dp">
 
     <TextView

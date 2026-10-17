@@ -92,6 +92,8 @@ import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.FieldBg
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
@@ -404,12 +406,12 @@ private fun LocalAddressCard(
                 color = Muted, fontSize = 11.sp,
                 modifier = Modifier.weight(1f)
             )
-            IconButton(onClick = { vm.refreshLanIp() }, modifier = Modifier.size(28.dp)) {
+            IconButton(onClick = { vm.refreshLanIp() }, modifier = Modifier.size(McIcon.TouchCompact)) {
                 Icon(
                     Icons.Outlined.Refresh,
                     contentDescription = stringResource(R.string.s591),
                     tint = Muted,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(McIcon.Inline)
                 )
             }
         }
@@ -599,18 +601,18 @@ private fun FrpProfilePickerDialog(
                                 color = Muted, fontSize = 10.sp, maxLines = 2
                             )
                         }
-                        IconButton(onClick = { onOpenEditor(p.id) }, modifier = Modifier.size(32.dp)) {
+                        IconButton(onClick = { onOpenEditor(p.id) }, modifier = Modifier.size(McIcon.TouchCompact)) {
                             Icon(
                                 Icons.Outlined.Edit,
                                 contentDescription = stringResource(R.string.net_frp_dialog_edit),
-                                tint = Indigo, modifier = Modifier.size(16.dp)
+                                tint = Indigo, modifier = Modifier.size(McIcon.Inline)
                             )
                         }
-                        IconButton(onClick = { pendingDelete = p }, modifier = Modifier.size(32.dp)) {
+                        IconButton(onClick = { pendingDelete = p }, modifier = Modifier.size(McIcon.TouchCompact)) {
                             Icon(
                                 Icons.Outlined.Delete,
                                 contentDescription = stringResource(R.string.net_frp_dialog_delete),
-                                tint = Coral, modifier = Modifier.size(16.dp)
+                                tint = Coral, modifier = Modifier.size(McIcon.Inline)
                             )
                         }
                     }
@@ -645,7 +647,8 @@ private fun FrpProfilePickerDialog(
                         // 删光之后选择窗口没有内容可点，直接收起来
                         if (vm.config.value.frpProfiles.isEmpty()) onDismiss()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Coral)
+                    colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                    shape = McShape.Control
                 ) { Text(stringResource(R.string.net_frp_dialog_delete)) }
             },
             dismissButton = {
@@ -985,7 +988,7 @@ private fun TunnelLogPreview(
                 }
             },
             confirmButton = {
-                Button(onClick = { showFullLog = false }) {
+                Button(onClick = { showFullLog = false }, shape = McShape.Control) {
                     Text(stringResource(R.string.s620))
                 }
             }

@@ -74,10 +74,14 @@ import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
+import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
@@ -189,16 +193,23 @@ fun PlayersScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 HeaderBlock(
-                    eyebrow = "Player Management",
+                    eyebrow = stringResource(R.string.eyebrow_players),
                     title = stringResource(R.string.s672),
                     modifier = Modifier.weight(1f)
                 )
                 // 页面右上角：玩家进服/离服历史记录入口
                 IconButton(
                     onClick = { showHistory = true },
-                    modifier = Modifier.padding(end = 8.dp)
+                    modifier = Modifier
+                        .padding(end = 8.dp)
+                        .size(McIcon.Touch)
                 ) {
-                    Icon(Icons.Outlined.History, contentDescription = stringResource(R.string.s673), tint = Indigo)
+                    Icon(
+                        Icons.Outlined.History,
+                        contentDescription = stringResource(R.string.s673),
+                        tint = Indigo,
+                        modifier = Modifier.size(McIcon.Item)
+                    )
                 }
             }
 
@@ -213,15 +224,9 @@ fun PlayersScreen(
             )
 
             // ── 标签切换 ──
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(IndigoSoft)
-                    .padding(4.dp)
-            ) {
-                PlayerListTab.values().forEach { tab ->
+            val playerTabs = PlayerListTab.values()
+            SegmentedTabs(
+                options = playerTabs.map { tab ->
                     val count = when (tab) {
                         PlayerListTab.Online -> onlinePlayers.size
                         PlayerListTab.Ops -> ops.size
@@ -229,25 +234,12 @@ fun PlayersScreen(
                         PlayerListTab.Banned -> banned.size
                     }
                     val tabLabel = stringResource(tab.labelRes)
-                    val label = if (count > 0) "$tabLabel $count" else tabLabel
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (activeTab == tab) Indigo else Color.Transparent)
-                            .clickable { activeTab = tab }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            label,
-                            color = if (activeTab == tab) Color.White else Muted,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
+                    if (count > 0) "$tabLabel $count" else tabLabel
+                },
+                selectedIndex = playerTabs.indexOf(activeTab),
+                modifier = Modifier.padding(horizontal = McSpacing.Page, vertical = 4.dp),
+                onSelect = { index -> playerTabs.getOrNull(index)?.let { activeTab = it } }
+            )
 
             when (activeTab) {
                 PlayerListTab.Online -> OnlineTab(
@@ -570,16 +562,16 @@ private fun OnlinePlayerRow(
             Text(stringResource(R.string.s318), color = Mint, fontSize = 10.sp)
         }
         // 复制玩家名
-        IconButton(onClick = onCopy, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onCopy, modifier = Modifier.size(McIcon.TouchCompact)) {
             Icon(Icons.Outlined.ContentCopy, contentDescription = stringResource(R.string.s687), tint = Indigo, modifier = Modifier.size(16.dp))
         }
         // 踢出玩家
-        IconButton(onClick = onKick, modifier = Modifier.size(32.dp)) {
+        IconButton(onClick = onKick, modifier = Modifier.size(McIcon.TouchCompact)) {
             Icon(Icons.AutoMirrored.Outlined.Logout, contentDescription = stringResource(R.string.s688), tint = Coral, modifier = Modifier.size(16.dp))
         }
         // 切换游戏模式
         Box {
-            IconButton(onClick = { modeMenuOpen = true }, modifier = Modifier.size(32.dp)) {
+            IconButton(onClick = { modeMenuOpen = true }, modifier = Modifier.size(McIcon.TouchCompact)) {
                 Icon(Icons.Outlined.VideogameAsset, contentDescription = stringResource(R.string.s689), tint = Indigo, modifier = Modifier.size(16.dp))
             }
             DropdownMenu(expanded = modeMenuOpen, onDismissRequest = { modeMenuOpen = false }) {
@@ -630,7 +622,7 @@ private fun OpsTab(
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(14.dp)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
+            shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(10.dp))
 
@@ -664,7 +656,7 @@ private fun OpsTab(
             label = { Text(stringResource(R.string.s697), fontSize = 11.sp) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
+            shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(8.dp))
 
@@ -707,7 +699,7 @@ private fun OpsTab(
             Box {
                 OutlinedButton(
                     onClick = { levelMenuOpen = true },
-                    shape = RoundedCornerShape(10.dp),
+                    shape = McShape.ControlCompact,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(selectedLevel.labelRes), color = Indigo, fontSize = 11.sp)
@@ -763,7 +755,7 @@ private fun OpsTab(
             },
             enabled = isRunning && opName.isNotBlank(),
             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
@@ -829,7 +821,7 @@ private fun WhitelistTab(
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(14.dp)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
+            shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(10.dp))
 
@@ -868,7 +860,7 @@ private fun WhitelistTab(
                 label = { Text(stringResource(R.string.s697), fontSize = 11.sp) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.ControlCompact
             )
             Button(
                 onClick = {
@@ -879,7 +871,7 @@ private fun WhitelistTab(
                 },
                 enabled = isRunning && newName.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.ControlCompact
             ) { Text(stringResource(R.string.s709), color = Color.White, fontSize = 11.sp) }
         }
     }
@@ -911,7 +903,7 @@ private fun BannedTab(
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(14.dp)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.ControlCompact
             )
             Spacer(Modifier.height(10.dp))
             val filtered = banned.filter { matchesPlayerQuery(it.name, search) }
@@ -942,7 +934,7 @@ private fun BannedTab(
             label = { Text(stringResource(R.string.s697), fontSize = 11.sp) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
+            shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(6.dp))
         OutlinedTextField(
@@ -951,14 +943,14 @@ private fun BannedTab(
             label = { Text(stringResource(R.string.s717), fontSize = 11.sp) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
+            shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(6.dp))
         // 封禁时长选择
         Box {
             OutlinedButton(
                 onClick = { durationMenuOpen = true },
-                shape = RoundedCornerShape(10.dp),
+                shape = McShape.ControlCompact,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(stringResource(selectedDuration.labelRes), color = Indigo, fontSize = 11.sp)
@@ -986,7 +978,7 @@ private fun BannedTab(
             },
             enabled = isRunning && banName.isNotBlank(),
             colors = ButtonDefaults.buttonColors(containerColor = Coral),
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(

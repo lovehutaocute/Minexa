@@ -66,6 +66,7 @@ import com.mineserve.mobile.ui.WarnNote
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
@@ -330,7 +331,8 @@ fun FrpProfileEditorScreen(
                         vm.deleteFrpProfile(draftId)
                         onBack()
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Coral)
+                    colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                    shape = McShape.Control
                 ) { Text(stringResource(R.string.net_frp_dialog_delete)) }
             },
             dismissButton = {
@@ -724,7 +726,8 @@ private fun SakuraCreateTunnelDialog(
                     onConfirm(node, name.ifBlank { "Minexa" }, type, port ?: defaultPort)
                 },
                 enabled = selectedNode != null && port != null && name.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo)
+                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                shape = McShape.Control
             ) { Text(stringResource(R.string.net_frp_edit_sakura_create)) }
         },
         dismissButton = {

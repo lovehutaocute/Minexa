@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -62,6 +61,8 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
 
@@ -194,13 +195,14 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                                     importLauncher.launch(
                                         arrayOf("application/zip", "application/octet-stream", "*/*")
                                     )
-                                }
+                                },
+                                shape = McShape.ControlCompact
                             ) {
                                 Icon(Icons.Outlined.FileUpload, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("导入世界", fontSize = 13.sp)
                             }
-                            OutlinedButton(onClick = { vm.clearWorldSeed() }) {
+                            OutlinedButton(onClick = { vm.clearWorldSeed() }, shape = McShape.ControlCompact) {
                                 Icon(Icons.Outlined.RestartAlt, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
                                 Text("清空种子", fontSize = 13.sp)
@@ -295,7 +297,7 @@ private fun WorldRow(
             if (world.isActive) {
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(McShape.Row)
                         .background(MaterialTheme.colorScheme.primaryContainer)
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
@@ -320,12 +322,12 @@ private fun WorldRow(
 private fun SmallAction(icon: ImageVector, label: String, tint: Color = Indigo, onClick: () -> Unit) {
     Row(
         modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
+            .clip(McShape.Row)
             .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, null, tint = tint, modifier = Modifier.size(15.dp))
+        Icon(icon, null, tint = tint, modifier = Modifier.size(McIcon.Inline))
         Spacer(Modifier.width(4.dp))
         Text(label, fontSize = 12.sp, color = tint)
     }

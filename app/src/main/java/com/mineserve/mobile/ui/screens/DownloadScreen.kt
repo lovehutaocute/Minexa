@@ -25,7 +25,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -70,6 +69,7 @@ import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
@@ -243,14 +243,14 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                                     scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.s376, core.name)) }
                                 },
                                 enabled = core.name != config.activeCoreName,
-                                shape = RoundedCornerShape(12.dp),
+                                shape = McShape.Control,
                                 border = BorderStroke(1.dp, Indigo),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) { Text(stringResource(R.string.s455), color = Indigo, fontSize = 11.sp) }
                             Spacer(Modifier.size(6.dp))
                             OutlinedButton(
                                 onClick = { vm.verifyOrRepairCore(core.dirName) },
-                                shape = RoundedCornerShape(12.dp),
+                                shape = McShape.Control,
                                 border = BorderStroke(1.dp, Mint),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) { Text(stringResource(R.string.dl_core_verify), color = Mint, fontSize = 11.sp) }
@@ -259,7 +259,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                                 // 运行中禁止删除：先置 pendingDeleteCore，弹二次确认后再真正删除
                                 onClick = { pendingDeleteCore = core },
                                 enabled = !serverState.isRunning,
-                                shape = RoundedCornerShape(12.dp),
+                                shape = McShape.Control,
                                 border = BorderStroke(1.dp, Coral),
                                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
                             ) { Text(stringResource(R.string.s339), color = Coral, fontSize = 11.sp) }
@@ -350,7 +350,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                 OutlinedButton(
                     onClick = { showImportDialog = true },
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(10.dp)
+                    shape = McShape.ControlCompact
                 ) { Text("导入服务器", color = Indigo, fontSize = 12.sp) }
             }
 
@@ -426,7 +426,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                         },
                         enabled = customVersion.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = McShape.Control
                     ) {
                         Text(stringResource(R.string.s477), color = Color.White, fontSize = 12.sp)
                     }
@@ -483,7 +483,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                         Box(
                             modifier = Modifier
                                 .size(14.dp)
-                                .clip(RoundedCornerShape(4.dp))
+                                .clip(McShape.Small)
                                 .background(Indigo.copy(alpha = 0.15f)),
                             contentAlignment = Alignment.Center
                         ) {
@@ -545,7 +545,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                         onClick = { vm.downloadCore(customCoreName) },
                         enabled = !isDownloadingCore && customCoreName.isNotBlank(),
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(12.dp),
+                        shape = McShape.Control,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         if (isDownloadingCore) {
@@ -611,10 +611,10 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                             Text("选择导入方式：文件夹和压缩包用于已有完整服务端；JAR 用于单个服务端核心；整合包仅支持 Modrinth .mrpack，会自动下载服务端模组并应用 overrides。", color = Muted, fontSize = 12.sp)
                             Spacer(Modifier.height(8.dp))
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                OutlinedButton(onClick = { folderImportLauncher.launch(null) }, enabled = !importingServer) { Text("文件夹", fontSize = 11.sp) }
-                                OutlinedButton(onClick = { archiveImportLauncher.launch(arrayOf("application/zip", "application/gzip", "application/x-tar", "application/octet-stream")) }, enabled = !importingServer) { Text("压缩包", fontSize = 11.sp) }
-                                OutlinedButton(onClick = { jarImportLauncher.launch(arrayOf("application/java-archive", "application/octet-stream")) }, enabled = !importingServer) { Text("JAR", fontSize = 11.sp) }
-                                OutlinedButton(onClick = { modpackImportLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }, enabled = !importingServer) { Text("整合包", fontSize = 11.sp) }
+                                OutlinedButton(onClick = { folderImportLauncher.launch(null) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("文件夹", fontSize = 11.sp) }
+                                OutlinedButton(onClick = { archiveImportLauncher.launch(arrayOf("application/zip", "application/gzip", "application/x-tar", "application/octet-stream")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("压缩包", fontSize = 11.sp) }
+                                OutlinedButton(onClick = { jarImportLauncher.launch(arrayOf("application/java-archive", "application/octet-stream")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("JAR", fontSize = 11.sp) }
+                                OutlinedButton(onClick = { modpackImportLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("整合包", fontSize = 11.sp) }
                             }
                             if (pendingImport != null) {
                                 Spacer(Modifier.height(8.dp))

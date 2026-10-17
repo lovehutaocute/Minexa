@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -27,7 +26,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
@@ -59,9 +57,12 @@ import com.mineserve.mobile.ui.HintNote
 import com.mineserve.mobile.ui.JavaRuntimeGroupList
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
+import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.StepRow
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.delay
@@ -109,42 +110,24 @@ fun EnvManagerScreen(vm: McViewModel, initialTab: Int, onBack: () -> Unit) {
                 .padding(padding)
         ) {
             BackBar(stringResource(R.string.env_title), onBack)
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 14.dp, vertical = 6.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                FilterChip(
-                    selected = tab == ENV_TAB_JAVA,
-                    onClick = { tab = ENV_TAB_JAVA },
-                    label = { Text(stringResource(R.string.env_tab_java)) }
-                )
-                FilterChip(
-                    selected = tab == ENV_TAB_DEPS,
-                    onClick = { tab = ENV_TAB_DEPS },
-                    label = { Text(stringResource(R.string.env_tab_deps)) }
-                )
-                FilterChip(
-                    selected = tab == ENV_TAB_TERMUX,
-                    onClick = { tab = ENV_TAB_TERMUX },
-                    label = { Text(stringResource(R.string.env_tab_termux)) }
-                )
-                // 四个原有按钮：PHP 版本自成一个分类
-                FilterChip(
-                    selected = tab == ENV_TAB_PHP,
-                    onClick = { tab = ENV_TAB_PHP },
-                    label = { Text(stringResource(R.string.env_tab_php)) }
-                )
-            }
+            val envTabs = listOf(
+                stringResource(R.string.env_tab_java),
+                stringResource(R.string.env_tab_deps),
+                stringResource(R.string.env_tab_termux),
+                stringResource(R.string.env_tab_php)
+            )
+            SegmentedTabs(
+                options = envTabs,
+                selectedIndex = tab,
+                modifier = Modifier.padding(horizontal = McSpacing.Page, vertical = 6.dp),
+                onSelect = { tab = it }
+            )
 
             Column(
                 Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(vertical = 4.dp)
             ) {
                 when (tab) {
                     ENV_TAB_JAVA -> JavaModule(vm, ::requestConfirm)
@@ -194,20 +177,20 @@ private fun ActionButtonsRow(
         OutlinedButton(
             onClick = onUninstall,
             enabled = uninstallEnabled,
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.weight(1f)
         ) { Text(stringResource(R.string.env_uninstall), color = Coral, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         OutlinedButton(
             onClick = onReinstall,
             enabled = reinstallEnabled,
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.weight(1f)
         ) { Text(stringResource(reinstallLabelRes), color = Indigo, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         Button(
             onClick = onInstall,
             enabled = installEnabled,
             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.weight(1f)
         ) { Text(stringResource(R.string.env_install), color = androidx.compose.ui.graphics.Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
     }
@@ -332,7 +315,7 @@ private fun JavaModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> 
             OutlinedButton(
                 onClick = { requestConfirm(confirmText) { vm.deleteProotContainer(distro) } },
                 enabled = !busy && !running,
-                shape = RoundedCornerShape(10.dp),
+                shape = McShape.ControlCompact,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
@@ -499,7 +482,7 @@ private fun FrpcEngineSection(vm: McViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (vm.frpcOnlineAvailable) {
                 val downloading = download is McViewModel.DownloadState.Downloading
-                Button(onClick = { vm.downloadFrpcEngine() }, enabled = !downloading) {
+                Button(onClick = { vm.downloadFrpcEngine() }, enabled = !downloading, shape = McShape.ControlCompact) {
                     if (downloading) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(14.dp),
@@ -527,7 +510,7 @@ private fun FrpcEngineSection(vm: McViewModel) {
             }
             // OpenDocument 而不是 GetContent：.so 没有注册的 MIME 类型，
             // GetContent 会因类型过滤而选不中文件，只能靠 */* 放开。
-            OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) {
+            OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }, shape = McShape.ControlCompact) {
                 Text(
                     stringResource(
                         if (engine.installed) R.string.frpc_engine_replace
@@ -589,8 +572,8 @@ private fun PhpModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> U
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(10.dp))
-                .border(1.dp, Indigo.copy(alpha = 0.5f), RoundedCornerShape(10.dp))
+                .clip(McShape.Row)
+                .border(1.dp, Indigo.copy(alpha = 0.5f), McShape.Row)
                 .clickable { showPhpVersionDialog = true }
                 .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically

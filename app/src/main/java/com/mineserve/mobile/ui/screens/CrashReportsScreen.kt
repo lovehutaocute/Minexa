@@ -13,7 +13,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.IosShare
 import androidx.compose.material.icons.outlined.Warning
@@ -27,9 +26,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.server.CrashReportAnalyzer
+import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.McViewModel
+import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.Muted
 
 @Composable
@@ -38,11 +40,9 @@ fun CrashReportsScreen(vm: McViewModel, onBack: () -> Unit, onGoToJavaInstall: (
     val content by vm.currentCrashContent.collectAsState()
     val analysis by vm.currentCrashAnalysis.collectAsState()
     LaunchedEffect(Unit) { vm.loadCrashReports() }
-    Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.crash_back)) }
-            Text(stringResource(R.string.crash_title), fontWeight = FontWeight.Bold, fontSize = 20.sp)
-        }
+    Column(Modifier.fillMaxSize()) {
+        // 统一返回栏：标题字号/位置与其它子页面一致，不再自绘一套 20sp 粗体标题
+        BackBar(stringResource(R.string.crash_title), onBack)
         if (reports.isEmpty()) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { Text(stringResource(R.string.crash_empty), color = Muted) }
         else LazyColumn(contentPadding = PaddingValues(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             items(reports, key = { it.path }, contentType = { "crash-report" }) { report ->
@@ -111,11 +111,16 @@ fun CrashReportDialog(
                 lineHeight = 15.sp
             )
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                FilterChip(selected = mode == CrashViewMode.Summary, onClick = { mode = CrashViewMode.Summary }, label = { Text(stringResource(R.string.crash_summary)) })
-                FilterChip(selected = mode == CrashViewMode.RawReport, onClick = { mode = CrashViewMode.RawReport }, label = { Text(stringResource(R.string.crash_raw)) })
-                FilterChip(selected = mode == CrashViewMode.RunLog, onClick = { mode = CrashViewMode.RunLog }, label = { Text(stringResource(R.string.crash_run_log)) })
-            }
+            // 与全局分段控件一致：同一套轨道/圆角/选中色，不再单独用 FilterChip 排一行
+            SegmentedTabs(
+                options = listOf(
+                    stringResource(R.string.crash_summary),
+                    stringResource(R.string.crash_raw),
+                    stringResource(R.string.crash_run_log)
+                ),
+                selectedIndex = mode.ordinal,
+                onSelect = { index -> CrashViewMode.entries.getOrNull(index)?.let { mode = it } }
+            )
             Spacer(Modifier.height(8.dp))
             Text(
                 displayedText,
@@ -132,7 +137,9 @@ fun CrashReportDialog(
                 }
                 Spacer(Modifier.width(4.dp))
             }
-            IconButton(onClick = { copy(context, displayedText) }) { Icon(Icons.Outlined.ContentCopy, stringResource(R.string.crash_copy), tint = Indigo) }
+            IconButton(onClick = { copy(context, displayedText) }, modifier = Modifier.size(McIcon.Touch)) {
+                Icon(Icons.Outlined.ContentCopy, stringResource(R.string.crash_copy), tint = Indigo, modifier = Modifier.size(McIcon.Item))
+            }
             // 分享的**始终是完整日志**：摘要只对当前分析有效，别人拿到摘要无法排查。
             // 完整文本 = 崩溃报告全文 + 本次运行完整日志（有则拼接）。
             val shareTitle = stringResource(R.string.crash_share)
@@ -144,12 +151,17 @@ fun CrashReportDialog(
                     append(runLog)
                 }
             }
-            IconButton(onClick = {
-                context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
-                    type = "text/plain"
-                    putExtra(Intent.EXTRA_TEXT, fullText)
-                }, shareTitle))
-            }) { Icon(Icons.Outlined.IosShare, stringResource(R.string.crash_share_full), tint = Indigo) }
+            IconButton(
+                onClick = {
+                    context.startActivity(Intent.createChooser(Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_TEXT, fullText)
+                    }, shareTitle))
+                },
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                Icon(Icons.Outlined.IosShare, stringResource(R.string.crash_share_full), tint = Indigo, modifier = Modifier.size(McIcon.Item))
+            }
             TextButton(onClick = onDismiss) { Text(stringResource(R.string.s620)) }
         }
     })

@@ -55,6 +55,8 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.launch
@@ -164,10 +166,14 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
-                    .padding(14.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .padding(vertical = 12.dp)
             ) {
-                Text(stringResource(R.string.ftp_intro), color = Muted, fontSize = 12.sp)
+                Text(
+                    stringResource(R.string.ftp_intro),
+                    color = Muted,
+                    fontSize = 12.sp,
+                    modifier = Modifier.padding(horizontal = McSpacing.Page)
+                )
 
                 McCard(title = stringResource(R.string.ftp_title)) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -201,6 +207,7 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                                     cm.setPrimaryClip(ClipData.newPlainText("FTP", "ftp://$lanIp:${port ?: DEFAULT_PORT}/"))
                                     Toast.makeText(context, R.string.mcp_copied, Toast.LENGTH_SHORT).show()
                                 },
+                                shape = McShape.ControlCompact,
                                 modifier = Modifier.weight(1f)
                             ) { Text(stringResource(R.string.ftp_copy_address), fontSize = 11.sp) }
                             OutlinedButton(
@@ -209,6 +216,7 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                                     cm.setPrimaryClip(ClipData.newPlainText("FTP host", lanIp))
                                     Toast.makeText(context, R.string.mcp_copied, Toast.LENGTH_SHORT).show()
                                 },
+                                shape = McShape.ControlCompact,
                                 modifier = Modifier.weight(1f)
                             ) { Text(stringResource(R.string.ftp_copy_host), fontSize = 11.sp) }
                         }
@@ -222,6 +230,7 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                     Button(
                         onClick = { if (running) stop() else start() },
                         colors = ButtonDefaults.buttonColors(containerColor = if (running) Coral else Indigo),
+                        shape = McShape.Control,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
@@ -308,7 +317,12 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                     }
                 }
 
-                Text(stringResource(R.string.ftp_security_note), color = Muted, fontSize = 11.sp)
+                Text(
+                    stringResource(R.string.ftp_security_note),
+                    color = Muted,
+                    fontSize = 11.sp,
+                    modifier = Modifier.padding(horizontal = McSpacing.Page, vertical = 4.dp)
+                )
             }
         }
     }

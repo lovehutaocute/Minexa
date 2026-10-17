@@ -104,6 +104,9 @@ import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoDark
 import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.Line
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.MintBright
 import com.mineserve.mobile.ui.theme.MintSoft
@@ -131,7 +134,7 @@ fun HeaderBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
-                .padding(horizontal = 14.dp, vertical = 10.dp)
+                .padding(horizontal = McSpacing.Page, vertical = 10.dp)
         ) {
             Text(
                 text = eyebrow,
@@ -140,13 +143,15 @@ fun HeaderBlock(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.6.sp
             )
-            Spacer(Modifier.height(2.dp))
+            Spacer(Modifier.height(3.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = title,
                     color = MaterialTheme.colorScheme.onBackground,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
                 trailing?.invoke()
@@ -167,22 +172,25 @@ fun BackBar(title: String, onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .statusBarsPadding()
-                .padding(horizontal = 16.dp, vertical = 3.dp),
+                .padding(start = 8.dp, end = McSpacing.Page, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(36.dp)) {
+            IconButton(onClick = onBack, modifier = Modifier.size(McIcon.Touch)) {
                 Icon(
                     Icons.AutoMirrored.Outlined.ArrowBack,
                     contentDescription = stringResource(R.string.s404),
-                    modifier = Modifier.size(20.dp)
+                    tint = MaterialTheme.colorScheme.onBackground,
+                    modifier = Modifier.size(McIcon.Item)
                 )
             }
             Text(
                 title,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Medium,
+                fontSize = 15.sp,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground,
-                modifier = Modifier.padding(start = 4.dp)
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 2.dp)
             )
         }
     }
@@ -231,8 +239,8 @@ fun HeroBlock(
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp)
-            .clip(RoundedCornerShape(10.dp))
+            .padding(horizontal = McSpacing.Page, vertical = 8.dp)
+            .clip(McShape.Card)
             .background(
                 Brush.linearGradient(colors = listOf(Indigo, IndigoDark))
             )
@@ -283,11 +291,11 @@ fun HeroBlock(
                     // 采集本身很快，若没有这层反馈，用户无法区分「没反应」和「刷了但值没变」。
                     if (isRefreshing) {
                         Box(
-                            modifier = Modifier.size(30.dp),
+                            modifier = Modifier.size(McIcon.TouchCompact),
                             contentAlignment = Alignment.Center
                         ) {
                             CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
+                                modifier = Modifier.size(McIcon.Action),
                                 strokeWidth = 2.dp,
                                 color = Color.White.copy(alpha = 0.9f)
                             )
@@ -295,13 +303,13 @@ fun HeroBlock(
                     } else {
                         IconButton(
                             onClick = onRefresh,
-                            modifier = Modifier.size(30.dp)
+                            modifier = Modifier.size(McIcon.TouchCompact)
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.Refresh,
                                 contentDescription = stringResource(R.string.hero_refresh),
                                 tint = Color.White.copy(alpha = 0.85f),
-                                modifier = Modifier.size(17.dp)
+                                modifier = Modifier.size(McIcon.Action)
                             )
                         }
                     }
@@ -519,7 +527,11 @@ private fun formatRefreshAgo(refreshAtMs: Long): String {
 }
 
 /**
- * 通用卡片容器：参考界面圆角 18 + 白底 + 1px line 边
+ * 通用卡片容器：白底 + 1px 描边 + 极浅投影，圆角与页面边距取自全局令牌。
+ *
+ * 所有卡片共用同一圆角（[McShape.Card]）、同一边距（[McSpacing.Page]）与同一投影，
+ * 这样不同页面上下滚动时卡片边缘始终在同一条竖线上，不会因为某个页面写了 14dp、
+ * 另一个页面写了 20dp 而出现整体错位。
  */
 @Composable
 fun McCard(
@@ -532,12 +544,20 @@ fun McCard(
     Card(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = if (compact) 4.dp else 7.dp),
-        shape = RoundedCornerShape(8.dp),
+            .padding(
+                horizontal = McSpacing.Page,
+                vertical = if (compact) McSpacing.CardGapCompact else McSpacing.CardGap
+            ),
+        shape = McShape.Card,
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
         border = androidx.compose.foundation.BorderStroke(1.dp, Line)
     ) {
-        Column(Modifier.padding(if (compact) 12.dp else 14.dp)) {
+        Column(
+            Modifier.padding(
+                if (compact) McSpacing.CardInnerCompact else McSpacing.CardInner
+            )
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -551,7 +571,11 @@ fun McCard(
                 )
                 trailing?.invoke()
             }
-            Spacer(Modifier.height(if (compact) 8.dp else 10.dp))
+            Spacer(
+                Modifier.height(
+                    if (compact) McSpacing.CardHeaderCompact else McSpacing.CardHeader
+                )
+            )
             content()
         }
     }
@@ -640,7 +664,7 @@ fun SegPill(
 ) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(McShape.Chip)
             .background(if (selected) Indigo else unselectedBackground)
             .clickable { onClick() }
             .padding(horizontal = if (compact) 10.dp else 14.dp, vertical = if (compact) 6.dp else 8.dp)
@@ -766,7 +790,7 @@ fun DebouncedTextField(
 fun StatusPill(text: String, color: Color, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(McShape.Chip)
             .background(color.copy(alpha = 0.12f))
             .padding(horizontal = 10.dp, vertical = 3.dp)
     ) {
@@ -792,16 +816,16 @@ fun AddressCopyRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(McShape.Row)
             .background(containerColor)
             .then(
-                if (borderColor != null) Modifier.border(1.dp, borderColor, RoundedCornerShape(12.dp))
+                if (borderColor != null) Modifier.border(1.dp, borderColor, McShape.Row)
                 else Modifier
             )
-            .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            .padding(start = 12.dp, end = 4.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(18.dp))
+        Icon(icon, contentDescription = null, tint = accent, modifier = Modifier.size(McIcon.Action))
         Spacer(Modifier.size(10.dp))
         Column(Modifier.weight(1f)) {
             Text(label, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
@@ -810,15 +834,18 @@ fun AddressCopyRow(
                 value,
                 fontSize = 14.sp,
                 fontWeight = FontWeight.Bold,
-                fontFamily = FontFamily.Monospace
+                fontFamily = FontFamily.Monospace,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
             )
         }
         if (value.isNotBlank()) {
-            IconButton(onClick = onCopy) {
+            IconButton(onClick = onCopy, modifier = Modifier.size(McIcon.Touch)) {
                 Icon(
                     Icons.Outlined.ContentCopy,
                     contentDescription = stringResource(R.string.s388),
-                    tint = accent
+                    tint = accent,
+                    modifier = Modifier.size(McIcon.Item)
                 )
             }
         }
@@ -838,7 +865,7 @@ fun StatLine(icon: ImageVector, text: String) {
             .padding(vertical = 2.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = Muted, modifier = Modifier.size(15.dp))
+        Icon(icon, contentDescription = null, tint = Muted, modifier = Modifier.size(McIcon.Inline))
         Spacer(Modifier.size(8.dp))
         Text(text, color = Muted, fontSize = 11.sp)
     }
@@ -854,11 +881,11 @@ fun HintNote(text: String, icon: ImageVector = Icons.Outlined.Info) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(McShape.Row)
             .background(FieldBg)
             .padding(12.dp)
     ) {
-        Icon(icon, contentDescription = null, tint = Indigo, modifier = Modifier.size(16.dp))
+        Icon(icon, contentDescription = null, tint = Indigo, modifier = Modifier.size(McIcon.Inline))
         Spacer(Modifier.size(8.dp))
         Text(text, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
     }
@@ -874,16 +901,16 @@ fun WarnNote(text: String) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(McShape.Row)
             .background(CoralSoft)
-            .border(1.dp, Coral, RoundedCornerShape(12.dp))
+            .border(1.dp, Coral, McShape.Row)
             .padding(12.dp)
     ) {
         Icon(
             Icons.Outlined.WarningAmber,
             contentDescription = null,
             tint = Coral,
-            modifier = Modifier.size(16.dp)
+            modifier = Modifier.size(McIcon.Inline)
         )
         Spacer(Modifier.size(8.dp))
         Text(text, color = Coral, fontSize = 11.sp, lineHeight = 16.sp)
@@ -954,7 +981,7 @@ fun QqGroupDialog(onDismiss: () -> Unit) {
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
+        shape = McShape.Dialog,
         containerColor = MaterialTheme.colorScheme.surface,
         icon = {
             Icon(
@@ -1065,7 +1092,7 @@ fun RuntimeGroupHeader(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(McShape.Row)
             .clickable(enabled = enabled) { onToggle() }
             .padding(top = 8.dp, start = 4.dp, end = 4.dp, bottom = 2.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -1085,20 +1112,91 @@ fun RuntimeGroupHeader(
             imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
             contentDescription = null,
             tint = Indigo,
-            modifier = Modifier.size(20.dp)
+            modifier = Modifier.size(McIcon.Item)
         )
+    }
+}
+
+/**
+ * 分段切换控件：等宽分段 + 滑动高亮块。
+ *
+ * 项目里原先有四套「同义不同形」的切换控件：插件页与玩家页各写了一遍
+ * 「淡蓝轨道 + 蓝色选中块」，环境管理页用 [FilterChip]，PRoot 发行版用另一份
+ * 带动画的高亮块。这里收敛成一份实现，所有分段切换都由它渲染，
+ * 于是轨道高度、圆角、字号、选中色、切换动画在任意页面都一致。
+ *
+ * 选中块用 260ms 缓动**滑动**到目标位置而不是瞬移：切换后往往伴随下方内容变化，
+ * 有位移过程才容易把「我点了这里」和「下面变了」联系起来。
+ *
+ * @param options 分段文案（等宽排布，调用方自行带上数量等后缀）
+ * @param selectedIndex 当前选中项下标，越界时按 0 处理
+ * @param enabled 为假时整条置灰且不响应点击
+ */
+@Composable
+fun SegmentedTabs(
+    options: List<String>,
+    selectedIndex: Int,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    onSelect: (Int) -> Unit
+) {
+    if (options.isEmpty()) return
+    val safeIndex = selectedIndex.coerceIn(0, options.lastIndex)
+    BoxWithConstraints(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(36.dp)
+            .clip(McShape.Chip)
+            .background(FieldGray)
+            .alpha(if (enabled) 1f else 0.5f)
+    ) {
+        val segmentWidth = maxWidth / options.size
+        val highlightOffset by animateDpAsState(
+            targetValue = segmentWidth * safeIndex,
+            animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+            label = "segmented-tabs-highlight"
+        )
+        // 高亮块：留 3dp 内边距，所以圆角比轨道小 3dp，视觉上正好同心
+        Box(
+            modifier = Modifier
+                .offset(x = highlightOffset)
+                .width(segmentWidth)
+                .fillMaxHeight()
+                .padding(3.dp)
+                .clip(RoundedCornerShape(9.dp))
+                .background(Indigo)
+        )
+        Row(Modifier.fillMaxSize()) {
+            options.forEachIndexed { index, label ->
+                val isSelected = index == safeIndex
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .clickable(enabled = enabled) { onSelect(index) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        label,
+                        color = if (isSelected) Color.White else Muted,
+                        fontSize = 12.sp,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
     }
 }
 
 /**
  * Ubuntu 发行版胶囊切换控件。
  *
- * 左侧 Ubuntu 20.04、右侧 Ubuntu 22.04；选中项用蓝色胶囊背景标出，
- * 切换时蓝色背景**滑动**到另一侧而不是瞬移 —— 瞬移会让用户怀疑是否真的切换了，
- * 尤其在随后的版本列表也跟着变的时候，两个变化叠在一起很难判断因果。
+ * 左侧 Ubuntu 20.04、右侧 Ubuntu 22.04；实现完全交给 [SegmentedTabs]，
+ * 保证与插件分类、玩家标签等分段切换控件在高度、圆角、配色与滑动动画上完全一致。
  *
- * 两个选项等宽，因此高亮块的宽度就是轨道的一半，位移按索引线性计算，
- * 不需要测量每个标签的文字宽度。
+ * 版本里用短名（「Ubuntu 20.04」）：一半宽度放不下带代号的显示名。
  */
 @Composable
 fun ProotDistroPillSwitcher(
@@ -1109,51 +1207,13 @@ fun ProotDistroPillSwitcher(
     val options = ProotDistro.entries
     if (options.isEmpty()) return
     val selectedIndex = options.indexOf(selected).coerceAtLeast(0)
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(34.dp)
-            .clip(RoundedCornerShape(17.dp))
-            .background(FieldGray)
-            .alpha(if (enabled) 1f else 0.5f)
-    ) {
-        val segmentWidth = maxWidth / options.size
-        val highlightOffset by animateDpAsState(
-            targetValue = segmentWidth * selectedIndex,
-            animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
-            label = "proot-distro-highlight"
-        )
-        // 高亮块：留 3dp 内边距，所以圆角比轨道小 3dp，视觉上正好同心
-        Box(
-            modifier = Modifier
-                .offset(x = highlightOffset)
-                .width(segmentWidth)
-                .fillMaxHeight()
-                .padding(3.dp)
-                .clip(RoundedCornerShape(14.dp))
-                .background(Indigo)
-        )
-        Row(Modifier.fillMaxSize()) {
-            options.forEach { distro ->
-                val isSelected = distro == selected
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxHeight()
-                        .clickable(enabled = enabled) { onSelect(distro) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        // 胶囊里用短名（「Ubuntu 20.04」）：一半宽度放不下带代号的显示名
-                        distro.shortName,
-                        color = if (isSelected) Color.White else Indigo,
-                        fontSize = 12.sp,
-                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal
-                    )
-                }
-            }
-        }
-    }
+    SegmentedTabs(
+        // 胶囊里用短名（「Ubuntu 20.04」）：一半宽度放不下带代号的显示名
+        options = options.map { it.shortName },
+        selectedIndex = selectedIndex,
+        enabled = enabled,
+        onSelect = { index -> options.getOrNull(index)?.let(onSelect) }
+    )
 }
 
 /** 来源的分组标题文案。 */
@@ -1207,12 +1267,12 @@ fun RuntimeVersionRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(McShape.Row)
             .background(if (selected) Mint.copy(alpha = 0.12f) else Color.Transparent)
             .border(
                 width = if (selected) 1.5.dp else 0.dp,
                 color = if (selected) Mint else Color.Transparent,
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.Row
             )
             .clickable { onClick() }
             .padding(horizontal = 12.dp, vertical = 9.dp),
@@ -1230,7 +1290,7 @@ fun RuntimeVersionRow(
             }
         }
         if (busy) {
-            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp, color = Indigo)
+            CircularProgressIndicator(modifier = Modifier.size(McIcon.Inline), strokeWidth = 2.dp, color = Indigo)
         } else {
             status?.let {
                 Text(it, color = statusColor, fontSize = 11.sp)

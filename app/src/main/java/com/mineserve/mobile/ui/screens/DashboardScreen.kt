@@ -125,6 +125,9 @@ import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
@@ -189,13 +192,13 @@ fun DashboardScreen(
                             // QQ 群入口：企鹅图标，点开弹窗显示群号 / 复制 / 加群
                             IconButton(
                                 onClick = { showQqDialog = true },
-                                modifier = Modifier.size(34.dp)
+                                modifier = Modifier.size(McIcon.TouchCompact)
                             ) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_qq_penguin),
                                     contentDescription = stringResource(R.string.s1051),
                                     tint = Indigo,
-                                    modifier = Modifier.size(24.dp)
+                                    modifier = Modifier.size(McIcon.Display)
                                 )
                             }
                             Spacer(Modifier.width(6.dp))
@@ -203,15 +206,15 @@ fun DashboardScreen(
                             Button(
                                 onClick = { onEnvManager(0) },
                                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                                shape = RoundedCornerShape(14.dp),
+                                shape = McShape.ControlCompact,
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                modifier = Modifier.height(34.dp)
+                                modifier = Modifier.height(36.dp)
                             ) {
                                 Icon(
                                     Icons.Outlined.Construction,
                                     contentDescription = stringResource(R.string.env_entry_desc),
                                     tint = androidx.compose.ui.graphics.Color.White,
-                                    modifier = Modifier.size(16.dp)
+                                    modifier = Modifier.size(McIcon.Inline)
                                 )
                                 Spacer(Modifier.width(4.dp))
                                 Text(
@@ -339,7 +342,7 @@ private fun DashboardJavaInstallCard(vm: McViewModel) {
             onClick = { vm.installJava(selected) },
             enabled = !isInstalling,
             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.Control,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(stringResource(R.string.env_java_install_btn), color = Color.White, fontWeight = FontWeight.SemiBold)
@@ -458,25 +461,25 @@ private fun DashboardCoreSelectionCard(
                 // 但为避免与 40dp 齿轮并排时命中区过小，这里统一到 36dp / 18dp。
                 IconButton(
                     onClick = onShowDiagnostics,
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(McIcon.TouchCompact)
                 ) {
                     Icon(
                         Icons.Outlined.Warning,
                         contentDescription = diagnosticSummary,
                         tint = diagnosticTint,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(McIcon.Action)
                     )
                 }
                 // 较大的齿轮入口：命中区 40dp、图标 24dp，与标题行 14sp 字重相称。
                 IconButton(
                     onClick = onShowSettings,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(McIcon.Touch)
                 ) {
                     Icon(
                         Icons.Outlined.Settings,
                         contentDescription = stringResource(R.string.s378),
                         tint = Indigo,
-                        modifier = Modifier.size(24.dp)
+                        modifier = Modifier.size(McIcon.Display)
                     )
                 }
             }
@@ -522,7 +525,7 @@ private fun DashboardCoreSelectionCard(
                         containerColor = if (activeCore != null) IndigoSoft else Indigo,
                         contentColor = if (activeCore != null) Indigo else Color.White
                     ),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = McShape.Control,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(
@@ -685,7 +688,7 @@ private fun DashboardDependenciesCard(
                 onClick = { vm.installDependencies() },
                 enabled = !isInstalling && isBootstrapped,
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(12.dp),
+                shape = McShape.Control,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 if (isInstalling) {
@@ -709,7 +712,7 @@ private fun DashboardDependenciesCard(
                 OutlinedButton(
                     onClick = { vm.downloadFrpcEngine() },
                     enabled = download !is McViewModel.DownloadState.Downloading && vm.frpcOnlineAvailable,
-                    shape = RoundedCornerShape(12.dp),
+                    shape = McShape.Control,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     val downloading = download is McViewModel.DownloadState.Downloading
@@ -773,7 +776,7 @@ private fun DashboardBootstrapCard(
             Button(
                 onClick = { vm.retryBootstrap() },
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(12.dp),
+                shape = McShape.Control,
                 modifier = Modifier.fillMaxWidth()
             ) { Text(stringResource(R.string.s355), color = Color.White, fontWeight = FontWeight.SemiBold) }
         } else {
@@ -805,11 +808,13 @@ private fun DashboardBootstrapCard(
                             onShowMessage(mirrorSwitchMsg)
                         },
                         enabled = !switchInProgress,
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.height(48.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp)
+                        shape = McShape.ControlCompact,
+                        // 原 48dp 的高度把这行撑得比上面的进度文字高出一倍多，
+                        // 收到 36dp 与其它行内紧凑按钮一致。
+                        modifier = Modifier.height(36.dp),
+                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)
                     ) {
-                        Text(stringResource(if (switchInProgress) R.string.mirror_switching else R.string.s1058), fontSize = 10.sp, color = Indigo)
+                        Text(stringResource(if (switchInProgress) R.string.mirror_switching else R.string.s1058), fontSize = 11.sp, color = Indigo)
                     }
                 }
             }
@@ -886,16 +891,27 @@ private fun DashboardAddressCard(vm: McViewModel) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(stringResource(R.string.s387), color = Muted, fontSize = 10.sp)
-                Text("${lanIp}:${localPort}", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "${lanIp}:${localPort}",
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
-            IconButton(onClick = { vm.refreshLanIp() }) {
-                Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(16.dp))
+            // 命中区统一到 40dp、图标 18dp：原先默认 48dp 的命中区会把这一行撑高，
+            // 与卡片里 13sp 的正文不协调。
+            IconButton(onClick = { vm.refreshLanIp() }, modifier = Modifier.size(McIcon.Touch)) {
+                Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(McIcon.Action))
             }
-            IconButton(onClick = {
-                val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                cm.setPrimaryClip(android.content.ClipData.newPlainText("", "${lanIp}:${localPort}"))
-            }) {
-                Icon(Icons.Outlined.ContentCopy, stringResource(R.string.s388), tint = Indigo, modifier = Modifier.size(16.dp))
+            IconButton(
+                onClick = {
+                    val cm = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                    cm.setPrimaryClip(android.content.ClipData.newPlainText("", "${lanIp}:${localPort}"))
+                },
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                Icon(Icons.Outlined.ContentCopy, stringResource(R.string.s388), tint = Indigo, modifier = Modifier.size(McIcon.Action))
             }
         }
         // 两条通道各自的公网地址。
@@ -926,10 +942,17 @@ private fun DashboardTunnelAddressRow(label: String, url: String, onCopy: (Strin
     Row(verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(label, color = Muted, fontSize = 10.sp)
-            Text(url, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Indigo, maxLines = 1)
+            Text(
+                url,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = Indigo,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
-        IconButton(onClick = { onCopy(url) }) {
-            Icon(Icons.Outlined.ContentCopy, stringResource(R.string.s388), tint = Indigo, modifier = Modifier.size(16.dp))
+        IconButton(onClick = { onCopy(url) }, modifier = Modifier.size(McIcon.Touch)) {
+            Icon(Icons.Outlined.ContentCopy, stringResource(R.string.s388), tint = Indigo, modifier = Modifier.size(McIcon.Action))
         }
     }
 }
@@ -1107,7 +1130,7 @@ private fun StartStopBar(
         animationSpec = tween(durationMillis = 460, easing = FastOutSlowInEasing),
         label = "startStopLeftBorder"
     )
-    val shape = RoundedCornerShape(12.dp)
+    val shape = McShape.Control
 
     BoxWithConstraints(
         modifier = Modifier
@@ -1457,8 +1480,8 @@ private fun StartSettingsSheet(
                 .verticalScroll(rememberScrollState())
                 .navigationBarsPadding()
                 .imePadding()
-                .padding(horizontal = 18.dp)
-                .padding(bottom = 18.dp)
+                .padding(horizontal = McSpacing.Page)
+                .padding(bottom = McSpacing.Page)
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {

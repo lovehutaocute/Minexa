@@ -95,11 +95,15 @@ import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
+import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
@@ -369,72 +373,30 @@ fun PluginsScreen(vm: McViewModel) {
                     color = Coral,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.SemiBold,
-                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp)
+                    modifier = Modifier.padding(horizontal = McSpacing.Page, vertical = 4.dp)
                 )
             } else {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 4.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(IndigoSoft)
-                        .padding(4.dp)
-                ) {
-                    availableTypes.forEach { t ->
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(if (resourceType == t) Indigo else Color.Transparent)
-                                .clickable { resourceType = t }
-                                .padding(vertical = 8.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text(
-                                stringResource(t.labelRes),
-                                color = if (resourceType == t) Color.White else Muted,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                        }
-                    }
-                }
+                val types = availableTypes
+                SegmentedTabs(
+                    options = types.map { stringResource(it.labelRes) },
+                    selectedIndex = types.indexOf(resourceType),
+                    modifier = Modifier.padding(horizontal = McSpacing.Page, vertical = 4.dp),
+                    onSelect = { index -> types.getOrNull(index)?.let { resourceType = it } }
+                )
             }
 
             // ── 标签切换栏（仅插件分类显示） ──
             if (resourceType == ResourceType.Plugin) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(IndigoSoft)
-                    .padding(4.dp)
-            ) {
-                PluginTab.values().forEach { tab ->
-                    val count = when (tab) {
-                        PluginTab.Installed -> installedPlugins.size
-                        else -> 0
-                    }
-                    val label = if (count > 0) "${stringResource(tab.labelRes)} $count" else stringResource(tab.labelRes)
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(if (activeTab == tab) Indigo else Color.Transparent)
-                            .clickable { activeTab = tab }
-                            .padding(vertical = 8.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            label,
-                            color = if (activeTab == tab) Color.White else Muted,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    }
-                }
-            }
+            val tabs = PluginTab.values()
+            SegmentedTabs(
+                options = tabs.map { tab ->
+                    val count = if (tab == PluginTab.Installed) installedPlugins.size else 0
+                    if (count > 0) "${stringResource(tab.labelRes)} $count" else stringResource(tab.labelRes)
+                },
+                selectedIndex = tabs.indexOf(activeTab),
+                modifier = Modifier.padding(horizontal = McSpacing.Page, vertical = 4.dp),
+                onSelect = { index -> tabs.getOrNull(index)?.let { activeTab = it } }
+            )
             }
 
             // ── 内容区（插件 / 模组按资源类型分流） ──
@@ -523,7 +485,7 @@ fun PluginsScreen(vm: McViewModel) {
                         containerColor = Indigo,
                         disabledContainerColor = IndigoSoft
                     ),
-                    shape = RoundedCornerShape(12.dp),
+                    shape = McShape.Control,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Outlined.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -697,7 +659,7 @@ private fun InstalledTab(
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(16.dp)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
+            shape = McShape.ControlCompact
         )
 
         Spacer(Modifier.height(8.dp))
@@ -833,13 +795,13 @@ private fun InstalledPluginRow(
         // 详情按钮
         Box(
             modifier = Modifier
-                .size(28.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .size(McIcon.TouchCompact)
+                .clip(McShape.ControlCompact)
                 .background(Color.Transparent)
                 .clickable { onShowDetail() },
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.s734), tint = Indigo, modifier = Modifier.size(14.dp))
+            Icon(Icons.Outlined.Info, contentDescription = stringResource(R.string.s734), tint = Indigo, modifier = Modifier.size(McIcon.Inline))
         }
         // 启用/禁用开关
         Switch(
@@ -852,13 +814,13 @@ private fun InstalledPluginRow(
         // 删除按钮
         Box(
             modifier = Modifier
-                .size(28.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .size(McIcon.TouchCompact)
+                .clip(McShape.ControlCompact)
                 .background(CoralSoft)
                 .clickable(enabled = enabled) { onDelete() },
             contentAlignment = Alignment.Center
         ) {
-            Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(14.dp))
+            Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(McIcon.Inline))
         }
     }
 }
@@ -908,7 +870,7 @@ private fun UploadTab(
                 .height(120.dp)
                 .clip(RoundedCornerShape(12.dp))
                 .background(IndigoSoft)
-                .border(width = 1.dp, color = Indigo, shape = RoundedCornerShape(12.dp))
+                .border(width = 1.dp, color = Indigo, shape = McShape.Control)
                 .clickable {
                     filePickerLauncher.launch(arrayOf("application/java-archive", "application/octet-stream", "*/*"))
                 },
@@ -951,7 +913,7 @@ private fun UploadTab(
             leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null, modifier = Modifier.size(14.dp)) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
         )
         Spacer(Modifier.height(8.dp))
@@ -961,7 +923,7 @@ private fun UploadTab(
             label = { Text(stringResource(R.string.s801), fontSize = 11.sp) },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(10.dp)
+            shape = McShape.ControlCompact
         )
 
         // 自定义 URL 下载进度
@@ -990,7 +952,7 @@ private fun UploadTab(
             },
             enabled = customUrl.isNotBlank() && customName.isNotBlank() && customUrlProgress == null,
             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Outlined.Link, contentDescription = null, modifier = Modifier.size(14.dp))
@@ -1001,7 +963,7 @@ private fun UploadTab(
         Spacer(Modifier.height(12.dp))
         OutlinedButton(
             onClick = onGotoInstalled,
-            shape = RoundedCornerShape(8.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(stringResource(R.string.s802), color = Indigo, fontSize = 11.sp)
@@ -1070,7 +1032,8 @@ private fun DeletePluginDialog(
         confirmButton = {
             Button(
                 onClick = { onConfirm(alsoRemoveData) },
-                colors = ButtonDefaults.buttonColors(containerColor = Coral)
+                colors = ButtonDefaults.buttonColors(containerColor = Coral),
+                shape = McShape.Control
             ) { Text(stringResource(R.string.s339), color = Color.White) }
         },
         dismissButton = {
@@ -1242,8 +1205,8 @@ private fun ModsTab(
                                 fontSize = 11.sp
                             )
                         }
-                        IconButton(onClick = { onDelete(mod) }, enabled = !serverRunning) {
-                            Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(18.dp))
+                        IconButton(onClick = { onDelete(mod) }, enabled = !serverRunning, modifier = Modifier.size(McIcon.Touch)) {
+                            Icon(Icons.Outlined.Delete, contentDescription = stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(McIcon.Action))
                         }
                     }
                 }
@@ -1253,7 +1216,7 @@ private fun ModsTab(
         OutlinedButton(
             onClick = { filePickerLauncher.launch(arrayOf("application/java-archive", "*/*")) },
             enabled = activeCoreExists,
-            shape = RoundedCornerShape(10.dp),
+            shape = McShape.ControlCompact,
             modifier = Modifier.fillMaxWidth()
         ) {
             Icon(Icons.Outlined.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -1280,13 +1243,13 @@ private fun ModsTab(
                 placeholder = { Text(stringResource(R.string.s833), fontSize = 11.sp) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.ControlCompact
             )
             Spacer(Modifier.size(6.dp))
             Box {
                 OutlinedButton(
                     onClick = { sortMenuOpen = true },
-                    shape = RoundedCornerShape(10.dp)
+                    shape = McShape.ControlCompact
                 ) {
                     Text(sortOptions[sortIndex].second, fontSize = 11.sp, color = Indigo)
                 }
@@ -1304,7 +1267,7 @@ Spacer(Modifier.size(6.dp))
                 onClick = { onSearchModrinth(modrinthQuery.trim(), selectedLoaders.toList(), sortOptions[sortIndex].first, selectedModVersion) },
                 enabled = modrinthQuery.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.ControlCompact
             ) {
                 Text(stringResource(R.string.s834), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
@@ -1318,7 +1281,7 @@ Spacer(Modifier.size(6.dp))
             Box {
                 OutlinedButton(
                     onClick = { versionMenuOpen = true },
-                    shape = RoundedCornerShape(10.dp)
+                    shape = McShape.ControlCompact
                 ) {
                     Text(
                         if (selectedModVersion.isNotBlank()) selectedModVersion else "--",
@@ -1408,7 +1371,7 @@ fontWeight = FontWeight.SemiBold
                     Button(
                         onClick = { onInstallModrinth(hit, selectedModVersion) },
                         colors = ButtonDefaults.buttonColors(containerColor = Mint),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = McShape.ControlCompact
                     ) {
                         Text(stringResource(R.string.s837), color = Color.White, fontSize = 11.sp)
                     }
@@ -1468,13 +1431,13 @@ private fun PluginModrinthCard(
                 placeholder = { Text(stringResource(R.string.s1070), fontSize = 11.sp) },
                 singleLine = true,
                 modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.ControlCompact
             )
             Spacer(Modifier.size(6.dp))
             Box {
                 OutlinedButton(
                     onClick = { sortMenuOpen = true },
-                    shape = RoundedCornerShape(10.dp)
+                    shape = McShape.ControlCompact
                 ) {
                     Text(sortOptions[sortIndex].second, fontSize = 11.sp, color = Indigo)
                 }
@@ -1492,7 +1455,7 @@ private fun PluginModrinthCard(
                 onClick = { onSearch(query.trim(), selectedLoaders.toList(), sortOptions[sortIndex].first, selectedVersion) },
                 enabled = query.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(10.dp)
+                shape = McShape.ControlCompact
             ) {
                 Text(stringResource(R.string.s834), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
             }
@@ -1505,7 +1468,7 @@ private fun PluginModrinthCard(
             Box {
                 OutlinedButton(
                     onClick = { versionMenuOpen = true },
-                    shape = RoundedCornerShape(10.dp)
+                    shape = McShape.ControlCompact
                 ) {
                     Text(
                         if (selectedVersion.isNotBlank()) selectedVersion else "--",
@@ -1592,7 +1555,7 @@ private fun PluginModrinthCard(
                     Button(
                         onClick = { onInstall(hit, selectedVersion) },
                         colors = ButtonDefaults.buttonColors(containerColor = Mint),
-                        shape = RoundedCornerShape(8.dp)
+                        shape = McShape.ControlCompact
                     ) {
                         Text(stringResource(R.string.s837), color = Color.White, fontSize = 11.sp)
                     }

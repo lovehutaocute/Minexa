@@ -76,6 +76,9 @@ import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
@@ -161,7 +164,7 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = McSpacing.Page),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -191,7 +194,10 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                                 }
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = McShape.ControlCompact,
+                            // 三个按钮平分一行，默认的左右内边距会把 12sp 的中文挤掉，
+                            // 收窄内边距保证「导出服务器」这类较长文案不被裁切。
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(stringResource(R.string.s492), fontSize = 12.sp, maxLines = 1)
@@ -199,17 +205,19 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                         Button(
                             onClick = onOpenMtGuide,
                             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                            shape = RoundedCornerShape(8.dp),
+                            shape = McShape.ControlCompact,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             modifier = Modifier.weight(1f)
                         ) {
                             Text(stringResource(R.string.s489), fontSize = 12.sp, maxLines = 1)
                         }
                         OutlinedButton(
                             onClick = { exportServerLauncher.launch(exportServerFileName) },
-                            shape = RoundedCornerShape(8.dp),
+                            shape = McShape.ControlCompact,
+                            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 8.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            Icon(Icons.Outlined.FileDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Icon(Icons.Outlined.FileDownload, contentDescription = null, modifier = Modifier.size(McIcon.Inline))
                             Spacer(Modifier.size(4.dp))
                             Text(stringResource(R.string.s491), fontSize = 12.sp, color = Indigo, maxLines = 1)
                         }
@@ -217,13 +225,13 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                 }
                 IconButton(
                     onClick = { topActionsExpanded = !topActionsExpanded },
-                    modifier = Modifier.size(32.dp)
+                    modifier = Modifier.size(McIcon.TouchCompact)
                 ) {
                     Icon(
                         if (topActionsExpanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
                         contentDescription = null,
                         tint = Muted,
-                        modifier = Modifier.size(20.dp)
+                        modifier = Modifier.size(McIcon.Item)
                     )
                 }
             }
@@ -246,12 +254,12 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                     )
 
                     // 向上按钮
-                    IconButton(onClick = { vm.navigateUp() }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Outlined.ArrowUpward, stringResource(R.string.s494), tint = Indigo, modifier = Modifier.size(18.dp))
+                    IconButton(onClick = { vm.navigateUp() }, modifier = Modifier.size(McIcon.TouchCompact)) {
+                        Icon(Icons.Outlined.ArrowUpward, stringResource(R.string.s494), tint = Indigo, modifier = Modifier.size(McIcon.Action))
                     }
                     // 刷新按钮
-                    IconButton(onClick = { vm.refreshFiles() }, modifier = Modifier.size(32.dp)) {
-                        Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(18.dp))
+                    IconButton(onClick = { vm.refreshFiles() }, modifier = Modifier.size(McIcon.TouchCompact)) {
+                        Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(McIcon.Action))
                     }
                 }
 
@@ -274,7 +282,7 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                         },
                         enabled = canGoUp,
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = McShape.ControlCompact,
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(
@@ -292,7 +300,7 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                             filePickerLauncher.launch(arrayOf("*/*"))
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Mint),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = McShape.ControlCompact,
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(
@@ -311,7 +319,7 @@ fun FileManagerScreen(vm: McViewModel, onOpenMtGuide: () -> Unit = {}) {
                             showNewDirDialog = true
                         },
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = McShape.ControlCompact,
                         modifier = Modifier.weight(1f)
                     ) {
                         Icon(
@@ -519,17 +527,17 @@ private fun FileItemRow(
         }
 
         // 导出按钮
-        IconButton(onClick = onExport, modifier = Modifier.padding(start = 2.dp)) {
+        IconButton(onClick = onExport, modifier = Modifier.padding(start = 2.dp).size(McIcon.Touch)) {
             Icon(
                 Icons.Outlined.FileDownload,
                 contentDescription = stringResource(R.string.s335),
                 tint = Indigo,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(McIcon.Action)
             )
         }
 
-        if (canEdit) IconButton(onClick = onEdit) {
-            Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.fm_edit_text), tint = Indigo, modifier = Modifier.size(18.dp))
+        if (canEdit) IconButton(onClick = onEdit, modifier = Modifier.size(McIcon.Touch)) {
+            Icon(Icons.Outlined.Edit, contentDescription = stringResource(R.string.fm_edit_text), tint = Indigo, modifier = Modifier.size(McIcon.Action))
         }
 
         // 删除按钮
@@ -541,7 +549,7 @@ private fun FileItemRow(
                 Icons.Outlined.Delete,
                 contentDescription = stringResource(R.string.s339),
                 tint = Coral,
-                modifier = Modifier.size(18.dp)
+                modifier = Modifier.size(McIcon.Action)
             )
         }
     }

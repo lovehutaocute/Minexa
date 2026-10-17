@@ -41,6 +41,7 @@ import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Muted
 
 @Composable
@@ -65,7 +66,7 @@ fun MtGuideScreen(onBack: () -> Unit) {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mt2.cn/download/")))
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(8.dp),
+                shape = McShape.Control,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(stringResource(R.string.s567), fontSize = 14.sp)

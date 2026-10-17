@@ -18,7 +18,7 @@ import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.outlined.Send
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -189,7 +189,7 @@ fun TerminalScreen(vm: McViewModel) {
                         .size(48.dp)
                         .background(Color(0xFF3996FF), RoundedCornerShape(8.dp))
                 ) {
-                    Icon(Icons.Outlined.Send, "发送", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Outlined.Send, "发送", tint = Color.White)
                 }
             }
         }

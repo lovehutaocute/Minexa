@@ -802,6 +802,7 @@
     <string name="eyebrow_keepalive">Keep Alive</string>
     <string name="eyebrow_tools">Tools</string>
     <string name="eyebrow_help">Help</string>
+    <string name="eyebrow_players">Player Management</string>
     <string name="hero_starting">Starting server · %1$s</string>
     <string name="hero_running">Server running · %1$s</string>
     <string name="hero_stopped">Server not running</string>

@@ -31,7 +31,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ContentCopy
@@ -64,11 +63,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Card
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.Ink
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -142,24 +143,34 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 顶部带返回按钮的 Header（白底覆盖状态栏，配合全屏展示）
+        // 与其它子页面统一的返回栏度量：左侧 8dp 承接 40dp 返回键，右侧 16dp 与卡片对齐
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Card)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
+                .padding(start = 8.dp, end = McSpacing.Page, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack) {
-                Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = stringResource(R.string.s404))
+            IconButton(onClick = onBack, modifier = Modifier.size(McIcon.Touch)) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.ArrowBack,
+                    contentDescription = stringResource(R.string.s404),
+                    tint = Ink,
+                    modifier = Modifier.size(McIcon.Item)
+                )
             }
             Column(modifier = Modifier.weight(1f)) {
-                Text("LOG STREAM", color = Muted, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                Text("LOG STREAM", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
                 Text(stringResource(R.string.s557), color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             }
             // 日志设置齿轮按钮（汉化开关）
-            IconButton(onClick = { showLogSettings = true }) {
-                Icon(Icons.Outlined.Settings, contentDescription = stringResource(R.string.ui_log_localize), tint = Indigo)
+            IconButton(onClick = { showLogSettings = true }, modifier = Modifier.size(McIcon.Touch)) {
+                Icon(
+                    Icons.Outlined.Settings,
+                    contentDescription = stringResource(R.string.ui_log_localize),
+                    tint = Indigo,
+                    modifier = Modifier.size(McIcon.Item)
+                )
             }
         }
 
@@ -182,7 +193,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
             modifier = Modifier
                 .fillMaxWidth()
                 .horizontalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 4.dp),
+                .padding(horizontal = McSpacing.Page, vertical = 4.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             quickCommands.forEach { (emoji, labelRes, cmd) ->
@@ -190,7 +201,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                     onClick = { vm.sendCommand(cmd) },
                     modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 1.dp).height(28.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
-                    shape = RoundedCornerShape(4.dp),
+                    shape = McShape.Small,
                     colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = Color(0xFF89B4FA))
                 ) {
                     Text(
@@ -231,7 +242,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp, vertical = 8.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(McShape.Card)
                 .background(Color(0xFF1E1E2E))
         ) {
             if (lines.isEmpty()) {
@@ -286,13 +297,21 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                 modifier = Modifier.weight(1f)
             )
             Spacer(Modifier.height(0.dp))
-            IconButton(onClick = {
-                if (input.isNotBlank()) {
-                    vm.sendCommand(input)
-                    input = ""
-                }
-            }) {
-                Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = stringResource(R.string.s563), tint = Indigo)
+            IconButton(
+                onClick = {
+                    if (input.isNotBlank()) {
+                        vm.sendCommand(input)
+                        input = ""
+                    }
+                },
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.Send,
+                    contentDescription = stringResource(R.string.s563),
+                    tint = Indigo,
+                    modifier = Modifier.size(McIcon.Item)
+                )
             }
         }
             }  // MC 终端面板结束
@@ -320,7 +339,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                         .weight(1f)
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(McShape.Card)
                         .background(Color(0xFF1E1E2E))
                 ) {
                     if (termuxLines.isEmpty()) {
@@ -375,12 +394,18 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                                 termuxInput = ""
                             }
                         },
-                        enabled = !termuxBusy
+                        enabled = !termuxBusy,
+                        modifier = Modifier.size(McIcon.Touch)
                     ) {
                         if (termuxBusy) {
-                            CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = Indigo)
+                            CircularProgressIndicator(modifier = Modifier.size(McIcon.Action), strokeWidth = 2.dp, color = Indigo)
                         } else {
-                            Icon(Icons.AutoMirrored.Outlined.Send, contentDescription = stringResource(R.string.s563), tint = Indigo)
+                            Icon(
+                                Icons.AutoMirrored.Outlined.Send,
+                                contentDescription = stringResource(R.string.s563),
+                                tint = Indigo,
+                                modifier = Modifier.size(McIcon.Item)
+                            )
                         }
                     }
                 }
@@ -508,8 +533,8 @@ private fun TerminalPanel(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .padding(horizontal = 12.dp, vertical = 4.dp)
-            .clip(RoundedCornerShape(12.dp))
+            .padding(horizontal = McSpacing.Page, vertical = 4.dp)
+            .clip(McShape.Card)
             .background(Card)
     ) {
         Row(
@@ -525,19 +550,20 @@ private fun TerminalPanel(
             Spacer(Modifier.weight(1f))
             // 会话面板各自的复制按钮（复制本面板日志）
             if (onCopy != null) {
-                IconButton(onClick = onCopy, modifier = Modifier.size(28.dp)) {
+                IconButton(onClick = onCopy, modifier = Modifier.size(McIcon.TouchCompact)) {
                     Icon(
                         Icons.Outlined.ContentCopy,
                         contentDescription = stringResource(R.string.s560),
                         tint = Indigo,
-                        modifier = Modifier.size(15.dp)
+                        modifier = Modifier.size(McIcon.Action)
                     )
                 }
             }
             Icon(
                 if (expanded) Icons.Outlined.KeyboardArrowUp else Icons.Outlined.KeyboardArrowDown,
                 contentDescription = null,
-                tint = Muted
+                tint = Muted,
+                modifier = Modifier.size(McIcon.Action)
             )
         }
         if (expanded) {

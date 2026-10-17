@@ -38,6 +38,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -234,7 +236,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                     Button(
                         onClick = { openPermissionSettings() },
                         colors = ButtonDefaults.buttonColors(containerColor = Coral),
-                        shape = RoundedCornerShape(8.dp),
+                        shape = McShape.Control,
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
@@ -282,7 +284,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                         },
                         enabled = isBootstrapped,
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(8.dp), modifier = Modifier.weight(1f)
+                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f)
                     ) { Text(stringResource(R.string.s328), color = Color.White, fontSize = 12.sp) }
                     Button(
                         onClick = {
@@ -297,7 +299,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                         },
                         enabled = isBootstrapped && !isSnapshotting,
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(8.dp), modifier = Modifier.weight(1f)
+                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f)
                     ) {
                         if (isSnapshotting) CircularProgressIndicator(Modifier.size(16.dp), Color.White, strokeWidth = 2.dp)
                         else Text(stringResource(R.string.s331), color = Color.White, fontSize = 12.sp)
@@ -314,13 +316,13 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                         onClick = { vm.backupWorldToExternal() },
                         enabled = isBootstrapped && hasStoragePerm,
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(8.dp), modifier = Modifier.weight(1f)
+                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f)
                     ) { Text(stringResource(R.string.backup_ext_world), color = Color.White, fontSize = 12.sp) }
                     Button(
                         onClick = { vm.backupServerToExternal() },
                         enabled = isBootstrapped && hasStoragePerm,
                         colors = ButtonDefaults.buttonColors(containerColor = Coral),
-                        shape = RoundedCornerShape(8.dp), modifier = Modifier.weight(1f)
+                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f)
                     ) { Text(stringResource(R.string.backup_ext_server), color = Color.White, fontSize = 12.sp) }
                 }
                 Spacer(Modifier.height(6.dp))
@@ -337,11 +339,17 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                 title = stringResource(R.string.backup_ext_list_title, extBackups.size),
                 trailing = {
                     Row {
-                        IconButton(onClick = { importLauncher.launch(arrayOf("application/zip")) }) {
-                            Icon(Icons.Outlined.FileUpload, stringResource(R.string.backup_ext_import), tint = Indigo, modifier = Modifier.size(18.dp))
+                        IconButton(
+                            onClick = { importLauncher.launch(arrayOf("application/zip")) },
+                            modifier = Modifier.size(McIcon.Touch)
+                        ) {
+                            Icon(Icons.Outlined.FileUpload, stringResource(R.string.backup_ext_import), tint = Indigo, modifier = Modifier.size(McIcon.Action))
                         }
-                        IconButton(onClick = { refreshExtBackups() }) {
-                            Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(18.dp))
+                        IconButton(
+                            onClick = { refreshExtBackups() },
+                            modifier = Modifier.size(McIcon.Touch)
+                        ) {
+                            Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(McIcon.Action))
                         }
                     }
                 }
@@ -377,9 +385,9 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                             // 删除备份（二次确认）
                             IconButton(
                                 onClick = { pendingDeleteBackup = f.name },
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(McIcon.TouchCompact)
                             ) {
-                                Icon(Icons.Outlined.Delete, stringResource(R.string.backup_ext_delete), tint = Coral, modifier = Modifier.size(16.dp))
+                                Icon(Icons.Outlined.Delete, stringResource(R.string.backup_ext_delete), tint = Coral, modifier = Modifier.size(McIcon.Action))
                             }
                         }
                     }
@@ -507,7 +515,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                     onClick = { showDeleteWorldConfirm = true },
                     enabled = isBootstrapped,
                     colors = ButtonDefaults.buttonColors(containerColor = Coral),
-                    shape = RoundedCornerShape(8.dp)
+                    shape = McShape.Control
                 ) {
                     Text(stringResource(R.string.ui_world_delete), color = Color.White, fontSize = 12.sp)
                 }
@@ -517,8 +525,8 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
             McCard(
                 title = "历史私有快照（${snapshots.size}）",
                 trailing = {
-                    IconButton(onClick = { vm.loadSnapshots() }) {
-                        Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(18.dp))
+                    IconButton(onClick = { vm.loadSnapshots() }, modifier = Modifier.size(McIcon.Touch)) {
+                        Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(McIcon.Action))
                     }
                 }
             ) {
@@ -537,15 +545,15 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                                     exportTarget = snap.name
                                     exportLauncher.launch(snap.name)
                                 },
-                                modifier = Modifier.size(32.dp)
+                                modifier = Modifier.size(McIcon.TouchCompact)
                             ) {
-                                Icon(Icons.Outlined.FileDownload, stringResource(R.string.s335), tint = Indigo, modifier = Modifier.size(18.dp))
+                                Icon(Icons.Outlined.FileDownload, stringResource(R.string.s335), tint = Indigo, modifier = Modifier.size(McIcon.Action))
                             }
-                            IconButton(onClick = { pendingRestoreSnapshot = snap.name }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Outlined.Restore, stringResource(R.string.s337), tint = Indigo, modifier = Modifier.size(18.dp))
+                            IconButton(onClick = { pendingRestoreSnapshot = snap.name }, modifier = Modifier.size(McIcon.TouchCompact)) {
+                                Icon(Icons.Outlined.Restore, stringResource(R.string.s337), tint = Indigo, modifier = Modifier.size(McIcon.Action))
                             }
-                            IconButton(onClick = { pendingDeleteSnapshot = snap.name }, modifier = Modifier.size(32.dp)) {
-                                Icon(Icons.Outlined.Delete, stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(18.dp))
+                            IconButton(onClick = { pendingDeleteSnapshot = snap.name }, modifier = Modifier.size(McIcon.TouchCompact)) {
+                                Icon(Icons.Outlined.Delete, stringResource(R.string.s339), tint = Coral, modifier = Modifier.size(McIcon.Action))
                             }
                         }
                     }

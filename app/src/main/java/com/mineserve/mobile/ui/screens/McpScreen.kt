@@ -8,7 +8,6 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -58,6 +57,8 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
@@ -141,10 +142,14 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(vertical = 12.dp)
         ) {
-            Text(stringResource(R.string.mcp_intro), color = Muted, fontSize = 12.sp)
+            Text(
+                stringResource(R.string.mcp_intro),
+                color = Muted,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = McSpacing.Page)
+            )
 
             McCard(title = stringResource(R.string.mcp_enable)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -231,14 +236,18 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                     Button(
                         onClick = { copyToClipboard(config.mcpToken) },
                         enabled = config.mcpToken.isNotEmpty(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo)
+                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                        shape = McShape.ControlCompact
                     ) {
                         Text(stringResource(R.string.mcp_copy))
                     }
                     Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = {
-                        vm.updateConfig { it.copy(mcpToken = McpServerManager.generateToken()) }
-                    }) {
+                    OutlinedButton(
+                        onClick = {
+                            vm.updateConfig { it.copy(mcpToken = McpServerManager.generateToken()) }
+                        },
+                        shape = McShape.ControlCompact
+                    ) {
                         Text(stringResource(R.string.mcp_token_regenerate))
                     }
                 }
@@ -260,7 +269,8 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 Button(
                     onClick = { copyToClipboard(endpoint) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo)
+                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    shape = McShape.Control
                 ) {
                     Text(stringResource(R.string.mcp_copy))
                 }
@@ -289,7 +299,7 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                     Text(snippet, fontFamily = FontFamily.Monospace, fontSize = 10.sp, color = Muted)
                 }
                 Spacer(Modifier.height(6.dp))
-                OutlinedButton(onClick = { copyToClipboard(snippet) }) {
+                OutlinedButton(onClick = { copyToClipboard(snippet) }, shape = McShape.Control) {
                     Text(stringResource(R.string.mcp_copy))
                 }
             }
@@ -300,12 +310,16 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Row {
                     Button(
                         onClick = { skillExportLauncher.launch(McpSkillDoc.FILE_NAME) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo)
+                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                        shape = McShape.ControlCompact
                     ) {
                         Text(stringResource(R.string.mcp_skill_export))
                     }
                     Spacer(Modifier.width(8.dp))
-                    OutlinedButton(onClick = { copyToClipboard(skillDoc) }) {
+                    OutlinedButton(
+                        onClick = { copyToClipboard(skillDoc) },
+                        shape = McShape.ControlCompact
+                    ) {
                         Text(stringResource(R.string.mcp_skill_copy))
                     }
                 }
@@ -322,7 +336,12 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 }
             }
 
-            Text(stringResource(R.string.mcp_security_note), fontSize = 11.sp, color = Muted)
+            Text(
+                stringResource(R.string.mcp_security_note),
+                fontSize = 11.sp,
+                color = Muted,
+                modifier = Modifier.padding(horizontal = McSpacing.Page, vertical = 4.dp)
+            )
         }
     }
 }

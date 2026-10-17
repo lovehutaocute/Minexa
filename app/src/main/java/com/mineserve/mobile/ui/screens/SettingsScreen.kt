@@ -50,6 +50,7 @@ import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.SubPage
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Muted
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -284,7 +285,7 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
             Button(
                 onClick = { onNavigate(SubPage.KeepAlive) },
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(14.dp),
+                shape = McShape.Control,
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(56.dp)
@@ -337,7 +338,7 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(10.dp),
+                shape = McShape.ControlCompact,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(

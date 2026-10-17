@@ -31,6 +31,8 @@ import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -52,13 +54,24 @@ fun ServerIconScreen(vm: McViewModel, onBack: () -> Unit) {
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { it?.let(vm::setServerIcon) }
     Column(Modifier.fillMaxSize()) {
         BackBar(stringResource(R.string.ui_server_icon), onBack)
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Column(
+            Modifier.padding(horizontal = McSpacing.Page, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
             Text(stringResource(R.string.si_java_title), fontSize = 18.sp)
             Text(stringResource(R.string.si_hint), color = Muted, fontSize = 12.sp)
             bitmap?.let { Image(it.asImageBitmap(), null, Modifier.size(96.dp), contentScale = ContentScale.Crop) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Button(onClick = { launcher.launch("image/*") }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.ui_server_icon_change)) }
-                OutlinedButton(onClick = vm::removeServerIcon, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.ui_server_icon_reset), color = Coral) }
+                Button(
+                    onClick = { launcher.launch("image/*") },
+                    shape = McShape.ControlCompact,
+                    modifier = Modifier.weight(1f)
+                ) { Text(stringResource(R.string.ui_server_icon_change)) }
+                OutlinedButton(
+                    onClick = vm::removeServerIcon,
+                    shape = McShape.ControlCompact,
+                    modifier = Modifier.weight(1f)
+                ) { Text(stringResource(R.string.ui_server_icon_reset), color = Coral) }
             }
         }
     }

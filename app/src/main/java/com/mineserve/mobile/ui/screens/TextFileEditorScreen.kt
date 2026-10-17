@@ -11,11 +11,15 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mineserve.mobile.ui.McViewModel
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McSpacing
 
 @Composable
 fun TextFileEditorScreen(vm: McViewModel, file: McViewModel.TextEditorFile, onBack: () -> Unit) {
@@ -24,12 +28,34 @@ fun TextFileEditorScreen(vm: McViewModel, file: McViewModel.TextEditorFile, onBa
     val state by vm.serverState.collectAsState()
     val context = LocalContext.current
     Column(Modifier.fillMaxSize().statusBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(8.dp)) {
-            IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.s404)) }
-            Column(Modifier.weight(1f)) { Text(file.name); Text(file.path, style = MaterialTheme.typography.labelSmall, maxLines = 1) }
-            IconButton(onClick = { vm.openTextFile(java.io.File(file.path)) }) { Icon(Icons.Outlined.Refresh, stringResource(R.string.tfe_refresh)) }
-            IconButton(onClick = { (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(file.name, text)) }) { Icon(Icons.Outlined.ContentCopy, stringResource(R.string.crash_copy)) }
-            IconButton(onClick = { if (state.isRunning) confirmRunningSave = true else vm.saveTextFile(file.path, text) }) { Icon(Icons.Outlined.Save, stringResource(R.string.tfe_save)) }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .padding(start = 8.dp, end = McSpacing.Page, top = 6.dp, bottom = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            IconButton(onClick = onBack, modifier = Modifier.size(McIcon.Touch)) {
+                Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.s404), modifier = Modifier.size(McIcon.Item))
+            }
+            Column(Modifier.weight(1f)) {
+                Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(file.path, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            IconButton(onClick = { vm.openTextFile(java.io.File(file.path)) }, modifier = Modifier.size(McIcon.Touch)) {
+                Icon(Icons.Outlined.Refresh, stringResource(R.string.tfe_refresh), modifier = Modifier.size(McIcon.Item))
+            }
+            IconButton(
+                onClick = { (context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager).setPrimaryClip(android.content.ClipData.newPlainText(file.name, text)) },
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                Icon(Icons.Outlined.ContentCopy, stringResource(R.string.crash_copy), modifier = Modifier.size(McIcon.Item))
+            }
+            IconButton(
+                onClick = { if (state.isRunning) confirmRunningSave = true else vm.saveTextFile(file.path, text) },
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                Icon(Icons.Outlined.Save, stringResource(R.string.tfe_save), modifier = Modifier.size(McIcon.Item))
+            }
         }
         OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxSize().padding(12.dp), textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace), minLines = 20)
     }

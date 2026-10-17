@@ -3,12 +3,12 @@
     <color name="bg">#F3F4F8</color>
     <color name="card">#FFFFFF</color>
     <color name="ink">#1F2430</color>
-    <color name="muted">#8890A0</color>
+    <color name="muted">#6B7385</color>
     <color name="indigo">#3B4C9C</color>
     <color name="indigo_soft">#EEF0FA</color>
     <color name="mint">#2FBF87</color>
     <color name="mint_soft">#E7F8F0</color>
     <color name="coral">#F97066</color>
     <color name="coral_soft">#FDEEEC</color>
-    <color name="line">#E7E9F0</color>
+    <color name="line">#E4E7EE</color>
 </resources>

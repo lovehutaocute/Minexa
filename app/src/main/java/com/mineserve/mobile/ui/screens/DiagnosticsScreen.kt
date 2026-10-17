@@ -46,6 +46,7 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 
@@ -58,7 +59,7 @@ fun DiagnosticsScreen(vm: McViewModel, onBack: () -> Unit) {
     LaunchedEffect(Unit) { vm.runDiagnostics() }
 
     Column(Modifier.fillMaxSize()) {
-        BackBar(title = stringResource(R.string.diag_back_title), onBack = onBack)
+        BackBar(title = stringResource(R.string.s404), onBack = onBack)
         Column(
             modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())
         ) {
@@ -81,12 +82,12 @@ fun DiagnosticsScreen(vm: McViewModel, onBack: () -> Unit) {
                     OutlinedButton(
                         onClick = { vm.runDiagnostics() },
                         enabled = !isDiagnosing && !isRepairing,
-                        modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp)
+                        modifier = Modifier.weight(1f), shape = McShape.ControlCompact
                     ) { Text(stringResource(R.string.diag_rerun), color = Indigo, fontSize = 12.sp) }
                     Button(
                         onClick = { vm.safeRepairRuntime() },
                         enabled = !isDiagnosing && !isRepairing,
-                        modifier = Modifier.weight(1f), shape = RoundedCornerShape(8.dp),
+                        modifier = Modifier.weight(1f), shape = McShape.ControlCompact,
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo)
                     ) {
                         if (isRepairing) {

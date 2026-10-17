@@ -31,6 +31,8 @@ import com.mineserve.mobile.data.WidgetUpdater
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
 import androidx.compose.ui.res.stringResource
 
@@ -46,13 +48,13 @@ fun WidgetSettingsScreen(onBack: () -> Unit) {
             Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+                .padding(vertical = 12.dp)
         ) {
             Text(
                 stringResource(R.string.widget_settings_intro),
                 color = Muted,
-                fontSize = 12.sp
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = McSpacing.Page)
             )
 
             McCard(title = stringResource(R.string.widget_settings_types_title)) {
@@ -90,7 +92,8 @@ fun WidgetSettingsScreen(onBack: () -> Unit) {
                         WidgetUpdater.refresh(context)
                     },
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo)
+                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    shape = McShape.Control
                 ) {
                     Text(stringResource(R.string.widget_settings_refresh))
                 }

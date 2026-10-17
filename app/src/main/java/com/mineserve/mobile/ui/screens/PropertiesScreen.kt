@@ -51,6 +51,8 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.DebouncedTextField
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
@@ -205,7 +207,7 @@ fun JavaPropertiesScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boole
                     stringResource(R.string.s998, activeCore?.name ?: stringResource(R.string.s999)),
                     color = Muted,
                     fontSize = 10.sp,
-                    modifier = Modifier.padding(horizontal = 20.dp)
+                    modifier = Modifier.padding(horizontal = McSpacing.Page)
                 )
                 Spacer(Modifier.height(12.dp))
                 PropertiesNotGeneratedCard(
@@ -235,7 +237,7 @@ fun JavaPropertiesScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boole
                 stringResource(R.string.s998, activeCore?.name ?: stringResource(R.string.s999)),
                 color = Muted,
                 fontSize = 10.sp,
-                modifier = Modifier.padding(horizontal = 20.dp)
+                modifier = Modifier.padding(horizontal = McSpacing.Page)
             )
             Spacer(Modifier.height(8.dp))
 
@@ -290,10 +292,10 @@ fun JavaPropertiesScreen(vm: McViewModel, onBack: () -> Unit, showBackBar: Boole
                 }
             },
             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-            shape = RoundedCornerShape(12.dp),
+            shape = McShape.Control,
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 20.dp, vertical = 12.dp)
+                .padding(horizontal = McSpacing.Page, vertical = 12.dp)
         ) {
             Text(stringResource(R.string.s328), color = Color.White, fontWeight = FontWeight.Bold)
         }
@@ -566,7 +568,7 @@ private fun PropertiesNotGeneratedCard(
             Button(
                 onClick = onRefresh,
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(12.dp),
+                shape = McShape.Control,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
@@ -579,7 +581,7 @@ private fun PropertiesNotGeneratedCard(
             Button(
                 onClick = onStartServer,
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(12.dp),
+                shape = McShape.Control,
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
@@ -655,7 +657,7 @@ private fun PowerNukkitXPropertiesScreen(vm: McViewModel, onBack: () -> Unit, sh
         }
         Button(
             onClick = { if (state.isRunning) restartConfirm = true else vm.saveServerProperties(props) },
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo), shape = RoundedCornerShape(8.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = Indigo), shape = McShape.Control,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
         ) { Text(stringResource(R.string.props_save), color = Color.White, fontWeight = FontWeight.Bold) }
     }

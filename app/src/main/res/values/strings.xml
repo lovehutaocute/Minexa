@@ -805,6 +805,7 @@
     <string name="eyebrow_keepalive">保活</string>
     <string name="eyebrow_tools">工具</string>
     <string name="eyebrow_help">帮助</string>
+    <string name="eyebrow_players">玩家管理</string>
     <string name="hero_starting">正在启动服务端 · %1$s</string>
     <string name="hero_running">服务器运行中 · %1$s</string>
     <string name="hero_stopped">服务器未启动</string>
@@ -944,7 +945,7 @@
     <!-- 备份页 -->
     <!-- 诊断页 -->
     <string name="diag_back_title">运行诊断</string>
-    <string name="diag_eyebrow">SERVER HEALTH</string>
+    <string name="diag_eyebrow">服务器健康</string>
     <string name="diag_result_title">诊断结果</string>
     <string name="diag_repairing">正在执行安全修复，完成后自动复检</string>
     <string name="diag_running">正在读取运行环境和当前服务端状态</string>
