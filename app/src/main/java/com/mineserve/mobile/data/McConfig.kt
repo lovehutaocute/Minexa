@@ -520,6 +520,24 @@ data class McConfig(
     /** 下载页当前选择的 MC 版本（临时 UI 状态） */
     val mcVersion: String = "1.20.4",
     val coreSubDescription: String = "性能优化版，兼容大部分插件",
+    /**
+     * App 侧的本地端口（服务端端口的**镜像**）。
+     *
+     * 端口真源是**服务端配置文件**：Java 系为 `server.properties` 的 `server-port`，
+     * PowerNukkitX 为 `pnx.yml` 的 `settings.port`。本字段不再独立代表「服务端监听的端口」，
+     * 而是它的镜像，用于两类真源不可用的场景：
+     * 1. 服务端首次启动前（配置文件尚未生成），启动前覆写需要写入的端口；
+     * 2. 内网穿透的默认目标端口、MCP `get_config` 读出的值。
+     *
+     * 同步方向：
+     * - 读：`loadServerProperties` 读到配置文件里的端口时回写本字段；
+     * - 写：`saveServerProperties` 保存成功后把实际生效端口回写本字段
+     *   （「服务器配置」页是端口唯一编辑入口，网络页的输入框已在 1.2.8 移除）；
+     * - 切换核心：`selectCore` 仅在 Java 系 ↔ 基岩系之间对调**默认值**（见 [ServerPort]）。
+     *
+     * 界面展示（地址栏、复制地址、诊断）请读 `McViewModel.serverPort` 真源流，
+     * 不要直接读本字段 —— 否则配置文件被外部改动时界面会停在旧值。
+     */
     val localPort: Int = 25565,
     val customDomain: String = "myworld.mcserver.top",
     val tunnelType: TunnelType = TunnelType.Frp,
