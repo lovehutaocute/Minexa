@@ -197,7 +197,7 @@
     <string name="s407" formatted="false">This app needs to download the runtime environment (approx. 50MB) and server core (approx. 50MB) from GitHub. GitHub servers are overseas, and access from within the country may be very slow or even fail. Several solutions are provided below, listed in order of recommendation.</string>
     <string name="s408" formatted="false">Recommended</string>
     <string name="s409" formatted="false">Solution 1: Switch Termux environment download source</string>
-    <string name="s410" formatted="false">This app includes 7 GitHub mirror sources (gh-proxy.com, ghproxy.net, etc.) that can automatically speed up GitHub downloads. Switch and re-initialize to take effect.</string>
+    <string name="s410" formatted="false">This app includes several GitHub mirror sources (ghfast.top, gh-proxy.com, cdn.gh-proxy.com, ghproxy.net, etc.) that can automatically speed up GitHub downloads. Switch and re-initialize to take effect.</string>
     <string name="s411" formatted="false">Go to the \"Settings\" tab</string>
     <string name="s412" formatted="false">Find the \"Download Source\" option</string>
     <string name="s413" formatted="false">Select a mirror source (recommended: gh-proxy.com or ghfast.top)</string>
@@ -710,6 +710,8 @@
     <string name="s1010" formatted="false">APT Software Source</string>
     <string name="s1011" formatted="false">Affects download speed of apt-installed dependencies (JDK/wget/frp/proot)</string>
     <string name="s1012" formatted="false">APT Mirror</string>
+    <string name="st_mirror_test" formatted="false">Try Sources in Order</string>
+    <string name="st_mirror_test_running" formatted="false">Testing…</string>
     <string name="s1013" formatted="false">Keep-Alive &amp; Recovery</string>
     <string name="s1014" formatted="false">Keep Wi-Fi Connected</string>
     <string name="s1015" formatted="false">Prevent Wi-Fi from entering low power when screen is off</string>
@@ -814,6 +816,7 @@
     <string name="hero_refresh">Refresh status</string>
     <string name="widget_refresh_cd">Refresh status</string>
     <string name="hero_online_mode_warning">Online authentication is enabled; offline players cannot join.</string>
+    <string name="hero_whitelist_on">Whitelist is on · only listed players can join</string>
     <string name="s1061">Version</string>
     <string name="s1062">No versions</string>
     <string name="s1063" formatted="false">Selected version %1$s does not match current server version %2$s, may fail to load</string>
@@ -899,6 +902,82 @@
     <string name="msg_stop_backup_done">Server stopped and the world snapshot was backed up automatically.</string>
     <string name="notif_schedule_start_fail_title">Scheduled start failed</string>
     <string name="notif_schedule_start_fail_text">Reason: %1$s. Check the server configuration in the app.</string>
+
+    <!-- More: automation (scheduled tasks) -->
+    <string name="more_automation">Automation</string>
+    <string name="more_automation_desc">Scheduled backups, restarts and broadcasts</string>
+    <string name="eyebrow_automation">Automation</string>
+    <string name="automation_title">Automation</string>
+    <string name="automation_tasks_title">Scheduled tasks</string>
+    <string name="automation_tasks_hint">Run backups, restarts, broadcasts or custom commands on a schedule; system alarms still fire after the app is cleared from recents.</string>
+    <string name="automation_task_empty">No scheduled tasks yet</string>
+    <string name="automation_add_task">Add task</string>
+    <string name="automation_new_task">New scheduled task</string>
+    <string name="automation_edit_task">Edit scheduled task</string>
+    <string name="automation_run_now">Run now</string>
+    <string name="automation_edit">Edit</string>
+    <string name="automation_delete">Delete</string>
+    <string name="automation_save">Save</string>
+    <string name="automation_cancel">Cancel</string>
+    <string name="automation_section_action">Action</string>
+    <string name="automation_section_timing">Schedule</string>
+    <string name="automation_resolved">Resolves to: %1$s</string>
+    <string name="automation_field_name">Task name</string>
+    <string name="automation_field_command">Console command</string>
+    <string name="automation_field_command_broadcast">Message (or /say ...)</string>
+    <string name="automation_retention">Backup retention</string>
+    <string name="automation_keep_all">Keep all</string>
+    <string name="automation_keep_n">Keep %1$d</string>
+    <string name="automation_repeat_every">Repeat every</string>
+    <string name="automation_value">Value</string>
+    <string name="automation_unit_minutes">Minutes</string>
+    <string name="automation_unit_hours">Hours</string>
+    <string name="automation_day_interval">Day interval</string>
+    <string name="automation_every_n_days">Every N days</string>
+    <string name="automation_daily">Daily</string>
+    <string name="automation_days_of_week">Days of week</string>
+    <string name="automation_week_cadence">Week cadence</string>
+    <string name="automation_every_n_weeks">Every N weeks</string>
+    <string name="automation_weekly">Weekly</string>
+    <string name="automation_biweekly">Bi-weekly</string>
+    <string name="automation_weekdays">Weekdays</string>
+    <string name="automation_weekends">Weekends</string>
+    <string name="automation_cron_expr">Cron expression</string>
+    <string name="automation_cron_valid">✓ Valid cron expression</string>
+    <string name="automation_cron_invalid">⚠ Invalid syntax: minute hour day month weekday</string>
+    <string name="automation_time">Execution time</string>
+    <string name="automation_last_run">Last run: %1$s</string>
+    <string name="automation_freq_interval">Interval</string>
+    <string name="automation_freq_days">Every N days</string>
+    <string name="automation_freq_weekly">Weekly</string>
+    <string name="automation_freq_cron">Cron</string>
+    <string name="auto_type_start">Start server</string>
+    <string name="auto_type_stop">Stop server</string>
+    <string name="auto_type_world_backup">World backup</string>
+    <string name="auto_type_full_backup">Full backup</string>
+    <string name="auto_type_restart">Restart server</string>
+    <string name="auto_type_broadcast">In-game broadcast</string>
+    <string name="auto_type_command">Custom command</string>
+    <string name="auto_day_sun">Sun</string>
+    <string name="auto_day_mon">Mon</string>
+    <string name="auto_day_tue">Tue</string>
+    <string name="auto_day_wed">Wed</string>
+    <string name="auto_day_thu">Thu</string>
+    <string name="auto_day_fri">Fri</string>
+    <string name="auto_day_sat">Sat</string>
+    <string name="auto_desc_interval_hours">Every %1$d hours</string>
+    <string name="auto_desc_interval_minutes">Every %1$d minutes</string>
+    <string name="auto_desc_daily">Daily at %1$s</string>
+    <string name="auto_desc_every_n_days">Every %1$d days at %2$s</string>
+    <string name="auto_desc_weekly">Weekly on %1$s at %2$s</string>
+    <string name="auto_desc_every_n_weeks">Every %1$d weeks on %2$s at %3$s</string>
+    <string name="auto_desc_cron">Cron: %1$s</string>
+    <string name="auto_restart_warning">Server will restart automatically in 10 seconds</string>
+    <string name="auto_no_core">No server core selected; cannot run this task</string>
+    <string name="auto_backup_fail_title">Scheduled backup failed</string>
+    <string name="auto_backup_fail_text">Task "%1$s" backup failed: external storage is not writable or there is no data to back up.</string>
+    <string name="notif_schedule_fail_title">Scheduled task failed</string>
+    <string name="notif_schedule_fail_text">Task "%1$s" failed: %2$s</string>
 
     <!-- Home screen widgets -->
     <string name="widget_status_running">Server running</string>

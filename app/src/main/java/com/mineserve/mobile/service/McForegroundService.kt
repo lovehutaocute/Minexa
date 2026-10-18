@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.mineserve.mobile.MainActivity
 import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.R
+import com.mineserve.mobile.data.AutomationScheduler
 import com.mineserve.mobile.data.EventLogStore
 import com.mineserve.mobile.data.InstallStep
 import com.mineserve.mobile.data.StartupPhase
@@ -53,6 +54,11 @@ class McForegroundService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    /** 锁偏好缓存：由 configFlow 订阅更新，避免每次同步锁都读一次 DataStore。 */
+    @Volatile private var keepCpuWakelock = true
+    @Volatile private var keepWifiLock = true
+    /** 最近一次探测到的 MC 进程存活状态，供配置变更时重新同步锁。 */
+    @Volatile private var mcAlive = false
     // ponytail: one active server process, so one service-wide backup lock is enough.
     @Volatile private var autoBackupRunning = false
     @Volatile private var cachedDirName: String? = null
@@ -80,6 +86,17 @@ class McForegroundService : Service() {
             val app = McApplication.get(this@McForegroundService)
             combine(app.repository.configFlow, app.repository.serverState) { config, state -> config.keepStatusOverlay to state }
                 .collect { (enabled, state) -> if (enabled) StatusOverlay.update(state.cpuPercent, state.usedMemoryMb) }
+        }
+        scope.launch {
+            McApplication.get(this@McForegroundService).repository.configFlow
+                .map { it.keepCpuWakelock to it.keepWifiLock }
+                .distinctUntilChanged()
+                .collect { (cpu, wifi) ->
+                    keepCpuWakelock = cpu
+                    keepWifiLock = wifi
+                    // 配置变更立即生效：按当前 MC 存活状态重新同步锁。
+                    syncLocks(mcAlive)
+                }
         }
         // 移到 IO 线程，避免主线程阻塞导致 ANR
         scope.launch { detectSurvivingProcess() }
@@ -177,6 +194,12 @@ class McForegroundService : Service() {
                     runWidgetOrScheduleAction(action, scheduleAction)
                 }
             }
+            ACTION_AUTOMATION_TASK -> {
+                // 自动化定时任务（备份/重启/广播/自定义命令/开关服）同样不能在广播回调里跑。
+                ensureForeground()
+                val taskId = intent.getStringExtra(EXTRA_AUTOMATION_TASK_ID)
+                scope.launch { runAutomationTask(taskId) }
+            }
             ACTION_STOP -> {
                 scope.launch {
                     termux.stopMc()
@@ -214,8 +237,9 @@ class McForegroundService : Service() {
             startForeground(NOTIF_ID, notif)
         }
         foregroundStarted = true
-        // 配置读取（DataStore）移到 IO 线程，避免主线程磁盘 I/O
-        scope.launch { acquireLocks() }
+        // 配置读取（DataStore）移到 IO 线程，避免主线程磁盘 I/O。
+        // 注意：这里只按「MC 是否在跑」决定是否持锁，没有服务器时不再空持唤醒锁。
+        scope.launch { syncLocksFromConfig() }
         // 启动 socket 监听 + 健康 watchdog
         startWatchdog()
         // 授权页返回、厂商系统延迟刷新 AppOps 时，前一次挂载可能发生得太早。
@@ -270,10 +294,65 @@ class McForegroundService : Service() {
     }
 
     /**
+     * 执行一条自动化定时任务，并在结束后按最新配置重排下一个闹钟。
+     *
+     * 失败只发事件通知、不让异常冒出去杀服务进程；无论成败都推进 [AutomationTask.lastRunMs]
+     * 与 [AutomationTask.nextRunMs]，避免同一任务被反复触发。
+     */
+    private suspend fun runAutomationTask(taskId: String?) {
+        if (taskId == null) return
+        val app = McApplication.get(this)
+        val repo = app.repository
+        val config = runCatching { repo.configFlow.first() }.getOrNull() ?: return
+        val task = config.automationTasks.find { it.id == taskId }
+        if (task == null || !task.enabled) {
+            // 任务已被删除/停用：仅重排剩余任务
+            AutomationScheduler.register(this, config.automationTasks)
+            return
+        }
+        var failure: Exception? = null
+        try {
+            AutomationRunner.run(this, task, config)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            failure = e
+        }
+
+        val now = System.currentTimeMillis()
+        val updated = runCatching {
+            repo.updateAndSaveConfig { current ->
+                current.copy(
+                    automationTasks = current.automationTasks.map { t ->
+                        if (t.id == task.id) {
+                            t.copy(lastRunMs = now, nextRunMs = AutomationScheduler.computeNextRun(t, now))
+                        } else t
+                    }
+                )
+            }
+        }.getOrDefault(config)
+        AutomationScheduler.register(this, updated.automationTasks)
+
+        if (failure != null) {
+            Log.e(TAG, "定时任务执行失败: ${task.name}", failure)
+            runCatching {
+                com.mineserve.mobile.data.ServerEventNotifier.notify(
+                    app,
+                    app.getString(R.string.notif_schedule_fail_title),
+                    app.getString(R.string.notif_schedule_fail_text, task.name, failure.message ?: ""),
+                    com.mineserve.mobile.data.ServerEventNotifier.ID_SCHEDULE_FAIL, 1
+                )
+            }
+        }
+    }
+
+    /**
      * 启动后检测：APP 重启后是否有"上次存活"的 MC 进程
      */
     private fun detectSurvivingProcess() {
         val running = try { termux.isMcRunning() } catch (e: Exception) { false }
+        // 只有确实有 MC 进程存活时才持锁：避免「没跑服务器也长期占用 CPU/Wi-Fi 锁」。
+        syncLocks(running)
         if (running) {
             Log.i(TAG, "Detected surviving MC process, will reattach to log stream")
             McApplication.get(this).repository.updateServerState {
@@ -299,6 +378,7 @@ class McForegroundService : Service() {
     /** 立即同步一次服务端状态：更新存活状态，并向运行中的服务端发起 list/tps 查询。 */
     private suspend fun refreshServerStatusNow() {
         val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
+        syncLocks(alive)
         val app = McApplication.get(this@McForegroundService)
         app.repository.updateServerState {
             if (!alive) {
@@ -328,8 +408,14 @@ class McForegroundService : Service() {
     }
 
     /**
-     * 健康 watchdog：每 30 秒检查 MC 进程是否存活，更新 StateFlow。
-     * 每 60 秒发送 list 命令获取玩家数，Paper 核心发送 tps 命令获取 TPS。
+     * 健康 watchdog：检查 MC 进程是否存活并同步唤醒锁/组件。
+     *
+     * 频率策略（空闲降频）：
+     *  - 运行中（`isRunning`）或上轮探测到进程存活时，每 30 秒探一次 `/proc`，
+     *    以便尽快发现「服务器刚退出」；
+     *  - 明确空闲（未运行且上次也没探到进程）时，改为每 60 秒探一次，
+     *    不再每 30 秒空跑一次 `/proc` 扫描。
+     * 服务器运行时每 60 秒（2 个 tick）发送 list 命令获取玩家数，Paper 核心附带 tps。
      */
     private fun startWatchdog() {
         // 只跑一条 watchdog：每条重复启动都会多一个「每 30 秒 list/tps」的轮询源。
@@ -337,52 +423,56 @@ class McForegroundService : Service() {
         scope.launch {
             var tick = 0
             while (true) {
-                val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
                 val app = McApplication.get(this@McForegroundService)
-                app.repository.updateServerState {
-                    if (!alive) {
-                        it.copy(isRunning = false, runningSinceMs = 0L)
-                    } else {
-                        // A live Java process is not proof that the server has finished loading.
-                        // The console's ready signal sets runningSinceMs once the core is usable.
-                        it.copy(isRunning = true)
-                    }
-                }
-                // 服务器运行时，每 60 秒（2 个 tick）发送一次查询命令获取真实数据
-                if (alive && tick % 2 == 0) {
-                    try {
-                        val config = runCatching {
-                            app.repository.configFlow.first()
-                        }.getOrNull()
-                        if (config != null) {
-                            maybeAutoBackup(config)
-                            // list 命令获取在线玩家数（所有核心支持）
-                            termux.sendCommand("list")
-                            // Paper 核心额外发送 tps 命令
-                            if (config.selectedCore == com.mineserve.mobile.data.ServerCore.Paper) {
-                                termux.sendCommand("tps")
-                            }
+                // 运行中、或状态可能陈旧（上轮探到存活）时每 tick 都探；否则隔一个 tick 探。
+                val shouldProbe = app.repository.serverState.value.isRunning || mcAlive || tick % 2 == 0
+                if (shouldProbe) {
+                    val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
+                    // 锁跟随 MC 实际存活状态：没在跑就释放，跑起来再拿。
+                    syncLocks(alive)
+                    app.repository.updateServerState {
+                        if (!alive) {
+                            it.copy(isRunning = false, runningSinceMs = 0L)
+                        } else {
+                            // A live Java process is not proof that the server has finished loading.
+                            // The console's ready signal sets runningSinceMs once the core is usable.
+                            it.copy(isRunning = true)
                         }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "watchdog query failed: ${e.message}")
+                    }
+                    // 服务器运行时，每 60 秒（2 个 tick）发送一次查询命令获取真实数据
+                    if (alive && tick % 2 == 0) {
+                        try {
+                            val config = runCatching {
+                                app.repository.configFlow.first()
+                            }.getOrNull()
+                            if (config != null) {
+                                maybeAutoBackup(config)
+                                // list 命令获取在线玩家数（所有核心支持）
+                                termux.sendCommand("list")
+                                // Paper 核心额外发送 tps 命令
+                                if (config.selectedCore == com.mineserve.mobile.data.ServerCore.Paper) {
+                                    termux.sendCommand("tps")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.w(TAG, "watchdog query failed: ${e.message}")
+                        }
+                    }
+                    // 仅在服务器运行中周期刷新组件：组件展示的是 TPS/内存/在线人数等运行时数据，
+                    // 停止状态下这些值不会变，盲刷只是白白重建 4 个 RemoteViews。
+                    // 停止、崩溃、状态切换等事件已由 ServerRepository.updateServerState 的
+                    // 字段 diff 钩子驱动刷新，这里不刷新也不会漏掉状态变化。
+                    if (alive) {
+                        com.mineserve.mobile.data.WidgetUpdater.refresh(this@McForegroundService)
                     }
                 }
                 tick++
-                // 仅在服务器运行中周期刷新组件：组件展示的是 TPS/内存/在线人数等运行时数据，
-                // 停止状态下这些值不会变，盲刷只是白白重建 4 个 RemoteViews。
-                // 停止、崩溃、状态切换等事件已由 ServerRepository.updateServerState 的
-                // 字段 diff 钩子驱动刷新，这里不刷新也不会漏掉状态变化。
-                if (alive) {
-                    com.mineserve.mobile.data.WidgetUpdater.refresh(this@McForegroundService)
-                }
                 kotlinx.coroutines.delay(30_000L)
             }
         }
     }
 
-    /**
-     * 唤醒锁 + Wi-Fi 锁，确保 MC 进程在屏幕熄灭时仍可接收玩家连接
-     */
+    /** 按配置周期触发自动备份（服务器运行时由 watchdog 调用）。 */
     private fun maybeAutoBackup(config: com.mineserve.mobile.data.McConfig) {
         val active = config.installedCores.find { it.name == config.activeCoreName } ?: return
         val baseIntervalMs = config.autoBackupIntervalMin * 60_000L
@@ -450,30 +540,57 @@ class McForegroundService : Service() {
         }
     }
 
-    private suspend fun acquireLocks() {
-        val app = McApplication.get(this)
-        val config = runCatching {
-            app.repository.configFlow.first()
-        }.getOrNull()
-        val keepCpu = config?.keepCpuWakelock ?: true
-        val keepWifi = config?.keepWifiLock ?: true
-        syncOverlay(config?.keepStatusOverlay == true)
+    /**
+     * 按「MC 进程是否存活」同步唤醒锁 + Wi-Fi 锁。
+     *
+     * 关键修复：**只有真有 MC 进程在跑时才持锁**。
+     * 旧实现只要前台服务在前台就无条件 acquire()，于是「App 启动 → 3 秒自动拉起保活服务
+     * → 从未开过服务器」也会长期霸占 PARTIAL_WAKE_LOCK 与 FULL_LOW_LATENCY Wi-Fi 锁，
+     * 这是待机耗电的最大来源。现在锁随进程存活状态加/放：
+     *  - 服务器运行时持锁 → 熄屏后仍能接收玩家连接（原有效果不变）；
+     *  - 服务器未运行时释放 → 待机不再空耗电。
+     * 前台服务与常驻通知保持不变，用户无感知。
+     */
+    private fun syncLocks(alive: Boolean) {
+        mcAlive = alive
 
-        if (keepCpu && wakeLock?.isHeld != true) {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = pm.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "MineServeMobile::McWake"
-            ).apply { acquire() }
+        if (alive && keepCpuWakelock) {
+            if (wakeLock?.isHeld != true) {
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                wakeLock = pm.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "MineServeMobile::McWake"
+                ).apply { acquire() }
+            }
+        } else {
+            wakeLock?.let { if (it.isHeld) it.release() }
+            wakeLock = null
         }
-        if (keepWifi && wifiLock?.isHeld != true) {
-            val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
-            wifiLock = wm.createWifiLock(
-                mode,
-                "MineServeMobile::McWifi"
-            ).apply { acquire() }
+
+        if (alive && keepWifiLock) {
+            if (wifiLock?.isHeld != true) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                wifiLock = wm.createWifiLock(
+                    mode,
+                    "MineServeMobile::McWifi"
+                ).apply { acquire() }
+            }
+        } else {
+            wifiLock?.let { if (it.isHeld) it.release() }
+            wifiLock = null
         }
+    }
+
+    /** 首次同步锁状态：读一次配置（缓存偏好）并按当前 MC 存活情况加/放锁。 */
+    private suspend fun syncLocksFromConfig() {
+        val app = McApplication.get(this)
+        runCatching { app.repository.configFlow.first() }.getOrNull()?.let { config ->
+            keepCpuWakelock = config.keepCpuWakelock
+            keepWifiLock = config.keepWifiLock
+        }
+        val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
+        syncLocks(alive)
     }
 
     private fun releaseLocks() {
@@ -564,6 +681,10 @@ class McForegroundService : Service() {
         const val EXTRA_WIDGET_ACTION = "widget_action"
         /** 定时任务动作名（[com.mineserve.mobile.data.ScheduleManager] 的 ACTION_*）。 */
         const val EXTRA_SCHEDULE_ACTION = "schedule_action"
+        /** 执行一条自动化定时任务（按 id 从配置里取任务）。 */
+        const val ACTION_AUTOMATION_TASK = "com.mineserve.mobile.action.AUTOMATION_TASK"
+        /** 要执行的自动化任务 id（[com.mineserve.mobile.data.AutomationTask.id]）。 */
+        const val EXTRA_AUTOMATION_TASK_ID = "automation_task_id"
         private const val TAG = "McForegroundService"
 
         /** 服务是否在运行（供保活检查） */
@@ -588,6 +709,14 @@ class McForegroundService : Service() {
             val intent = Intent(context, McForegroundService::class.java)
                 .setAction(ACTION_WIDGET_ACTION)
                 .putExtra(EXTRA_SCHEDULE_ACTION, scheduleAction)
+            startServiceSafely(context, intent)
+        }
+
+        /** 把一条自动化定时任务交给前台服务执行（理由同 [enqueueWidgetAction]）。 */
+        fun enqueueAutomationTask(context: Context, taskId: String) {
+            val intent = Intent(context, McForegroundService::class.java)
+                .setAction(ACTION_AUTOMATION_TASK)
+                .putExtra(EXTRA_AUTOMATION_TASK_ID, taskId)
             startServiceSafely(context, intent)
         }
 

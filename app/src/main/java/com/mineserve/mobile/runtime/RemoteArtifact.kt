@@ -15,8 +15,8 @@ import kotlinx.serialization.json.jsonPrimitive
  * 远端产物的完整性校验。
  *
  * 为什么需要它：frpc 二进制、PHP 运行时、自更新 APK 都会被下载到设备上并**直接执行 / 安装**，
- * 而这几处的下载源列表里塞满了第三方 GitHub 反代（ghfast.top / gh-proxy.com / mirror.ghproxy.com /
- * ghproxy.net / github.moeyy.xyz）。这些反代对内容不作任何承诺，只要其中任何一个被投毒或劫持，
+ * 而这几处的下载源列表里塞满了第三方 GitHub 反代（ghfast.top / gh-proxy.com / cdn.gh-proxy.com /
+ * ghproxy.net）。这些反代对内容不作任何承诺，只要其中任何一个被投毒或劫持，
  * 落盘的就是攻击者构造的可执行文件。
  *
  * 原先只有 bootstrap rootfs 做了 sha256 白名单（见 [BootstrapInstaller.bootstrapSha256]），
@@ -71,34 +71,46 @@ object RemoteArtifact {
      * 由调用方按自己的策略决定是拒绝还是降级到「仅接受直连来源」。
      */
     fun githubAssetSha256(owner: String, repo: String, tag: String, assetName: String): String? {
-        val url = "https://api.github.com/repos/$owner/$repo/releases/tags/$tag"
-        return runCatching {
-            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = 8_000
-                readTimeout = 8_000
-                setRequestProperty("Accept", "application/vnd.github+json")
-                setRequestProperty("User-Agent", "Minexa")
-            }
-            try {
-                if (conn.responseCode !in 200..299) return@runCatching null
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                val assets = Json.parseToJsonElement(body).jsonObject["assets"]?.jsonArray
-                    ?: return@runCatching null
-                assets.asSequence()
-                    .mapNotNull { it as? kotlinx.serialization.json.JsonObject }
-                    .firstOrNull { it["name"]?.jsonPrimitive?.content == assetName }
-                    ?.get("digest")
-                    ?.jsonPrimitive
-                    ?.content
-                    ?.let(::normalize)
-                    ?.takeIf { it.isNotEmpty() }
-            } finally {
-                runCatching { conn.disconnect() }
-            }
-        }.onFailure {
-            Log.w(TAG, "取 GitHub 资产摘要失败($owner/$repo@$tag/$assetName): ${it.message}")
-        }.getOrNull()
+        val api = "https://api.github.com/repos/$owner/$repo/releases/tags/$tag"
+        // 只有 cdn.gh-proxy.com 实测能代理 api.github.com；ghfast.top / gh-proxy.com / ghproxy.net
+        // 对 api 请求一律返回 403，套上去只会白跑一轮。直连放最后兜底。
+        val candidates = listOf(
+            "https://cdn.gh-proxy.com/$api",
+            api
+        )
+        for (url in candidates) {
+            val sha = runCatching { fetchAssetDigest(url, assetName) }.getOrNull()
+            if (!sha.isNullOrEmpty()) return sha
+        }
+        Log.w(TAG, "取 GitHub 资产摘要失败($owner/$repo@$tag/$assetName)：所有来源均不可用")
+        return null
+    }
+
+    /** 从单个 GitHub Release API 地址读出指定 asset 的 digest（形如 `sha256:...`）。 */
+    private fun fetchAssetDigest(url: String, assetName: String): String? {
+        val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 8_000
+            readTimeout = 8_000
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("User-Agent", "Minexa")
+        }
+        return try {
+            if (conn.responseCode !in 200..299) return null
+            val body = conn.inputStream.bufferedReader().use { it.readText() }
+            val assets = Json.parseToJsonElement(body).jsonObject["assets"]?.jsonArray
+                ?: return null
+            assets.asSequence()
+                .mapNotNull { it as? kotlinx.serialization.json.JsonObject }
+                .firstOrNull { it["name"]?.jsonPrimitive?.content == assetName }
+                ?.get("digest")
+                ?.jsonPrimitive
+                ?.content
+                ?.let(::normalize)
+                ?.takeIf { it.isNotEmpty() }
+        } finally {
+            runCatching { conn.disconnect() }
+        }
     }
 
     /**

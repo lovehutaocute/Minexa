@@ -225,6 +225,13 @@ fun HeroBlock(
      */
     maxHeapMb: Int? = null,
     onlineModeEnabled: Boolean = false,
+    /**
+     * 服务端配置文件里 `white-list` 是否为 true（PNX 对应 pnx.yml 的 `settings.allowList`）。
+     *
+     * 白名单开着时必须在概览页看得见：它决定了「谁能进服」，而玩家的反馈只会是
+     * 一句 `You are not white-listed`——服务器看起来一切正常，人却进不来。
+     */
+    whitelistEnabled: Boolean = false,
     isRefreshing: Boolean = false,
     lastRefreshAtMs: Long = 0L,
     /**
@@ -356,6 +363,14 @@ fun HeroBlock(
                 Text(
                     stringResource(R.string.hero_online_mode_warning),
                     color = Color(0xFFFF8A80),
+                    fontSize = 10.sp
+                )
+            }
+            if (whitelistEnabled) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    stringResource(R.string.hero_whitelist_on),
+                    color = Color(0xFFFFD180),
                     fontSize = 10.sp
                 )
             }

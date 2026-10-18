@@ -25,6 +25,9 @@ object UsageTracker {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val today = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
         if (prefs.getString(KEY_LAST_PULSE, null) == today) return // 当天已上报
+        // 无网络时直接跳过：不做注定失败的 POST（否则要等 8 秒超时）。
+        // 不写当日标记，等下次有网络时再上报。
+        if (!NetworkState.isOnline(context)) return
 
         val deviceId = deviceId(context)
         Thread {

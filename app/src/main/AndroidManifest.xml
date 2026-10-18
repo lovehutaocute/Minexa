@@ -139,6 +139,10 @@
             android:exported="false" />
 
         <receiver
+            android:name=".service.AutomationAlarmReceiver"
+            android:exported="false" />
+
+        <receiver
             android:name=".widget.OverviewWidget"
             android:exported="false">
             <intent-filter>

@@ -13,6 +13,8 @@ import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.service.McForegroundService
 import android.net.Uri
 import com.mineserve.mobile.data.McConfig
+import com.mineserve.mobile.data.AutomationTask
+import com.mineserve.mobile.data.AutomationScheduler
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.ProotDistro
@@ -1270,8 +1272,8 @@ class McViewModel(
             val starting = running && runningSince > 0L &&
                 android.os.SystemClock.elapsedRealtime() - runningSince < 15_000L
             checks += DiagnosticCheck(
-                "port", str(R.string.diag_check_port_title, if (bedrock) "UDP" else "TCP", cfg.localPort),
-                when { !running -> str(R.string.diag_check_port_not_running); portOk -> str(R.string.diag_check_port_ok, cfg.localPort); starting -> str(R.string.diag_check_port_starting); else -> str(R.string.diag_check_port_bad2) },
+                "port", str(R.string.diag_check_port_title, if (bedrock) "UDP" else "TCP", port),
+                when { !running -> str(R.string.diag_check_port_not_running); portOk -> str(R.string.diag_check_port_ok, port); starting -> str(R.string.diag_check_port_starting); else -> str(R.string.diag_check_port_bad2) },
                 when { !running -> DiagnosticStatus.NotApplicable; portOk -> DiagnosticStatus.Pass; else -> DiagnosticStatus.Warning }
             )
             val crash = (crashReportManager.listCrashReports() + crashReportManager.listNativeCrashReports(active.dirName))
@@ -2176,6 +2178,49 @@ class McViewModel(
 
     fun setStopAutoBackup(v: Boolean) = updateConfig { it.copy(stopAutoBackup = v) }
 
+    // ── 自动化定时任务（更多 → 自动化） ──────────────────────────
+
+    /**
+     * 变更任务列表并落盘、重排下一次闹钟。
+     *
+     * 未排期的启用任务在此统一补上 [AutomationTask.nextRunMs]，保证调度器拿到的
+     * 就是落盘后的最终值（与 [updateScheduleConfig] 同样的读改写策略，避免陈旧快照覆盖）。
+     */
+    private fun updateAutomationTasks(transform: (List<AutomationTask>) -> List<AutomationTask>) {
+        val updated = try {
+            repo.updateAndSaveConfig { config ->
+                config.copy(
+                    automationTasks = AutomationScheduler.withNextRunsAssigned(transform(config.automationTasks))
+                )
+            }
+        } catch (e: Exception) {
+            _errorFlow.tryEmit(str(R.string.s191, e.message))
+            return
+        }
+        AutomationScheduler.register(app, updated.automationTasks)
+    }
+
+    /** 新增任务（重置排期，由更新逻辑重算）。 */
+    fun addAutomationTask(task: AutomationTask) =
+        updateAutomationTasks { it + task.copy(nextRunMs = 0L) }
+
+    /** 覆盖编辑一条任务（重置排期）。 */
+    fun updateAutomationTask(task: AutomationTask) = updateAutomationTasks { list ->
+        list.map { if (it.id == task.id) task.copy(nextRunMs = 0L) else it }
+    }
+
+    fun deleteAutomationTask(id: String) = updateAutomationTasks { list -> list.filterNot { it.id == id } }
+
+    /** 启用/停用任务；重新启用时重置排期。 */
+    fun setAutomationTaskEnabled(id: String, enabled: Boolean) = updateAutomationTasks { list ->
+        list.map { if (it.id == id) it.copy(enabled = enabled, nextRunMs = if (enabled) 0L else it.nextRunMs) else it }
+    }
+
+    /** 手动立即执行一次任务（交由前台服务在自身作用域内完成）。 */
+    fun runAutomationTaskNow(id: String) {
+        com.mineserve.mobile.service.McForegroundService.enqueueAutomationTask(app, id)
+    }
+
     /** 变更定时计划时同步保存并重注册下一次闹钟。 */
     private fun updateScheduleConfig(transform: (McConfig) -> McConfig) {
         // 基于仓库权威内存态读改写并原子入队，不用 UI 侧 config.value（可能是陈旧快照，
@@ -2201,8 +2246,53 @@ class McViewModel(
             repo.updateAndSaveConfig { it.copy(aptMirror = effective) }
             withContext(Dispatchers.IO) { repo.termuxRuntime.setAptMirror(effective) }
         }
-    fun setDownloadMirror(mirror: com.mineserve.mobile.data.DownloadMirror) =
+    fun setDownloadMirror(mirror: com.mineserve.mobile.data.DownloadMirror) {
         updateConfig { it.copy(downloadMirror = mirror) }
+        // 立即应用到 bootstrap 下载器（下次下载生效；App 重启后由 McApplication 从配置恢复）
+        repo.termuxRuntime.setDownloadMirror(mirror)
+    }
+
+    /** 「依次尝试下载源」的运行状态与结果文本，供设置页展示。 */
+    private val _mirrorTestRunning = MutableStateFlow(false)
+    val mirrorTestRunning: StateFlow<Boolean> = _mirrorTestRunning.asStateFlow()
+
+    private val _mirrorTestResult = MutableStateFlow<String?>(null)
+    val mirrorTestResult: StateFlow<String?> = _mirrorTestResult.asStateFlow()
+
+    private fun appendMirrorTest(line: String) {
+        val cur = _mirrorTestResult.value
+        _mirrorTestResult.value = if (cur.isNullOrEmpty()) line else "$cur\n$line"
+    }
+
+    /**
+     * 「依次尝试下载源」：按顺序逐个探测各下载源，直到找到**第一个可用**的为止。
+     *
+     * 测试通过后自动把该源设为当前下载源（下次 bootstrap 下载生效）。过程中每测一个源
+     * 就把结果追加到 [mirrorTestResult]；全部失败时提示检查网络。
+     */
+    fun testDownloadSources() {
+        if (_mirrorTestRunning.value) return
+        _mirrorTestRunning.value = true
+        _mirrorTestResult.value = null
+        viewModelScope.launch {
+            try {
+                val installer = repo.termuxRuntime.installer
+                val idx = installer.probeMirrors { line -> appendMirrorTest(line) }
+                val mirror = if (idx >= 0) installer.mirrorAt(idx) else null
+                if (mirror != null) {
+                    updateConfig { it.copy(downloadMirror = mirror) }
+                    repo.termuxRuntime.setDownloadMirror(mirror)
+                    appendMirrorTest("已选用可用下载源：${mirror.displayName}")
+                } else {
+                    appendMirrorTest("全部下载源均不可用，请检查网络后重试")
+                }
+            } catch (e: Exception) {
+                appendMirrorTest("测试失败：${e.message ?: "未知错误"}")
+            } finally {
+                _mirrorTestRunning.value = false
+            }
+        }
+    }
 
     /** 多线程下载是否启用（内置下载模块开关，默认启用） */
     fun isMultiThreadDownloadEnabled(): Boolean = com.mineserve.mobile.data.DownloadPrefs.isEnabled()
@@ -2279,8 +2369,20 @@ class McViewModel(
                 // 阶段推进已是"只增不减"的无状态规则，无需清理任何防抖残留；
                 // 新一次启动的阶段由 updateServerState 里显式重置为 PreparingEnvironment。
                 _lastRunLog.value = ""
+                // 启动前重读配置文件里的端口：用户可能刚在文件管理器里改过 server-port
+                // （或 pnx.yml 的 settings.port），而 [McConfig.localPort] 还停在旧值。
+                // 不重读的话，PNX / Allay 的启动链路会拿旧值**覆写**配置文件里的新端口，
+                // 等于用户改了白改；地址栏与穿透也会指向服务端并不监听的端口。
+                refreshServerPropertiesNow()
                 val current = config.value
-                val startConfig = current
+                // localPort 是「镜像字段」，以配置文件为准（[realServerPort] 现算，不经缓存）。
+                val detectedPort = realServerPort()
+                if (detectedPort != current.localPort) {
+                    repo.termuxRuntime.emitLog(
+                        "[startMc] 配置文件端口 $detectedPort 与本地记录 ${current.localPort} 不一致，本次按配置文件启动"
+                    )
+                }
+                val startConfig = current.copy(localPort = detectedPort)
                 repo.updateServerState {
                     it.copy(
                         isRunning = true,
@@ -4172,6 +4274,10 @@ class McViewModel(
         val sent = if (enabled) playerManager.whitelistOn() else playerManager.whitelistOff()
         if (sent) {
             _whitelistEnabled.value = enabled
+            // 同步镜像：概览页的白名单提示读的是 [serverProperties]，只改 _whitelistEnabled
+            // 的话要等下一次读配置文件才会更新，提示会慢半拍。
+            _serverProperties.value = _serverProperties.value.toMutableMap()
+                .apply { put("white-list", enabled.toString()) }
             _messageFlow.tryEmit(if (enabled) str(R.string.msg_whitelist_toggled_on) else str(R.string.msg_whitelist_toggled_off))
         } else {
             _errorFlow.tryEmit(str(R.string.s274))

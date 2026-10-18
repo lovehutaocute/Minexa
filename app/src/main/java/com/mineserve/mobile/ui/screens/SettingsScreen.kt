@@ -123,6 +123,26 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
                     )
                 }
             }
+            Spacer(Modifier.height(10.dp))
+            // 「依次尝试下载源」：按顺序逐个测试，找到第一个可用源即选中它。
+            val testing by vm.mirrorTestRunning.collectAsState()
+            val testResult = vm.mirrorTestResult.collectAsState().value
+            Button(
+                onClick = { vm.testDownloadSources() },
+                enabled = !testing,
+                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                shape = McShape.Control,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Text(
+                    stringResource(if (testing) R.string.st_mirror_test_running else R.string.st_mirror_test),
+                    fontSize = 13.sp
+                )
+            }
+            if (testResult != null) {
+                Spacer(Modifier.height(6.dp))
+                Text(testResult, color = Muted, fontSize = 11.sp)
+            }
         }
 
         // APT 镜像设置（JDK/wget/frp 等依赖包下载源）
@@ -226,52 +246,6 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
                     onClick = { vm.setEventNotifyLevel(2) }
                 )
             }
-        }
-
-        // 自动化：定时开/停服与停止备份
-        McCard(title = stringResource(R.string.set_schedule_title)) {
-            Text(
-                stringResource(R.string.set_schedule_hint),
-                color = Muted,
-                fontSize = 11.sp
-            )
-            Spacer(Modifier.height(8.dp))
-            SettingToggle(
-                title = stringResource(R.string.set_daily_start),
-                subtitle = stringResource(R.string.set_daily_start_hint),
-                checked = config.dailyStartEnabled,
-                onChange = { vm.setDailyStartEnabled(it) }
-            )
-            if (config.dailyStartEnabled) {
-                TimePillRow(
-                    label = stringResource(R.string.set_schedule_start_time),
-                    hour = config.dailyStartHour,
-                    minute = config.dailyStartMinute,
-                    onTime = { h, m -> vm.setDailyStartTime(h, m) }
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            SettingToggle(
-                title = stringResource(R.string.set_daily_stop),
-                subtitle = stringResource(R.string.set_daily_stop_hint),
-                checked = config.dailyStopEnabled,
-                onChange = { vm.setDailyStopEnabled(it) }
-            )
-            if (config.dailyStopEnabled) {
-                TimePillRow(
-                    label = stringResource(R.string.set_schedule_stop_time),
-                    hour = config.dailyStopHour,
-                    minute = config.dailyStopMinute,
-                    onTime = { h, m -> vm.setDailyStopTime(h, m) }
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            SettingToggle(
-                title = stringResource(R.string.set_stop_backup),
-                subtitle = stringResource(R.string.set_stop_backup_hint),
-                checked = config.stopAutoBackup,
-                onChange = { vm.setStopAutoBackup(it) }
-            )
         }
 
         // 后台保活（大尺寸独立入口）
@@ -393,31 +367,5 @@ private fun SettingEntry(
             Text(subtitle, color = Muted, fontSize = 11.sp)
         }
         Text("→", color = Indigo, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
-@Composable
-private fun TimePillRow(label: String, hour: Int, minute: Int, onTime: (Int, Int) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, fontSize = 12.sp, modifier = Modifier.weight(1f))
-        DebouncedTextField(
-            value = hour.toString().padStart(2, '0'),
-            onValueChange = { v -> v.toIntOrNull()?.let { onTime(it.coerceIn(0, 23), minute) } },
-            sanitize = { it.filter(Char::isDigit).take(2) },
-            singleLine = true,
-            label = { Text("HH") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(70.dp)
-        )
-        Text(":", modifier = Modifier.padding(horizontal = 4.dp))
-        DebouncedTextField(
-            value = minute.toString().padStart(2, '0'),
-            onValueChange = { v -> v.toIntOrNull()?.let { onTime(hour, it.coerceIn(0, 59)) } },
-            sanitize = { it.filter(Char::isDigit).take(2) },
-            singleLine = true,
-            label = { Text("mm") },
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(70.dp)
-        )
     }
 }

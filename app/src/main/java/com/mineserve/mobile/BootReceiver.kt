@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import android.util.Log
 import com.mineserve.mobile.data.ScheduleManager
+import com.mineserve.mobile.data.AutomationScheduler
 import com.mineserve.mobile.service.McForegroundService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -35,7 +36,14 @@ class BootReceiver : BroadcastReceiver() {
             try {
                 runCatching { McApplication.get(context).repository.configFlow.first() }
                     .getOrNull()
-                    ?.let { ScheduleManager.register(context, it) }
+                    ?.let { config ->
+                        ScheduleManager.register(context, config)
+                        // 自动化定时任务同样在重启后不保留闹钟，按配置重排最近一条。
+                        AutomationScheduler.register(
+                            context,
+                            AutomationScheduler.withNextRunsAssigned(config.automationTasks)
+                        )
+                    }
                 // 开机后纠正桌面组件（重启前可能停留在“运行中”）
                 com.mineserve.mobile.data.WidgetUpdater.refresh(context)
             } finally {

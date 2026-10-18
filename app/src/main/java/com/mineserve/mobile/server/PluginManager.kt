@@ -555,34 +555,52 @@ class PluginManager(
     }
 
     /**
+     * 拉取 GitHub API 响应体（跟随重定向）。
+     *
+     * 直连优先（api.github.com 延迟最低），失败时退到 `cdn.gh-proxy.com`——它是 2026-10 实测
+     * 唯一能代理 `api.github.com` 的镜像（ghfast.top / gh-proxy.com / ghproxy.net 对 api 请求均 403）。
+     */
+    private fun fetchGithubApiBody(path: String): String {
+        val candidates = listOf(
+            "https://api.github.com/$path",
+            "https://cdn.gh-proxy.com/https://api.github.com/$path"
+        )
+        var last: Exception? = null
+        for (api in candidates) {
+            val conn = (URL(api).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = 15_000
+                readTimeout = 15_000
+                setRequestProperty("User-Agent", "McServerManager/1.0 (Android)")
+                setRequestProperty("Accept", "application/vnd.github+json")
+            }
+            try {
+                val code = conn.responseCode
+                if (code !in 200..299) throw RuntimeException("GitHub API HTTP $code")
+                return conn.inputStream.bufferedReader().use { it.readText() }
+            } catch (e: Exception) {
+                last = e
+                Log.w(TAG, "GitHub API 源失败，尝试下一个: $api (${e.message})")
+            } finally {
+                conn.disconnect()
+            }
+        }
+        throw last ?: RuntimeException("GitHub API unavailable")
+    }
+
+    /**
      * 调用 GitHub API 获取最新 Release 信息
      * @return (tag_name, html_url)
      */
     private fun fetchLatestRelease(repo: String): Pair<String, String> {
-        val url = URL("https://api.github.com/repos/$repo/releases/latest")
-        val conn = (url.openConnection() as HttpURLConnection).apply {
-            instanceFollowRedirects = true
-            connectTimeout = 15_000
-            readTimeout = 15_000
-            setRequestProperty("User-Agent", "McServerManager/1.0 (Android)")
-            setRequestProperty("Accept", "application/vnd.github+json")
-        }
-        try {
-            val code = conn.responseCode
-            if (code !in 200..299) {
-                throw RuntimeException("GitHub API HTTP $code")
-            }
-            val body = conn.inputStream.bufferedReader().use { it.readText() }
-            // 简单 JSON 解析（避免引入完整 JSON 库）
-            val tagRegex = """"tag_name"\s*:\s*"([^"]+)"""".toRegex()
-            val urlRegex = """"html_url"\s*:\s*"([^"]+)"""".toRegex()
-            val tag = tagRegex.find(body)?.groupValues?.get(1)
-                ?: throw RuntimeException("未找到 tag_name 字段")
-            val releaseUrl = urlRegex.find(body)?.groupValues?.get(1) ?: "https://github.com/$repo/releases"
-            return tag to releaseUrl
-        } finally {
-            conn.disconnect()
-        }
+        val body = fetchGithubApiBody("repos/$repo/releases/latest")
+        // 简单 JSON 解析（避免引入完整 JSON 库）
+        val tagRegex = """"tag_name"\s*:\s*"([^"]+)"""".toRegex()
+        val urlRegex = """"html_url"\s*:\s*"([^"]+)"""".toRegex()
+        val tag = tagRegex.find(body)?.groupValues?.get(1)
+            ?: throw RuntimeException("未找到 tag_name 字段")
+        val releaseUrl = urlRegex.find(body)?.groupValues?.get(1) ?: "https://github.com/$repo/releases"
+        return tag to releaseUrl
     }
 
     /**
@@ -595,45 +613,31 @@ class PluginManager(
      */
     fun resolveLatestAsset(repo: String, pattern: String): String? {
         return try {
-            val url = URL("https://api.github.com/repos/$repo/releases/latest")
-            val conn = (url.openConnection() as HttpURLConnection).apply {
-                instanceFollowRedirects = true
-                connectTimeout = 15_000
-                readTimeout = 15_000
-                setRequestProperty("User-Agent", "McServerManager/1.0 (Android)")
-                setRequestProperty("Accept", "application/vnd.github+json")
-            }
-            try {
-                val code = conn.responseCode
-                if (code !in 200..299) return null
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                // 提取 assets 数组内容（简单正则解析，避免引入完整 JSON 库）
-                val assetsBody = Regex("\"assets\"\\s*:\\s*\\[(.*?)\\]", RegexOption.DOT_MATCHES_ALL)
-                    .find(body)?.groupValues?.get(1) ?: return null
-                val nameRegex = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"")
-                val urlRegex = Regex("\"browser_download_url\"\\s*:\\s*\"([^\"]+)\"")
-                val names = nameRegex.findAll(assetsBody)
-                    .map { it.range.first to it.groupValues[1] }.toList()
-                // GitHub API 每个 asset 对象内 name 位于 browser_download_url 之前：
-                // 以 name 位置为界切段，段内取 browser_download_url 保证配对正确
-                names.forEachIndexed { i, (pos, name) ->
-                    val segEnd = if (i + 1 < names.size) names[i + 1].first else assetsBody.length
-                    val segment = assetsBody.substring(pos, segEnd)
-                    val assetUrl = urlRegex.find(segment)?.groupValues?.get(1) ?: return@forEachIndexed
-                    val lower = name.lowercase()
-                    if (lower.contains(pattern.lowercase()) &&
-                        lower.endsWith(".jar") &&
-                        !lower.contains("-sources") &&
-                        !lower.contains("-dev") &&
-                        !lower.contains("-javadoc")
-                    ) {
-                        return assetUrl
-                    }
+            val body = fetchGithubApiBody("repos/$repo/releases/latest")
+            // 提取 assets 数组内容（简单正则解析，避免引入完整 JSON 库）
+            val assetsBody = Regex("\"assets\"\\s*:\\s*\\[(.*?)\\]", RegexOption.DOT_MATCHES_ALL)
+                .find(body)?.groupValues?.get(1) ?: return null
+            val nameRegex = Regex("\"name\"\\s*:\\s*\"([^\"]+)\"")
+            val urlRegex = Regex("\"browser_download_url\"\\s*:\\s*\"([^\"]+)\"")
+            val names = nameRegex.findAll(assetsBody)
+                .map { it.range.first to it.groupValues[1] }.toList()
+            // GitHub API 每个 asset 对象内 name 位于 browser_download_url 之前：
+            // 以 name 位置为界切段，段内取 browser_download_url 保证配对正确
+            names.forEachIndexed { i, (pos, name) ->
+                val segEnd = if (i + 1 < names.size) names[i + 1].first else assetsBody.length
+                val segment = assetsBody.substring(pos, segEnd)
+                val assetUrl = urlRegex.find(segment)?.groupValues?.get(1) ?: return@forEachIndexed
+                val lower = name.lowercase()
+                if (lower.contains(pattern.lowercase()) &&
+                    lower.endsWith(".jar") &&
+                    !lower.contains("-sources") &&
+                    !lower.contains("-dev") &&
+                    !lower.contains("-javadoc")
+                ) {
+                    return assetUrl
                 }
-                null
-            } finally {
-                conn.disconnect()
             }
+            null
         } catch (e: Exception) {
             null
         }

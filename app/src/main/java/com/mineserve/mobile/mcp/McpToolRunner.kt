@@ -416,6 +416,7 @@ internal class McpToolRunner(
         val mirror = DownloadMirror.entries.firstOrNull { it.name.equals(raw, true) || it.displayName == raw }
             ?: return bad("Unknown mirror '$raw'. Use one of: " + DownloadMirror.entries.joinToString(", ") { it.name })
         repo.updateAndSaveConfig { it.copy(downloadMirror = mirror) }
+        termux.setDownloadMirror(mirror)
         return McpToolResult("downloadMirror = ${mirror.name} (${mirror.displayName}). Takes effect on the next download.")
     }
 

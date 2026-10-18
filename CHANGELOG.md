@@ -1,5 +1,73 @@
 # 更新日志
 
+## 1.3.0
+
+### 新增：自动化定时任务（更多 → 自动化）
+
+- **能力**：开服 / 停服 / 世界备份 / 完整备份 / 重启 / 游戏内广播 / 自定义命令七种动作。
+- **频率**：固定间隔（分钟）、每 N 天同一时刻（N=1 即每天）、每周固定几天（可每 N 周）、5 段式 Cron。
+- **触发方式**：`AlarmManager.setExactAndAllowWhileIdle` 只为「最近一个待触发任务」注册一个精确闹钟，
+  触发后执行该任务、重算下次时间、再排下一个。用闹钟而非常驻协程的原因很直接——定时任务必须在
+  App 进程已被系统清理、服务器未运行时也能触发（例如凌晨定时开服），这正是 WorkManager 与常驻协程都覆盖不了的场景。
+- **失败可见**：任务抛异常时发一条通知，并照常推进 `lastRunMs` / `nextRunMs`，不会因为一次失败被反复触发。
+- **替代关系**：1.2.x 设置页里的「每日定时开/停服」与「停止后自动备份」开关已移除，能力并入本页。
+
+### 升级：1.2.x 每日定时设置一次性迁移
+
+- 旧字段（`dailyStartEnabled` 等）仍在配置里，而 `BootReceiver` 与前台服务会照旧注册
+  `ScheduleManager` 的闹钟 —— 界面已经没有入口可以关掉它，等于「看不见也管不了」。
+- 因此启动时若发现「有旧设置且一条自动化任务都没有」，自动转成两条 `EveryXDays(dayInterval=1)` 的任务
+  （每日开服 / 每日停服，时刻沿用旧值），并清空旧字段、按新配置重注册闹钟以取消旧闹钟。
+- 逻辑在 `AutomationMigration`，纯函数 + 幂等；`AutomationMigrationTest` 覆盖「无旧设置」「开+停两条」
+  「重复调用」「已有新任务时不补」四种情形。
+
+### 新增：一键测速选择下载源
+
+- 设置 → 下载源新增「依次尝试下载源」：按实际尝试顺序逐个探测，**命中第一个可用源就停**并自动选中。
+- 探测发的是 `Range: bytes=0-1` 的 2 字节请求，URL 组装与真实下载完全一致，所以「测通」基本等价于「能下」。
+- `BootstrapInstaller` 的镜像列表改为从 `DownloadMirror` 枚举派生，不再维护一份平行的硬编码副本
+  （以前两边一旦不同步，设置里选的源和实际下载用的源就对不上）。
+
+### 改进：下载源按实测结果重建
+
+- 移除已失效的 `mirror.ghproxy.com`（超时）、`github.moeyy.xyz`（连接重置）、`gh.api.99988866.xyz`（TLS 失败）
+  —— 留着只会让每次下载都白跑一轮回退。
+- 新增 `cdn.gh-proxy.com`：它是实测**唯一**能代理 `api.github.com` 的镜像（其余几家对 api 请求一律 403），
+  因此插件市场与更新检查的 API 请求改走「直连优先 + cdn.gh-proxy.com 兜底」。
+- 修正阿里云 APT 仓库地址：`/termux/apt/termux-main` 是 404，正确路径为 `/termux/termux-main`。
+- NeoForge 的 `maven-metadata.xml` 与 installer 增加 BMCLAPI maven 镜像兜底：官方 `maven.neoforged.net`
+  在部分国内网络下会被 DNS 污染到完全不可达。
+- `RemoteArtifact.metadataUrls()` 直接复用 `downloadUrls()`：非 GitHub 的自建地址不会再被套上反代前缀得到必然 404 的重试。
+
+### 改进：唤醒锁按需持有
+
+- 前台服务原先在 `onStartCommand` 里无条件 `acquireLocks()`，没有服务端在跑时也持着 CPU / Wi-Fi 锁白耗电。
+- 现在改为按「MC 进程是否存活」同步锁：启动检测、状态刷新、配置变更三处统一走 `syncLocks(alive)`，
+  锁偏好（`keepCpuWakelock` / `keepWifiLock`）由 `configFlow` 订阅缓存，改开关立即生效。
+
+### 修复：启动时重读配置文件端口
+
+- 端口真源是服务端配置文件（Java 系 `server.properties` 的 `server-port`，PowerNukkitX 是 `pnx.yml` 的
+  `settings.port`），而 `McConfig.localPort` 只是它的镜像。
+- 原实现启动链路直接吃镜像：用户在 App 之外把端口改掉后再启动，PNX / Allay 的启动链会用旧镜像**反写**配置，
+  改过的端口又被打回去；地址栏与穿透也指向没人监听的端口。
+- 现在 `McServerController.start()` 在 `migrateToAsciiServerDir` 之后调用 `adoptConfigPort()` 覆盖
+  `launchConfig.localPort`。放在 controller 里意味着界面按钮、MCP `start_server`、定时任务、桌面组件、
+  崩溃自动重启**全部**覆盖到。配置文件不存在或端口非法时原样返回，仍由核心首次生成配置时的默认端口兜底。
+- 诊断页的端口检查文案顺带修正：原来标题与结果用的是 `cfg.localPort`，与现算的 `port` 可能不一致。
+
+### 修复：控制台日志重复解析
+
+- `consoleFlow` 的每个订阅者（VM 与前台服务）都会对**同一条**日志各调一次 `ConsoleLineParser.parse`，
+  App 在前台时同一行被解析两遍。
+- `parse` 只依赖入参字符串、无副作用，因此加了 64 条容量的 LRU 缓存，第二个消费者直接命中。
+
+### 其它
+
+- 删除已无调用方的 `ConsoleSocketServer`（控制台能力早已走 stdin/stdout 通道）。
+- 概览页状态卡新增「白名单已开启 · 仅名单内玩家可进入」提示；`toggleWhitelist()` 同步 `serverProperties`，
+  开关改完提示立刻更新，不用等下次读配置文件。
+
 ## 1.2.9
 
 ### 修复：隧道启动卡在「启动中」——状态认领错给了协程对象

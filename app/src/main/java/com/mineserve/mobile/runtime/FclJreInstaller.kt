@@ -54,8 +54,13 @@ object FclJrePackages {
     private const val GITHUB = "https://github.com/venti1112/EdgeCubePackage-JRE/releases/download"
 
     private fun urlsFor(id: String): List<String> = listOf(
+        // Gitee 优先（国内直连稳定，且是上游发布的主站）；GitHub 直连及其反代兜底。
+        // 反代只保留 2026-10 实测可用的三个；所有源都指向同一个文件名，SHA256 校验不变。
         "$GITEE/$TAG_RELEASE/$id-aarch64.ecpkg",
-        "$GITHUB/$TAG_RELEASE/$id-aarch64.ecpkg"
+        "$GITHUB/$TAG_RELEASE/$id-aarch64.ecpkg",
+        "https://ghfast.top/$GITHUB/$TAG_RELEASE/$id-aarch64.ecpkg",
+        "https://gh-proxy.com/$GITHUB/$TAG_RELEASE/$id-aarch64.ecpkg",
+        "https://cdn.gh-proxy.com/$GITHUB/$TAG_RELEASE/$id-aarch64.ecpkg"
     )
 
     val all: List<FclJrePackage> = listOf(

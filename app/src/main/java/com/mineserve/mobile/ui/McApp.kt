@@ -31,6 +31,7 @@ import kotlinx.coroutines.delay
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mineserve.mobile.McApplication
+import com.mineserve.mobile.data.NetworkState
 import com.mineserve.mobile.ui.screens.BackupScreen
 import com.mineserve.mobile.ui.screens.DashboardScreen
 import com.mineserve.mobile.ui.screens.DiagnosticsScreen
@@ -54,6 +55,7 @@ import com.mineserve.mobile.ui.screens.TerminalScreen
 import com.mineserve.mobile.ui.screens.EnvManagerScreen
 import com.mineserve.mobile.ui.screens.FtpScreen
 import com.mineserve.mobile.ui.screens.MoreScreen
+import com.mineserve.mobile.ui.screens.AutomationScreen
 import com.mineserve.mobile.ui.screens.McpScreen
 import com.mineserve.mobile.ui.screens.WidgetSettingsScreen
 import com.mineserve.mobile.ui.screens.CrashReportsScreen
@@ -66,7 +68,7 @@ import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.Muted
 
 /** 子页面类型（从设置页进入的二级页面） */
-enum class SubPage { Properties, Network, Backup, WorldManage, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, FrpProfileEditor, More }
+enum class SubPage { Properties, Network, Backup, WorldManage, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, FrpProfileEditor, More, Automation }
 
 /**
  * 应用根布局：底部 6 Tab；概览页可跳转日志页；设置页可跳转子页面
@@ -99,7 +101,10 @@ fun McApp() {
     LaunchedEffect(Unit) {
         // Let the first screen settle before starting a best-effort network request.
         delay(1_000)
-        vm.checkForUpdate(manual = false)
+        // 无网络时跳过：不做注定失败的 12 秒连接尝试（手动检查不受此约束）。
+        if (NetworkState.isOnline(McApplication.get())) {
+            vm.checkForUpdate(manual = false)
+        }
     }
     // 更新通知点击 → 打开更新对话框
     LaunchedEffect(McApplication.get().openUpdateRequest.value) {
@@ -151,7 +156,7 @@ fun McApp() {
                     )
                 }
                 NavigationBarItem(
-                    selected = subPage in setOf(SubPage.More, SubPage.Network, SubPage.FrpProfileEditor, SubPage.Backup, SubPage.Diagnostics, SubPage.KeepAlive, SubPage.DownloadHelp, SubPage.MtGuide, SubPage.OpLevelGuide, SubPage.WidgetSettings, SubPage.Mcp, SubPage.EnvManager, SubPage.Ftp),
+                    selected = subPage in setOf(SubPage.More, SubPage.Network, SubPage.FrpProfileEditor, SubPage.Backup, SubPage.Diagnostics, SubPage.KeepAlive, SubPage.DownloadHelp, SubPage.MtGuide, SubPage.OpLevelGuide, SubPage.WidgetSettings, SubPage.Mcp, SubPage.EnvManager, SubPage.Ftp, SubPage.Automation),
                     onClick = { subPage = SubPage.More; showLogs = false },
                     icon = { Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.mcapp_more)) },
                     label = { Text(stringResource(R.string.mcapp_more), fontSize = 10.sp) },
@@ -210,6 +215,7 @@ fun McApp() {
                         SubPage.EnvManager -> EnvManagerScreen(vm = vm, initialTab = envManagerTab, onBack = { subPage = null })
                         SubPage.Mcp -> McpScreen(vm = vm, onBack = { subPage = null })
                         SubPage.Ftp -> FtpScreen(vm = vm, onBack = { subPage = null })
+                        SubPage.Automation -> AutomationScreen(vm = vm, onBack = { subPage = null })
                         SubPage.More -> MoreScreen(
                             onNetwork = { subPage = SubPage.Network },
                             onBackup = { subPage = SubPage.Backup },
@@ -219,7 +225,8 @@ fun McApp() {
                             onCrashReports = { subPage = SubPage.CrashReports },
                             onWidgetSettings = { subPage = SubPage.WidgetSettings },
                             onMcp = { subPage = SubPage.Mcp },
-                            onFtp = { subPage = SubPage.Ftp }
+                            onFtp = { subPage = SubPage.Ftp },
+                            onAutomation = { subPage = SubPage.Automation }
                         )
                         null -> {}
                     }

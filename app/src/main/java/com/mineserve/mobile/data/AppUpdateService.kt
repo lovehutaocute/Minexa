@@ -110,18 +110,23 @@ object AppUpdateService {
     /** 解析 GitHub Release 响应。独立出来便于单测覆盖 `null` 字段等边界。 */
     internal fun decodeRelease(raw: String): ReleaseDto = json.decodeFromString(raw)
 
+    /**
+     * GitHub API 候选地址。
+     *
+     * 只有 `cdn.gh-proxy.com` 实测能代理 `api.github.com`：`ghfast.top`、`gh-proxy.com`、
+     * `ghproxy.net` 对 api 请求一律返回 403，`gh.api.99988866.xyz` 已失效。直连兜底
+     * （GitHub API 比 Release 资产更容易直连成功）。
+     */
     private fun apiUrls() = listOf(
-        "https://gh.api.99988866.xyz/$API",
-        "https://ghfast.top/$API",
+        "https://cdn.gh-proxy.com/$API",
         API
     )
 
     private fun downloadUrls(url: String) = listOf(
         "https://ghfast.top/$url",
         "https://gh-proxy.com/$url",
-        "https://mirror.ghproxy.com/$url",
+        "https://cdn.gh-proxy.com/$url",
         "https://ghproxy.net/$url",
-        "https://github.moeyy.xyz/$url",
         url
     )
 

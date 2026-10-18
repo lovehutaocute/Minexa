@@ -16,6 +16,7 @@ import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.HealthAndSafety
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Storage
 import androidx.compose.material.icons.outlined.Warning
@@ -44,9 +45,10 @@ import com.mineserve.mobile.ui.theme.Muted
 private data class MoreEntry(val title: String, val description: String, val icon: ImageVector, val onClick: () -> Unit)
 
 @Composable
-fun MoreScreen(onNetwork: () -> Unit, onBackup: () -> Unit, onDiagnostics: () -> Unit, onKeepAlive: () -> Unit, onHelp: () -> Unit, onCrashReports: () -> Unit, onWidgetSettings: () -> Unit, onMcp: () -> Unit, onFtp: () -> Unit) {
+fun MoreScreen(onNetwork: () -> Unit, onBackup: () -> Unit, onDiagnostics: () -> Unit, onKeepAlive: () -> Unit, onHelp: () -> Unit, onCrashReports: () -> Unit, onWidgetSettings: () -> Unit, onMcp: () -> Unit, onFtp: () -> Unit, onAutomation: () -> Unit) {
     val entries = listOf(
         MoreEntry(stringResource(R.string.more_network), stringResource(R.string.more_network_desc), Icons.Outlined.Cloud, onNetwork),
+        MoreEntry(stringResource(R.string.more_automation), stringResource(R.string.more_automation_desc), Icons.Outlined.Schedule, onAutomation),
         MoreEntry(stringResource(R.string.more_backup), stringResource(R.string.more_backup_desc), Icons.Outlined.Backup, onBackup),
         MoreEntry(stringResource(R.string.more_ftp), stringResource(R.string.more_ftp_desc), Icons.Outlined.Storage, onFtp),
         MoreEntry(stringResource(R.string.more_diagnostics), stringResource(R.string.more_diagnostics_desc), Icons.Outlined.HealthAndSafety, onDiagnostics),

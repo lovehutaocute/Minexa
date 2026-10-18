@@ -865,12 +865,18 @@ private fun DashboardHeroBlock(
     val onlineModeEnabled = serverProperties["online-mode"]
         ?.trim()
         ?.equals("true", ignoreCase = true) == true
+    // 白名单与正版验证同源：都读服务端配置文件（PNX 的 settings.allowList 已在读取层映射成 white-list）。
+    // 概览页不订阅「玩家」页那份 _whitelistEnabled——它只在进玩家页刷新时才更新。
+    val whitelistEnabled = serverProperties["white-list"]
+        ?.trim()
+        ?.equals("true", ignoreCase = true) == true
     HeroBlock(
         state = heroState,
         coreLabel = coreLabel,
         cpuPercent = resources.deviceCpuPercent,
         maxHeapMb = maxHeapMb,
         onlineModeEnabled = onlineModeEnabled,
+        whitelistEnabled = whitelistEnabled,
         isRefreshing = isRefreshingStatus,
         lastRefreshAtMs = lastRefreshAtMs,
         skipStartupProgress = skipStartupProgress,

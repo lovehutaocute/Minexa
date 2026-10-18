@@ -11,6 +11,7 @@ import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.JvmFlavor
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.AptMirror
+import com.mineserve.mobile.data.DownloadMirror
 import com.mineserve.mobile.data.LegacyJava8Distro
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ProotContainerProfile
@@ -799,12 +800,13 @@ class TermuxRuntime(context: Context) {
         onLog("[php] 正在下载 ${version.displayName} 运行环境（Android 原生构建，约 10MB）...")
         val tarball = File(installer.rootDir, "tmp/php-${version.releaseTag}.tar.gz").apply { parentFile?.mkdirs() }
         val url = "https://github.com/ItzxDwi/AndroidPHP/releases/download/${version.releaseTag}/${version.tarballAsset}"
+        // 只保留实测可用的反代（旧 mirror.ghproxy.com / github.moeyy.xyz 已失效，移除）；
+        // 最后一项空串即 GitHub 直连兜底。
         val mirrors = listOf(
             "https://ghfast.top/",
             "https://gh-proxy.com/",
-            "https://mirror.ghproxy.com/",
+            "https://cdn.gh-proxy.com/",
             "https://ghproxy.net/",
-            "https://github.moeyy.xyz/",
             ""
         ).map { it + url }
         // 期望摘要：上游用的是**滚动 tag**（`pm5-latest`），写死哈希会在上游发新版时直接失效、
@@ -2589,6 +2591,16 @@ class TermuxRuntime(context: Context) {
             Log.w(TAG, "fixAptSources: ${e.message}")
             0
         }
+    }
+
+    /**
+     * 应用下载源偏好（bootstrap rootfs 下载用）。
+     *
+     * 非 Auto 时该源会被优先尝试，其余按枚举顺序回退；下次 bootstrap 下载生效。
+     * 真身存在 [BootstrapInstaller.preferredMirror]，这里只是给它一个带类型的方法入口。
+     */
+    fun setDownloadMirror(mirror: DownloadMirror) {
+        installer.preferredMirror = mirror
     }
 
     /** Applies the selected domestic APT mirror immediately for later Java/dependency installs. */

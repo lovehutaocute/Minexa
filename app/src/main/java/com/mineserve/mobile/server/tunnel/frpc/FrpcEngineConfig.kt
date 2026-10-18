@@ -83,27 +83,19 @@ object FrpcEngineConfig {
     val isConfigured: Boolean get() = METADATA_URL.isNotBlank()
 
     /**
-     * 元数据地址的镜像前缀，按顺序回退。
+     * 元数据地址的候选列表，按顺序回退。
      *
-     * 与 `AppUpdateService.downloadUrls` 同一个理由：分发地址极可能落在 GitHub，
-     * 而 GitHub 直连在部分网络下不可达。逐个试比让用户自己想办法可靠。
-     * 第一个是原始地址，保证自建服务器（不需要反代）也能正常工作。
+     * 与 `AppUpdateService.downloadUrls` 同一个理由：分发地址可能落在 GitHub，
+     * 而 GitHub 直连在部分网络下不可达。直接复用 [downloadUrls]：非 GitHub 的自建地址
+     * 只会原样返回，避免套上 `ghfast.top/` 得到一个必然 404 的额外重试。
      */
-    fun metadataUrls(): List<String> {
-        if (!isConfigured) return emptyList()
-        return listOf(
-            METADATA_URL,
-            "https://ghfast.top/$METADATA_URL",
-            "https://gh-proxy.com/$METADATA_URL",
-            "https://ghproxy.net/$METADATA_URL"
-        )
-    }
+    fun metadataUrls(): List<String> = downloadUrls(METADATA_URL)
 
     /**
      * 包直链的镜像前缀，按顺序回退。
      *
      * 只对走 GitHub 的地址套反代：自建域名套 `ghfast.top/` 这类前缀只会得到一个 404，
-     * 让每次下载都白跑一轮回退。
+     * 让每次下载都白跑一轮回退。原始地址排第一，保证自建 / 直连也能正常工作。
      */
     fun downloadUrls(url: String): List<String> {
         if (!url.contains("github.com") && !url.contains("githubusercontent.com")) {
@@ -113,6 +105,7 @@ object FrpcEngineConfig {
             url,
             "https://ghfast.top/$url",
             "https://gh-proxy.com/$url",
+            "https://cdn.gh-proxy.com/$url",
             "https://ghproxy.net/$url"
         )
     }

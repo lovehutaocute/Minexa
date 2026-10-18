@@ -3,6 +3,7 @@ package com.mineserve.mobile.runtime
 // 性能修改理由：汇总每个镜像的真实失败原因，并对移动网络短暂断流进行有限重试。
 import android.content.Context
 import android.util.Log
+import com.mineserve.mobile.data.DownloadMirror
 import com.mineserve.mobile.data.DownloadPrefs
 import com.mineserve.mobile.data.MultiThreadDownloader
 import kotlinx.coroutines.Dispatchers
@@ -48,27 +49,27 @@ class BootstrapInstaller(private val context: Context) {
     /** 速度回调（已下载字节, 速度 bytes/s） */
     var onSpeed: ((Long, Long) -> Unit)? = null
 
-    /** 镜像源列表（公开供 UI 显示名称） */
-    val mirrorSources: List<String> = listOf(
-        "ghfast.top",
-        "gh-proxy.com",
-        "mirror.ghproxy.com",
-        "ghproxy.net",
-        "github.moeyy.xyz",
-        "gh.api.99988866.xyz",
-        "GitHub 直连"
-    )
+    /**
+     * 下载源列表：直接派生自 [DownloadMirror]（去掉 Auto）。
+     *
+     * 以前这里维护着一份与 [DownloadMirror] 平行的硬编码副本，两边一旦不同步，
+     * 设置里选的源就与实际下载用的源对不上。现在以枚举为唯一事实来源：
+     * 枚举顺序 = Auto 模式尝试顺序（镜像在前、GitHub 直连最后）。
+     */
+    private val mirrorEntries: List<DownloadMirror> =
+        DownloadMirror.entries.filter { it != DownloadMirror.Auto }
 
-    /** 镜像源 URL 前缀列表 */
-    private val mirrorUrls: List<String> = listOf(
-        "https://ghfast.top/https://github.com/termux/termux-packages/releases/download",
-        "https://gh-proxy.com/https://github.com/termux/termux-packages/releases/download",
-        "https://mirror.ghproxy.com/https://github.com/termux/termux-packages/releases/download",
-        "https://ghproxy.net/https://github.com/termux/termux-packages/releases/download",
-        "https://github.moeyy.xyz/https://github.com/termux/termux-packages/releases/download",
-        "https://gh.api.99988866.xyz/https://github.com/termux/termux-packages/releases/download",
-        "https://github.com/termux/termux-packages/releases/download"
-    )
+    /** 镜像源名称列表（公开供 UI 显示名称），顺序与 [mirrorEntries] 一一对应 */
+    val mirrorSources: List<String> get() = mirrorEntries.map { it.displayName }
+
+    /**
+     * 用户在设置里选定的下载源。非 Auto 时该源被优先尝试，其余按枚举顺序回退。
+     *
+     * 由 McApplication / McViewModel 在真正下载前写入（见 `startBootstrap`）。
+     * 默认 Auto：不做任何偏置，纯镜像优先。
+     */
+    @Volatile
+    var preferredMirror: DownloadMirror = DownloadMirror.Auto
 
     /** 当前正在使用的镜像源索引（-1 表示未在下载中） */
     private val _currentMirrorIndex = MutableStateFlow(-1)
@@ -98,6 +99,72 @@ class BootstrapInstaller(private val context: Context) {
         }
         activeDownloadSession?.cancel()
     }
+
+    /**
+     * 实际尝试顺序的索引列表（索引指向 [mirrorEntries] / [mirrorSources]）。
+     *
+     * - Auto：按枚举顺序（镜像在前、GitHub 直连最后）。
+     * - 指定源：该源提到最前，其余按枚举顺序殿后；源不在列表时退回 Auto 顺序。
+     */
+    private fun orderedMirrorIndices(): List<Int> {
+        val all = mirrorEntries.indices.toList()
+        val pref = preferredMirror
+        if (pref == DownloadMirror.Auto) return all
+        val p = mirrorEntries.indexOfFirst { it == pref }
+        if (p <= 0) return all
+        return listOf(p) + all.filter { it != p }
+    }
+
+    /**
+     * 探测单个下载源是否可用。
+     *
+     * 对 bootstrap 包发一个只取 2 字节的 Range 请求：拿到 2xx/206 即视为可用，
+     * 取到响应头后立即断开，不会真正下载整个文件。URL 组装与 [downloadBootstrap]
+     * 完全一致，因此「测通」基本等价于「能下」。
+     */
+    fun probeMirror(index: Int): Boolean {
+        val entry = mirrorEntries.getOrNull(index) ?: return false
+        val url = "${entry.baseUrl}/$BOOTSTRAP_VERSION/bootstrap-$termuxArch.zip"
+        Log.i(TAG, "[探测] 测试下载源 ${entry.displayName}: $url")
+        return try {
+            val conn = (URL(url).openConnection() as HttpURLConnection).apply {
+                instanceFollowRedirects = true
+                connectTimeout = PROBE_TIMEOUT_MS
+                readTimeout = PROBE_TIMEOUT_MS
+                requestMethod = "GET"
+                setRequestProperty("Range", "bytes=0-1")
+                setRequestProperty("User-Agent", USER_AGENT)
+            }
+            try {
+                conn.responseCode in 200..299
+            } finally {
+                runCatching { conn.disconnect() }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "[探测] ${entry.displayName} 失败: ${describeError(e)}")
+            false
+        }
+    }
+
+    /**
+     * 「依次尝试下载源」：按 [orderedMirrorIndices] 顺序逐个探测，返回**第一个可用源**
+     * 在 [mirrorEntries] 中的索引；全部失败返回 -1。
+     *
+     * 找到可用源立即停止，不再测后面的源。每测一个回调一次 [onLog]，供 UI 实时展示。
+     */
+    suspend fun probeMirrors(onLog: (String) -> Unit = {}): Int = withContext(Dispatchers.IO) {
+        for (idx in orderedMirrorIndices()) {
+            val label = mirrorSources[idx]
+            onLog("正在测试 $label ...")
+            val ok = probeMirror(idx)
+            onLog(if (ok) "✓ $label 可用" else "✗ $label 不可用")
+            if (ok) return@withContext idx
+        }
+        -1
+    }
+
+    /** 把 [mirrorEntries] 索引映射回用户可保存的枚举（探测结果落库用）。 */
+    fun mirrorAt(index: Int): DownloadMirror? = mirrorEntries.getOrNull(index)
 
     private fun log(msg: String) {
         Log.i(TAG, msg)
@@ -467,17 +534,18 @@ class BootstrapInstaller(private val context: Context) {
         onProgress: (Int) -> Unit
     ) {
         tmpDir.mkdirs()
-        val version = "bootstrap-2026.05.24-r1%2Bapt.android-7"
+        val version = BOOTSTRAP_VERSION
         val arch = termuxArch
         val fileName = "bootstrap-$arch.zip"
 
         stopAndSwitchRequested = false
         log("下载 Termux 运行环境 (~30MB)...")
-        Log.i(TAG, "[下载] 开始 downloadBootstrap, 共 ${mirrorUrls.size} 个镜像源, arch=$arch, 线程=${Thread.currentThread().name}")
+        Log.i(TAG, "[下载] 开始 downloadBootstrap, 共 ${mirrorEntries.size} 个镜像源, arch=$arch, 线程=${Thread.currentThread().name}")
         var lastError: Exception? = null
         val failures = mutableListOf<String>()
-        for ((idx, mirror) in mirrorUrls.withIndex()) {
+        for (idx in orderedMirrorIndices()) {
             _currentMirrorIndex.value = idx
+            val mirror = mirrorEntries[idx].baseUrl
             val url = "$mirror/$version/$fileName"
             val label = mirrorSources[idx]
             Log.i(TAG, "[下载] === 尝试镜像源 $idx/$label ===")
@@ -563,7 +631,7 @@ class BootstrapInstaller(private val context: Context) {
                 }
             }
         }
-        Log.e(TAG, "[下载] 所有 ${mirrorUrls.size} 个镜像源均失败, lastError=${lastError?.message}")
+        Log.e(TAG, "[下载] 所有 ${mirrorEntries.size} 个镜像源均失败, lastError=${lastError?.message}")
         _currentMirrorIndex.value = -1
         val summary = failures.joinToString("；").take(900)
         throw RuntimeException("所有镜像源均下载失败：$summary")
@@ -1191,5 +1259,13 @@ esac
     companion object {
         private const val TAG = "BootstrapInstaller"
         private const val DOWNLOAD_RETRIES = 2
+
+        /** Termux bootstrap 版本目录名（GitHub release tag 的 URL 编码形式）。 */
+        private const val BOOTSTRAP_VERSION = "bootstrap-2026.05.24-r1%2Bapt.android-7"
+
+        /** 探测单个下载源的连接 / 读取超时（毫秒）。 */
+        private const val PROBE_TIMEOUT_MS = 8_000
+
+        private const val USER_AGENT = "Minexa/1.0 (Android)"
     }
 }

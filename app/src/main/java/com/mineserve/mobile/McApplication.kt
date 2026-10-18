@@ -174,6 +174,23 @@ class McApplication : Application(), Configuration.Provider {
         mcpServerManager.start()
         createNotificationChannel()
 
+        // 1.2.x 的「每日定时开/停服」已并入「更多 → 自动化」。旧字段若原样留着，
+        // BootReceiver 与前台服务仍会每天照旧开停服，而设置页已经没有开关可以关掉它 ——
+        // 因此启动时一次性迁移成定时任务，并用迁移后的配置重注册/取消旧闹钟。
+        scope().launch {
+            runCatching {
+                val migrated = com.mineserve.mobile.data.AutomationMigration.migrate(repository.currentConfig())
+                if (migrated == repository.currentConfig()) return@runCatching
+                val saved = repository.updateAndSaveConfig { com.mineserve.mobile.data.AutomationMigration.migrate(it) }
+                com.mineserve.mobile.data.ScheduleManager.register(this@McApplication, saved)
+                com.mineserve.mobile.data.AutomationScheduler.register(
+                    this@McApplication,
+                    com.mineserve.mobile.data.AutomationScheduler.withNextRunsAssigned(saved.automationTasks)
+                )
+                android.util.Log.i("McApplication", "旧版每日定时设置已迁移为自动化任务：${saved.automationTasks.size} 条")
+            }
+        }
+
         // 累计使用人数统计：设备标识上报（每天一次，失败静默）
         UsageTracker.maybePulse(this)
 
@@ -235,6 +252,8 @@ class McApplication : Application(), Configuration.Provider {
         scope().launch {
             try {
                 _bootstrapError.value = null
+                // 应用用户选择的下载源偏好（下载前从配置恢复，避免进程重启后丢失）。
+                runCatching { termuxRuntime.setDownloadMirror(repository.currentConfig().downloadMirror) }
                 val ok = try {
                 termuxRuntime.bootstrap { phase, progress ->
                     android.util.Log.i("McApplication", "bootstrap: ${getString(phase.labelRes)} $progress%")

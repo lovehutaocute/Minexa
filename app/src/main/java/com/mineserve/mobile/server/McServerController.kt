@@ -609,6 +609,15 @@ class McServerController(
                 listOf("https://bmclapi2.bangbang93.com/forge/download?mcversion=$version&version=$forgeVersion&category=installer&format=jar")
             }
             ServerCore.Fabric -> listOf(official.replace("https://meta.fabricmc.net/", "https://bmclapi2.bangbang93.com/fabric-meta/"))
+            // NeoForge 官方 maven（maven.neoforged.net）在国内常被 DNS 污染而不可达，
+            // 用 BMCLAPI 的 maven 镜像兜底同一份 installer jar。
+            ServerCore.NeoForge -> {
+                val ver = official.substringAfter("/neoforge/").substringBefore("/")
+                listOf("https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/$ver/neoforge-$ver-installer.jar")
+            }
+            // PocketMine（.phar）与 Allay（.jar）的下载地址都落在 GitHub Release 资产上，
+            // 套一层反代提高可达性。
+            ServerCore.PocketMine, ServerCore.Allay -> githubMirrors(official)
             else -> emptyList()
         }
         return if (core == ServerCore.PowerNukkitX) {
@@ -619,17 +628,24 @@ class McServerController(
                     official.replace("https://repo1.maven.org/maven2", "https://repo.huaweicloud.com/repository/maven")
                 ).distinct()
             } else {
-                listOf(
-                    "https://ghfast.top/$official",
-                    "https://gh-proxy.com/$official",
-                    "https://mirror.ghproxy.com/$official",
-                    "https://ghproxy.net/$official",
-                    "https://github.moeyy.xyz/$official",
-                    official
-                ).distinct()
+                githubMirrors(official)
             }
         } else (mirrors + official).distinct()
     }
+
+    /**
+     * 给 GitHub 直链套上**实测可用**的反代前缀，直连放最后兜底。
+     *
+     * 只保留 4 个 2026-10 实测可用的源：`ghfast.top`、`gh-proxy.com`、`cdn.gh-proxy.com`、
+     * `ghproxy.net`。旧的 `mirror.ghproxy.com` / `github.moeyy.xyz` 已失效，套上去只会白跑。
+     */
+    private fun githubMirrors(url: String): List<String> = listOf(
+        "https://ghfast.top/$url",
+        "https://gh-proxy.com/$url",
+        "https://cdn.gh-proxy.com/$url",
+        "https://ghproxy.net/$url",
+        url
+    ).distinct()
 
     // ── PaperMC v3 API（fill.papermc.io）：动态获取最新 STABLE build 号 ───
 
@@ -844,7 +860,7 @@ class McServerController(
     // ── NeoForge：maven-metadata 按所选 MC 版本匹配 NeoForge 版本 installer ──
 
     private fun resolveNeoForgeUrl(version: String): String {
-        val xml = fetchText("https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml")
+        val xml = fetchNeoForgeMavenMetadata()
         val versions = Regex("<version>([^<]+)</version>").findAll(xml).map { it.groupValues[1] }.toList()
         // 不再回退到 <release>：当所选 MC 版本没有对应 NeoForge 构建时，
         // 旧逻辑会静默下载到完全不相干的「最新版」（如 MC 1.20.1 → NeoForge 26.2.0.86），
@@ -852,6 +868,29 @@ class McServerController(
         val ver = selectNeoForgeVersion(version, versions)
             ?: throw RuntimeException("NeoForge: 没有适配 MC $version 的构建，请改用其他 MC 版本")
         return "https://maven.neoforged.net/releases/net/neoforged/neoforge/$ver/neoforge-$ver-installer.jar"
+    }
+
+    /**
+     * 读取 NeoForge 的 maven-metadata.xml。
+     *
+     * 官方 `maven.neoforged.net` 在部分国内网络下会被 DNS 污染而完全不可达（实测连接超时），
+     * 此时退到 BMCLAPI 的 maven 镜像——它是同一份元数据的镜像，路径前缀只多 `/maven`。
+     */
+    private fun fetchNeoForgeMavenMetadata(): String {
+        val candidates = listOf(
+            "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
+            "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/maven-metadata.xml"
+        )
+        var last: Exception? = null
+        for (url in candidates) {
+            try {
+                return fetchText(url)
+            } catch (e: Exception) {
+                last = e
+                Log.w(TAG, "NeoForge 元数据源失败，尝试下一个: $url (${e.message})")
+            }
+        }
+        throw last ?: RuntimeException("NeoForge: maven 元数据不可用")
     }
 
     private fun updatePowerNukkitXProperties(current: String, port: Int): String {
@@ -862,6 +901,31 @@ class McServerController(
             else "$text${if (text.isNotEmpty() && !text.endsWith("\n")) "\n" else ""}$line\n"
         }
         return setProperty(setProperty(current, "server-port", port.toString()), "allow-shaded", "true")
+    }
+
+    /**
+     * 启动前以**配置文件**为准重读端口（端口的唯一真源）。
+     *
+     * 覆盖所有启动入口：界面按钮、MCP `start_server`、定时任务、桌面组件、崩溃自动重启。
+     * 配置文件不存在（服务端一次都没启动过）或端口非法时原样返回 —— 此时由核心首次
+     * 生成配置时的默认端口兜底，不能把 [McConfig.localPort] 当猜测值写进去。
+     */
+    private fun adoptConfigPort(config: McConfig, core: InstalledCore): McConfig {
+        val fromFile = try {
+            val raw = if (core.core == ServerCore.PowerNukkitX) {
+                PowerNukkitXConfigManager(termux).read(core.dirName)["server-port"]
+            } else {
+                ServerPropertiesManager(termux).readProperties(core.dirName)["server-port"]
+            }
+            raw?.trim()?.toIntOrNull()?.takeIf { it in 1..65535 }
+        } catch (_: Exception) {
+            null
+        } ?: return config
+        if (fromFile == config.localPort) return config
+        termux.emitLog(
+            "[startMc] 配置文件端口 $fromFile 与本地记录 ${config.localPort} 不一致，本次按配置文件启动"
+        )
+        return config.copy(localPort = fromFile)
     }
 
     // ── Quilt：meta API 取 installer 版本（quilt-installer 独立版本号，与 loader 不同） ──
@@ -1162,13 +1226,15 @@ class McServerController(
     private fun fetchGithubJson(url: String): JsonObject = fetchGithubJsonElement(url).jsonObject
 
     private fun fetchGithubJsonElement(url: String): JsonElement {
+        // 直连优先（api.github.com 通常可直连且延迟最低；raw.githubusercontent.com 在国内可能不可达）。
+        // 随后是实测可用的反代：cdn.gh-proxy.com 同时能代理 api.github.com 与 raw 内容；
+        // ghfast.top / gh-proxy.com / ghproxy.net 只能代理 raw/release，对 api 请求会返回 403。
         val candidates = listOf(
             url,
+            "https://cdn.gh-proxy.com/$url",
             "https://ghfast.top/$url",
             "https://gh-proxy.com/$url",
-            "https://mirror.ghproxy.com/$url",
-            "https://ghproxy.net/$url",
-            "https://github.moeyy.xyz/$url"
+            "https://ghproxy.net/$url"
         ).distinct()
         var last: Exception? = null
         for (candidate in candidates) {
@@ -1192,7 +1258,7 @@ class McServerController(
      * 例如 `26.2.0.86` → `26.2.0`（去掉末段补丁号），`21.4.157` → `21.4` → 补回 `1.` 前缀 → `1.21.4`。
      */
     private fun fetchNeoForgeVersions(): List<String> = runCatching {
-        val xml = fetchText("https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml")
+        val xml = fetchNeoForgeMavenMetadata()
         val all = Regex("<version>([^<]+)</version>").findAll(xml).map { it.groupValues[1] }.toList()
         val mcVersions = LinkedHashSet<String>()
         for (full in all) {
@@ -1457,7 +1523,12 @@ class McServerController(
         ) {
             throw RuntimeException("${config.selectedJavaVersion.displayName} 未安装，请先在 Java 管理卡片中安装")
         }
-        val (launchConfig, launchCore) = migrateToAsciiServerDir(config, activeCore)
+        val (baseConfig, launchCore) = migrateToAsciiServerDir(config, activeCore)
+        // 端口真源在配置文件里（Java 系 server.properties 的 server-port，
+        // PowerNukkitX 是 pnx.yml 的 settings.port）。用户完全可能在 App 之外改过它，
+        // 所以**每次启动**都重读一次；否则 PNX / Allay 的启动链会用 McConfig 里的旧值
+        // 把配置文件里的新端口覆盖掉（改了等于没改），地址与穿透也会指向没监听的端口。
+        val launchConfig = adoptConfigPort(baseConfig, launchCore)
         val serverDir = File(termux.serversDir, launchCore.dirName)
         val configuredEntry = launchCore.serverFile
             ?.trim()

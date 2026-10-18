@@ -295,7 +295,7 @@ object McpToolCatalog {
             name = "set_download_mirror",
             description = "切换运行环境 / 服务端核心的下载源（GitHub 官方或若干加速镜像）。切换后下一次下载生效。",
             inputSchema = schema(
-                "mirror" to strProp("镜像枚举名：Auto / GitHub / GhProxy / MirrorGhproxy / GhproxyNet / Moeyy / Api99988866 / Ghfast"),
+                "mirror" to strProp("镜像枚举名：Auto / Ghfast / GhProxy / CdnGhProxy / GhproxyNet / GitHub"),
                 required = listOf("mirror")
             )
         ),

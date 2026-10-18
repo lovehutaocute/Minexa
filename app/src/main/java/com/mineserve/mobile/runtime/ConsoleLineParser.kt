@@ -57,12 +57,34 @@ object ConsoleLineParser {
     private const val KEY_TPS = "TPS from last 1m"
 
     /**
-     * 解析一行控制台输出。
+     * 单行解析结果的有界缓存（按最近使用淘汰）。
+     *
+     * consoleFlow 的每个订阅者（[com.mineserve.mobile.ui.McViewModel] 与
+     * [com.mineserve.mobile.service.McForegroundService]）都会对**同一条**日志各调一次
+     * [parse]；App 在前台时两者同时订阅，同一行被解析两遍，正则开销翻倍。
+     * [parse] 只依赖入参字符串、无副作用，因此在这里按行缓存即可让第二个消费者直接命中，
+     * 不再重跑正则。容量很小，命中失败也不影响正确性。
+     */
+    private const val CACHE_MAX = 64
+    private val cache = object : LinkedHashMap<String, ConsoleSignals>(CACHE_MAX, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, ConsoleSignals>): Boolean =
+            size > CACHE_MAX
+    }
+
+    /**
+     * 解析一行控制台输出（带重复行缓存）。
      *
      * 注意：不包含玩家进出服、聊天等需要玩家名的事件——那些需要 PlayerManager
      * 与通知/记录副作用，仍由各自的消费者处理，避免把 UI 语义塞进纯解析层。
      */
     fun parse(line: String): ConsoleSignals {
+        synchronized(cache) { cache[line]?.let { return it } }
+        val result = parseUncached(line)
+        synchronized(cache) { cache[line] = result }
+        return result
+    }
+
+    private fun parseUncached(line: String): ConsoleSignals {
         var phase: StartupPhase? = null
         var players: ConsoleSignals.PlayerCount? = null
         var tps: Double? = null

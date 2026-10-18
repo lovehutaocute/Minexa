@@ -96,19 +96,24 @@ data class TunnelState(
 
 /**
  * Termux bootstrap rootfs 下载源
- * - Auto: 按顺序尝试所有镜像（镜像优先）
- * - 其余: 指定镜像优先，其余回退
+ * - Auto: 按顺序尝试所有镜像（镜像优先，GitHub 直连兜底）
+ * - 其余: 指定镜像优先，失败后仍按 Auto 顺序回退
+ *
+ * 只保留**实测可用**的源：`mirror.ghproxy.com`（超时）、`github.moeyy.xyz`（连接重置）、
+ * `gh.api.99988866.xyz`（TLS 失败）三个旧镜像已陆续失效，于 2026-10 移除，避免每次
+ * 下载都白跑一轮回退。新增 `cdn.gh-proxy.com`：它同时支持 Release 资产、`api.github.com`
+ * 与 raw.githubusercontent.com 三类代理，是唯一实测能代理 GitHub API 的镜像。
+ *
+ * 枚举顺序即 Auto 模式下的尝试顺序：镜像在前、直连最后（符合「镜像优先」语义）。
  */
 @Serializable
 enum class DownloadMirror(val displayName: String, val baseUrl: String) {
     Auto("自动（镜像优先）", ""),
-    GitHub("GitHub 直连", "https://github.com/termux/termux-packages/releases/download"),
+    Ghfast("ghfast.top", "https://ghfast.top/https://github.com/termux/termux-packages/releases/download"),
     GhProxy("gh-proxy.com", "https://gh-proxy.com/https://github.com/termux/termux-packages/releases/download"),
-    MirrorGhproxy("mirror.ghproxy.com", "https://mirror.ghproxy.com/https://github.com/termux/termux-packages/releases/download"),
+    CdnGhProxy("cdn.gh-proxy.com", "https://cdn.gh-proxy.com/https://github.com/termux/termux-packages/releases/download"),
     GhproxyNet("ghproxy.net", "https://ghproxy.net/https://github.com/termux/termux-packages/releases/download"),
-    Moeyy("github.moeyy.xyz", "https://github.moeyy.xyz/https://github.com/termux/termux-packages/releases/download"),
-    Api99988866("gh.api.99988866.xyz", "https://gh.api.99988866.xyz/https://github.com/termux/termux-packages/releases/download"),
-    Ghfast("ghfast.top", "https://ghfast.top/https://github.com/termux/termux-packages/releases/download")
+    GitHub("GitHub 直连", "https://github.com/termux/termux-packages/releases/download")
 }
 
 /**
@@ -118,7 +123,9 @@ enum class DownloadMirror(val displayName: String, val baseUrl: String) {
 @Serializable
 enum class AptMirror(val displayName: String, val url: String) {
     Tuna("清华镜像 (TUNA)", "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"),
-    Aliyun("阿里云镜像", "https://mirrors.aliyun.com/termux/apt/termux-main"),
+    // 阿里云的 Termux 仓库路径**没有** `/apt/` 段：旧的 /termux/apt/termux-main 返回 404，
+    // 正确地址是 /termux/termux-main（已实测 dists/stable/Release 为 200）。
+    Aliyun("阿里云镜像", "https://mirrors.aliyun.com/termux/termux-main"),
     Ustc("中科大镜像 (USTC)", "https://mirrors.ustc.edu.cn/termux/apt/termux-main"),
     Nju("南京大学镜像", "https://mirror.nju.edu.cn/termux/apt/termux-main"),
     // Kept only for old DataStore values; new installs never select an overseas APT source.
@@ -699,6 +706,13 @@ data class McConfig(
     val dailyStopMinute: Int = 0,
     /** 服务器停止后自动备份一份世界快照（服从 maxSnapshots 保留策略） */
     val stopAutoBackup: Boolean = false,
+    /**
+     * 自动化定时任务列表（更多页「自动化」）。
+     *
+     * 取代原先仅支持「每日开/停服」的固定字段，支持备份/重启/广播/自定义命令与
+     * 间隔、每日、每周、Cron 多种频率。字段带默认值，旧配置反序列化不受影响。
+     */
+    val automationTasks: List<AutomationTask> = emptyList(),
     // ── MCP（Model Context Protocol）内嵌服务器 ──────────────
     /** 启用内嵌 MCP 服务器，局域网内 AI 助手可通过 HTTP 管理 MC 服务器 */
     val mcpEnabled: Boolean = false,
