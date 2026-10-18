@@ -199,12 +199,21 @@ class StunTcpSession private constructor(
                 // 所以这里值得多试几次——只在**端口没抢到**时重试，总共约半秒。
                 var lastReason: String? = null
                 for (attempt in 0 until portReuseAttempts) {
-                    // connect 失败（服务器不可达）不在这里重试：那不是端口问题，
-                    // 多试几次只是把失败拖慢 4 倍。直接抛给上层换服务器。
+                    // connect 抛异常时要分清两类原因：
+                    //  - 服务器不可达（超时/拒绝连接）⇒ 立刻抛给上层换服务器，重试只是把失败拖慢 4 倍；
+                    //  - **端口本身拿不到** ⇒ 旧连接刚关时端口可能还在 TIME_WAIT，内核会用
+                    //    EADDRNOTAVAIL（Linux/Android）/ WSAEADDRINUSE（Windows）直接拒绝同一
+                    //    四元组重建。这是「端口没抢到」，与 bind 被拒等价，走同一条退路：
+                    //    重试几次，实在不行退回随机端口 —— 隧道必须起得来，端口漂移可以接受。
                     val reused = try {
                         openSession(server, connectTimeoutMs, reuseLocalPort)
                     } catch (e: Exception) {
-                        throw StunException(e.message ?: e.toString())
+                        if (!isPortUnavailable(e)) throw StunException(e.message ?: e.toString())
+                        lastReason = e.message ?: "端口暂不可用"
+                        if (attempt < portReuseAttempts - 1) {
+                            runCatching { Thread.sleep(portReuseBackoffMs[attempt].toLong()) }
+                        }
+                        continue
                     }
                     if (reused.localPort == reuseLocalPort) return reused
                     // 绑到了别的端口（bind 被拒/端口被占）：关掉重来，否则这条连接会
@@ -225,8 +234,7 @@ class StunTcpSession private constructor(
             }
         }
 
-        /** 建立一条会话：可选先占住 [localPort]，随后 connect 并启动读线程。 */
-        private fun openSession(
+        /** 建立一条会话：可选先占住 [localPort]，随后 connect 并启动读线程。 */        private fun openSession(
             server: StunServer,
             connectTimeoutMs: Int,
             localPort: Int?,
@@ -280,6 +288,24 @@ class StunTcpSession private constructor(
             null
         } catch (e: Exception) {
             "${e.message ?: e.toString()}"
+        }
+
+        /**
+         * 这个异常是不是「本地端口暂时拿不到」。
+         *
+         * 只有这一类才值得在固定端口上重试；服务器不可达（超时 / 拒绝连接）必须立刻抛出，
+         * 否则一次连不上会被拖成 [portReuseAttempts] 倍耗时。
+         *
+         * 判据是异常类型 + 消息：Linux/Android 用 `EADDRNOTAVAIL`（Cannot assign requested
+         * address），Windows 用 `WSAEADDRINUSE`（Address already in use）。JVM 不会把 errno
+         * 暴露出来，只能按文案匹配，因此这里宽松匹配，宁可笑纳「不像网络故障」的异常。
+         */
+        private fun isPortUnavailable(e: Exception): Boolean {
+            if (e is java.net.BindException) return true
+            val msg = (e.message ?: "").lowercase()
+            return msg.contains("cannot assign requested address") ||
+                msg.contains("address already in use") ||
+                msg.contains("bind failed")
         }
 
         /** 占用旧端口的重试次数与间隔（毫秒）：端口残留通常只有几十毫秒。 */

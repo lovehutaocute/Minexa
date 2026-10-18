@@ -42,8 +42,20 @@ class StunLocalPortReuseTest {
             try {
                 assertEquals("首次连接应占用指定的本地端口", wanted, first.localPort)
             } finally {
+                // 复刻生产环境：STUN 服务器对 TCP 是「一问一答即 RST」，连接是**被对端重置**的，
+                // 客户端根本不会进 TIME_WAIT，端口可以立刻复用。
+                // 少了这一步，客户端主动 close 会把同一条四元组留在 TIME_WAIT，Linux 内核会以
+                // EADDRNOTAVAIL 拒绝立刻重建 —— 那样测的就是内核对 TIME_WAIT 的策略，而不是
+                // 「reuseLocalPort 有没有真的生效」。
+                runCatching {
+                    server.accept().use { accepted ->
+                        accepted.setSoLinger(true, 0) // 0 = 立即 RST
+                    }
+                }
                 first.close()
             }
+            // 等 RST 落地：这一步是异步的，立刻重连有可能仍撞上尚未清理的四元组。
+            Thread.sleep(150)
 
             // 重建路径：同一个端口再连一次（真实场景里该端口可能处于 TIME_WAIT）。
             val second = StunTcpSession.connect(target, connectTimeoutMs = 2000, reuseLocalPort = wanted)
