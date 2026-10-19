@@ -115,4 +115,4 @@ pwsh tools/list-git-nodes.ps1 -BackupOnly   # 只看备份/检查点/stash
 - 不要执行 `git add --renormalize .`，避免制造全仓库行尾 diff。
 - 不要在镜像仓库里直接提交或改文件。
 - 不要删除、改名已推送的发布标签；确需修正时先沟通，再 force-push 并同步镜像。
-- 不要执行 `git gc --prune=now`：截至整理时仓库仍有 29 个悬空对象（8 月改写历史留下的旧提交/旧标签），保留以便追溯。
+- 不要执行 `git gc --prune=now`：仓库里仍保留悬空对象（截至整理时有 30 个），包括 3 个已丢弃的 stash（`review-fixes`、`zstd-fix`、`zstd-fix-partial`）和改写历史前的旧 release 提交。可用 `git fsck --unreachable` 查看；需要长期保留时，给对应提交补 `backup/` 标签。
