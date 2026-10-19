@@ -1,0 +1,36 @@
+# 行尾与二进制约定：索引统一 LF，Windows 批处理保留 CRLF。
+# 说明见 docs/GIT-WORKFLOW.md，改动后不要执行 git add --renormalize 全量重写。
+
+*.kt        text eol=lf
+*.kts       text eol=lf
+*.java      text eol=lf
+*.xml       text eol=lf
+*.md        text eol=lf
+*.sh        text eol=lf
+gradlew     text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.toml      text eol=lf
+*.pro       text eol=lf
+*.properties text eol=lf
+*.json      text eol=lf
+
+*.bat       text eol=crlf
+*.cmd       text eol=crlf
+*.ps1       text eol=crlf
+
+# shell 钩子必须保持 LF，否则 shebang 会带上 CR 而无法执行
+.githooks/*     text eol=lf
+.gitattributes  text eol=lf
+.editorconfig   text eol=lf
+.gitignore      text eol=lf
+
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.webp      binary
+*.gif       binary
+*.jar       binary
+*.keystore  binary
+*.jks       binary
+*.so        binary

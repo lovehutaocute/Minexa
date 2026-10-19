@@ -1,0 +1,19 @@
+#!/bin/sh
+# Refresh the mirror before a push, so moved or force-updated refs (notably
+# tags changed with `git tag -f`, which triggers no other hook) cannot drift.
+# A mirror failure must never block the push.
+root=$(git rev-parse --show-toplevel) || exit 0
+source="$root/.git"
+mirror="$(dirname "$root")/$(basename "$root").git-backup"
+log="$root/.git-backup.log"
+
+if git --git-dir="$mirror" fetch --quiet "$source" \
+  '+refs/heads/*:refs/heads/*' \
+  '+refs/tags/*:refs/tags/*' \
+  '+refs/stash:refs/backup/stash'; then
+  printf '%s pre-push backup succeeded\n' "$(date -Iseconds)" >> "$log"
+else
+  printf '%s pre-push backup failed\n' "$(date -Iseconds)" >> "$log"
+fi
+
+exit 0

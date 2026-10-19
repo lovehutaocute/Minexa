@@ -1,11 +1,15 @@
 #!/bin/sh
-# Keep a local bare mirror without making a successful commit depend on it.
-mirror="C:/Users/DELL/Desktop/AI/VSCode2/MCServerManager.git-backup"
-source="C:/Users/DELL/Desktop/AI/VSCode2/MCServerManager/.git"
-log="$source/git-backup.log"
+# Keep the local bare mirror in sync after every commit without making a
+# successful commit depend on the mirror.
+root=$(git rev-parse --show-toplevel) || exit 0
+source="$root/.git"
+mirror="$(dirname "$root")/$(basename "$root").git-backup"
+log="$root/.git-backup.log"
 
 if git --git-dir="$mirror" fetch --quiet "$source" \
-  '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*'; then
+  '+refs/heads/*:refs/heads/*' \
+  '+refs/tags/*:refs/tags/*' \
+  '+refs/stash:refs/backup/stash'; then
   printf '%s post-commit backup succeeded\n' "$(date -Iseconds)" >> "$log"
 else
   printf '%s post-commit backup failed\n' "$(date -Iseconds)" >> "$log"
