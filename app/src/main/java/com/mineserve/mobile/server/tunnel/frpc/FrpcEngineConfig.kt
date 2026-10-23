@@ -21,24 +21,25 @@ package com.mineserve.mobile.server.tunnel.frpc
 object FrpcEngineConfig {
 
     /**
-     * 引擎元数据 JSON 地址。
+     * 引擎元数据 JSON 地址（**首选猜测**，真实地址见 [CATALOG_URL] 的说明）。
      *
      * 取自 EdgeCube 的 frpc 运行时分发站（`EdgeCubePackage-Frpc` 仓库的发行包，
      * 由 `edgecubemc.com` 提供元数据）。响应形状（无 `{code,data}` 外壳）：
      *
      * ```json
      * {
-     *   "id": "frpc0.70.1",
+     *   "id": "frpc0.69.1",
      *   "version": 1,
-     *   "versionName": "2026-08-07",
+     *   "versionName": "2026-07-05",
      *   "packages": {
      *     "aarch64": {
      *       "urls": [
-     *         { "type": "direct", "url": "https://…/frpc0.70.1-aarch64.ecpkg" },
-     *         { "type": "web",    "url": "https://…/网盘页" }
+     *         { "name": "GitHub", "type": "direct", "url": "https://github.com/…/frpc0.69.1-aarch64.ecpkg" },
+     *         { "name": "Gitee",  "type": "direct", "url": "https://gitee.com/…/frpc0.69.1-aarch64.ecpkg" },
+     *         { "name": "木韩网盘", "type": "web",   "url": "https://pan.mcbebbs.cn/s/…" }
      *       ],
      *       "sha256": "…",
-     *       "size": 5797865,
+     *       "size": 5725468,
      *       "arch": ["aarch64"]
      *     }
      *   }
@@ -50,7 +51,29 @@ object FrpcEngineConfig {
      *
      * 若要换成分发自己的引擎，替换本地址即可，不必重新发版。
      */
-    const val METADATA_URL = "https://edgecubemc.com/app/ecpkg/metadata/frp/frpc0.70.1.json"
+    const val METADATA_URL = "https://edgecubemc.com/app/ecpkg/metadata/frp/frpc0.69.1.json"
+
+    /**
+     * ecpkg 目录清单，用于**自动发现** frpc 元数据地址。
+     *
+     * 为什么需要它：`edgecubemc.com` 是 SPA，未知路径不会 404，而是回落成
+     * `index.html`（HTTP 200 + `text/html`）。所以把版本号写死在 [METADATA_URL] 里，
+     * 上游一升版本（0.69.1 → 0.70.1…）本应用就会拿到一份网页，报出
+     * 「元数据格式无法识别」—— HTTP 层一切正常，只有内容不对，最难查的一类失败。
+     *
+     * 有了目录清单，写死的常量化作「首选猜测」，真正的地址每次从这份
+     * `list.json` 里现取（`type == "frpc"` 那一组的 `packages`）。
+     */
+    const val CATALOG_URL = "https://edgecubemc.com/app/ecpkg/list.json"
+
+    /**
+     * 引擎发行页（给人点开手动下载用）。
+     *
+     * 用 Gitee 而不是 GitHub：这条路径存在的意义就是「在线下载失败时的兜底」，
+     * 而失败最常见的原因正是 GitHub 不可达。页面上 `frpc*-aarch64.ecpkg`
+     * 可以直接下载导入 —— [FrpcRuntime.install] 认这个容器格式。
+     */
+    const val RELEASE_PAGE = "https://gitee.com/venti1112/EdgeCubePackage-Frpc/releases"
 
     /**
      * 元数据里本应用对应的 package key。
@@ -91,6 +114,9 @@ object FrpcEngineConfig {
      */
     fun metadataUrls(): List<String> = downloadUrls(METADATA_URL)
 
+    /** 目录清单的候选地址（同样只对 GitHub 地址套反代）。 */
+    fun catalogUrls(): List<String> = downloadUrls(CATALOG_URL)
+
     /**
      * 包直链的镜像前缀，按顺序回退。
      *
@@ -109,4 +135,25 @@ object FrpcEngineConfig {
             "https://ghproxy.net/$url"
         )
     }
+
+    /** 国内直连通常比「GitHub 原始地址 + 反代」更快的域名。 */
+    private val DOMESTIC_HOSTS = listOf("gitee.com", "gitee.io")
+
+    /**
+     * 把国内可达的源提到前面（Gitee）。
+     *
+     * 元数据里 aarch64 包的直链顺序是 GitHub → Gitee。GitHub 直连在部分网络下
+     * 不是「拒绝」而是**静默超时**，要等满 [FrpcRuntimeDownloader] 的 15 秒连接超时
+     * 才轮到 Gitee —— 5.7MB 的包本来十几秒就能下完。
+     *
+     * 用稳定排序（`sortedBy` 保序），同档内维持元数据给的优先级；
+     * Gitee 万一也挂了，后面的 GitHub + 反代仍会照常回退。
+     */
+    fun preferDomesticFirst(urls: List<String>): List<String> =
+        urls.sortedBy { url ->
+            when {
+                DOMESTIC_HOSTS.any { url.contains(it) } -> 0
+                else -> 1
+            }
+        }
 }

@@ -54,6 +54,22 @@ internal data class EngineUrl(
     val url: String = ""
 )
 
+/**
+ * ecpkg 目录清单（`list.json`）里的一行。
+ *
+ * ```json
+ * [{ "type": "frpc", "nameKey": "Frp", "icon": "wifi",
+ *    "packages": ["https://…/metadata/frp/frpc0.69.1.json"] }]
+ * ```
+ *
+ * 顶层是数组，没有外壳 —— 与 [EngineManifest] 不是同一种响应，别混着解析。
+ */
+@Serializable
+internal data class CatalogEntry(
+    val type: String? = null,
+    val packages: List<String> = emptyList()
+)
+
 /** 元数据解析器。 */
 internal object EngineManifestParser {
 
@@ -88,4 +104,20 @@ internal object EngineManifestParser {
         if (pkg.sha256.isNullOrBlank()) return null
         return pkg
     }
+
+    /**
+     * 从目录清单里挑出 `type == "frpc"` 那一组下的所有元数据地址。
+     *
+     * 解析失败返回空列表而不是抛异常：目录只是「让写死的地址能自动跟进版本」的
+     * 便利通道，它挂了不该影响首选地址那条路。列表顺序即尝试顺序。
+     */
+    fun frpcMetadataUrls(catalogRaw: String): List<String> = runCatching {
+        json.decodeFromString<List<CatalogEntry>>(catalogRaw)
+            .filter { it.type == CATALOG_TYPE_FRPC }
+            .flatMap { it.packages }
+            .filter { it.isNotBlank() }
+    }.getOrDefault(emptyList())
+
+    /** 目录清单里 frpc 运行时的 `type` 值。 */
+    private const val CATALOG_TYPE_FRPC = "frpc"
 }

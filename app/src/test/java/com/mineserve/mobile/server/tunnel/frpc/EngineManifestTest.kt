@@ -146,4 +146,38 @@ class EngineManifestTest {
         // 空串不该显示成"版本 "，应回退。
         assertEquals("71", parse("""{"version":71,"versionName":""}""")!!.displayVersion)
     }
+
+    // ── 目录清单（list.json）──
+
+    @Test
+    fun `目录清单里取出 frpc 的元数据地址`() {
+        // 真实形状：顶层数组，每行一个 type，packages 是元数据地址列表。
+        val raw = """
+            [
+              { "type": "java", "nameKey": "Java", "packages": [
+                  "https://edgecubemc.com/app/ecpkg/metadata/java/jre17.json" ] },
+              { "type": "frpc", "nameKey": "Frp", "packages": [
+                  "https://edgecubemc.com/app/ecpkg/metadata/frp/frpc0.69.1.json" ] }
+            ]
+        """.trimIndent()
+
+        assertEquals(
+            listOf("https://edgecubemc.com/app/ecpkg/metadata/frp/frpc0.69.1.json"),
+            EngineManifestParser.frpcMetadataUrls(raw)
+        )
+    }
+
+    @Test
+    fun `目录清单里没有 frpc 时返回空`() {
+        val raw = """[{ "type": "java", "packages": ["https://x/jre17.json"] }]"""
+        assertTrue(EngineManifestParser.frpcMetadataUrls(raw).isEmpty())
+    }
+
+    @Test
+    fun `目录清单被回落成网页时返回空而不抛异常`() {
+        // SPA 兜底会让不存在的路径返回 index.html（200）。这里不能炸，
+        // 否则「首选地址失效」会被放大成「整个下载入口不可用」。
+        assertTrue(EngineManifestParser.frpcMetadataUrls("<!doctype html><html></html>").isEmpty())
+        assertTrue(EngineManifestParser.frpcMetadataUrls("").isEmpty())
+    }
 }

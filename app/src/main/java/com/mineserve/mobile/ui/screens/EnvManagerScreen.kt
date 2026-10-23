@@ -1,5 +1,7 @@
 package com.mineserve.mobile.ui.screens
 
+import android.content.Intent
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -7,6 +9,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +46,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -52,6 +56,7 @@ import com.mineserve.mobile.data.JavaRuntime
 import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.StepStatus
+import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.HintNote
 import com.mineserve.mobile.ui.JavaRuntimeGroupList
@@ -530,6 +535,26 @@ private fun FrpcEngineSection(vm: McViewModel) {
 
         Spacer(Modifier.height(6.dp))
         Text(stringResource(R.string.frpc_engine_where), color = Muted, fontSize = 10.sp)
+
+        // 在线下载失败时给一条能走通的落地路径：直接把人送到发行页，
+        // 下回来的 .ecpkg 用上面的「导入引擎」即可（install 认这个容器）。
+        val context = LocalContext.current
+        TextButton(
+            onClick = {
+                runCatching {
+                    context.startActivity(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(FrpcEngineConfig.RELEASE_PAGE))
+                    )
+                }
+            },
+            contentPadding = PaddingValues(0.dp)
+        ) {
+            Text(
+                stringResource(R.string.frpc_engine_open_release),
+                color = Indigo,
+                fontSize = 11.sp
+            )
+        }
 
         message?.let { text ->
             Spacer(Modifier.height(8.dp))

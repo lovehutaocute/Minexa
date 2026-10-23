@@ -1657,7 +1657,7 @@
     <string name="net_log_empty">暂无隧道日志，点「启动穿透」后这里会出现运行输出</string>
     <!-- STUN 直连 -->
     <string name="frpc_engine_title">frpc 引擎</string>
-    <string name="frpc_engine_hint">frp 系隧道（frp / SakuraFrp / ME Frp）共用一份内置引擎，运行时不依赖 Termux 或任何外部环境。首次使用需导入一次 libfrpc.so（arm64 版），导入后长期有效。</string>
+    <string name="frpc_engine_hint">frp 系隧道（frp / SakuraFrp / ME Frp）共用一份内置引擎，运行时不依赖 Termux 或任何外部环境。首次使用需下载或导入一次引擎（arm64 版），导入后长期有效。可导入 .ecpkg 包或裸 libfrpc.so。</string>
     <string name="frpc_engine_installed">已安装</string>
     <string name="frpc_engine_missing">未安装</string>
     <string name="frpc_engine_import">导入引擎</string>
@@ -1667,7 +1667,8 @@
     <string name="frpc_engine_replace">更换引擎</string>
     <string name="frpc_engine_uninstall">卸载</string>
     <string name="frpc_engine_uninstall_confirm">卸载后 frp 系隧道将无法启动，需要重新导入引擎。确定卸载？</string>
-    <string name="frpc_engine_where">引擎可从 frp 官方仓库获取：用 Go 编译 `cmd/frpclib` 为 c-shared 动态库（`-buildmode=c-shared`），产物即为 libfrpc.so。</string>
+    <string name="frpc_engine_where">引擎来源（arm64）：Gitee 发行页 gitee.com/venti1112/EdgeCubePackage-Frpc/releases 下载 frpc*-aarch64.ecpkg 后直接导入；也可自建 —— 用 Go 编译 frp 源码的 cmd/frpclib（-buildmode=c-shared），产物即 libfrpc.so。</string>
+    <string name="frpc_engine_open_release">打开发行页下载</string>
     <string name="net_tunnel_server_stopped">服务端未运行：请先在概览页启动服务端，再点「启动穿透」，否则玩家连上公网地址也进不去</string>
     <string name="net_public_url_unknown">无法显示公网地址，请前往 FRP 平台查看公网地址。</string>
 

@@ -58,4 +58,48 @@ class FrpcEngineConfigTest {
         val urls = FrpcEngineConfig.downloadUrls("https://github.com/u/r/x.so")
         assertEquals(urls.size, urls.distinct().size)
     }
+
+    // ── 元数据地址的健壮性 ──
+
+    @Test
+    fun `元数据地址带版本号且指向 frp 目录`() {
+        // edgecubemc.com 是 SPA：路径写错不会 404，而是回落成网页（200 + text/html），
+        // 于是只会在「元数据格式无法识别」这里露头。所以地址本身要钉住。
+        assertTrue(FrpcEngineConfig.METADATA_URL.contains("/ecpkg/metadata/frp/"))
+        assertTrue(FrpcEngineConfig.METADATA_URL.endsWith(".json"))
+    }
+
+    @Test
+    fun `目录清单地址可用作自动发现`() {
+        assertTrue(FrpcEngineConfig.catalogUrls().isNotEmpty())
+        assertEquals(FrpcEngineConfig.CATALOG_URL, FrpcEngineConfig.catalogUrls().first())
+        assertTrue(FrpcEngineConfig.CATALOG_URL.endsWith("/ecpkg/list.json"))
+    }
+
+    @Test
+    fun `Gitee 源被提到 GitHub 之前`() {
+        // 元数据里 GitHub 排第一，而 GitHub 直连在部分网络下是静默超时：
+        // 不调序就得白等满 15 秒才轮到本来能秒下的 Gitee。
+        val ordered = FrpcEngineConfig.preferDomesticFirst(
+            listOf(
+                "https://github.com/u/r/releases/download/v1/x.ecpkg",
+                "https://gitee.com/u/r/releases/download/v1/x.ecpkg",
+                "https://ghfast.top/https://github.com/u/r/x.ecpkg"
+            )
+        )
+        assertTrue(ordered.first().contains("gitee.com"))
+    }
+
+    @Test
+    fun `调序是稳定的且不丢地址`() {
+        val input = listOf(
+            "https://github.com/a/x.ecpkg",
+            "https://example.com/x.ecpkg"
+        )
+        val ordered = FrpcEngineConfig.preferDomesticFirst(input)
+        // 没有国内源时顺序原样保留，一个地址都不能丢。
+        assertEquals(input, ordered)
+        val withGitee = input + "https://gitee.com/b/y"
+        assertEquals(withGitee.size, FrpcEngineConfig.preferDomesticFirst(withGitee).size)
+    }
 }

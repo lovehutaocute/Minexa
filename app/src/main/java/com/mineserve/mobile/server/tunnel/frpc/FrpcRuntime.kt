@@ -37,6 +37,9 @@ class FrpcRuntime(private val appContext: Context) {
         /** 随 APK 打包、位于 nativeLibraryDir 的启动器。 */
         const val LOADER_NAME = "libfrpcloader.so"
 
+        /** 版本号旁挂文件名（纯展示/排障用，不参与加载）。 */
+        private const val VERSION_FILE = "version.txt"
+
         /**
          * 引擎体积下限（字节）。
          *
@@ -121,14 +124,47 @@ class FrpcRuntime(private val appContext: Context) {
      * 引擎自报版本；无法从文件名/内容判定时返回 null。
      *
      * 没有清单文件，就从原始文件名里认版本号（用户导入的通常是
-     * `libfrpc-0.71.0-arm64.so` 这类名字）。纯粹用于界面展示与排障 ——
-     * 排障时「设备上到底是哪个 frpc 在报错」往往是第一个要确定的事实。
+     * `libfrpc-0.71.0-arm64.so` 或 `frpc0.69.1-aarch64.ecpkg` 这类名字）。
+     * 装好后写进 `version.txt` 旁挂文件 —— 否则进程一重启这个字段就空了，
+     * 而排障时「设备上到底是哪个 frpc 在报错」往往是第一个要确定的事实。
      */
-    var installedVersion: String? = null
-        private set
+    val installedVersion: String?
+        get() {
+            if (!versionLoaded) {
+                versionCache = readStoredVersion()
+                versionLoaded = true
+            }
+            return versionCache
+        }
+
+    @Volatile
+    private var versionCache: String? = null
+
+    @Volatile
+    private var versionLoaded = false
+
+    private val versionFile: File
+        get() = File(engineDir, VERSION_FILE)
+
+    private fun readStoredVersion(): String? {
+        if (!engineFile.isFile) return null
+        return runCatching { versionFile.readText().trim() }.getOrNull()?.takeIf { it.isNotBlank() }
+    }
+
+    private fun storeVersion(version: String?) {
+        versionCache = version
+        versionLoaded = true
+        runCatching {
+            if (version.isNullOrBlank()) versionFile.delete() else versionFile.writeText(version)
+        }
+    }
 
     /**
      * 从 [source] 导入引擎。
+     *
+     * 接受两种输入：裸的 `libfrpc.so`，或 `.ecpkg` 包（ZIP 容器，内含
+     * `<架构目录>/lib/libfrpc.so`）。后者是官方分发物的原生形态 —— 用户从网盘
+     * 或 Release 页拿到的就是这个，若只认裸库，「手动下载后导入」这条路等于不通。
      *
      * 先写临时文件、校验通过后再原子改名覆盖正式文件：直接往 [engineFile] 写的话，
      * 中途失败（用户取消、存储写满、文件不是合法引擎）会把**原本可用的引擎**毁掉，
@@ -139,20 +175,32 @@ class FrpcRuntime(private val appContext: Context) {
      */
     fun install(source: InputStream, suggestedName: String?) {
         val tmp = File(engineDir, "$ENGINE_NAME.tmp")
+        val raw = File(engineDir, "$ENGINE_NAME.raw.tmp")
         try {
             tmp.outputStream().use { out -> source.copyTo(out) }
-            validate(tmp, suggestedName)
+
+            // .ecpkg 先解包；解出来的库落在 raw，之后与裸库走同一条校验/安装路径。
+            val payload = if (FrpcEcpkg.looksLikeEcpkg(tmp)) {
+                FrpcEcpkg.extractLib(tmp, raw)
+                raw
+            } else {
+                tmp
+            }
+
+            validate(payload)
+
             if (engineFile.exists() && !engineFile.delete()) {
                 throw IllegalStateException("无法覆盖已安装的引擎，请先卸载后重试")
             }
-            if (!tmp.renameTo(engineFile)) {
+            if (!payload.renameTo(engineFile)) {
                 // renameTo 在部分文件系统上会失败，退回「复制 + 删临时文件」。
-                tmp.copyTo(engineFile, overwrite = true)
-                tmp.delete()
+                payload.copyTo(engineFile, overwrite = true)
+                payload.delete()
             }
-            installedVersion = suggestedName?.let { VERSION_REGEX.find(it)?.groupValues?.get(1) }
+            storeVersion(parseVersion(suggestedName))
         } finally {
             if (tmp.exists()) tmp.delete()
+            if (raw.exists()) raw.delete()
         }
         // 引擎必须可执行位；实际执行由 loader 的 dlopen 完成，但保持一致更省事，
         // 也便于未来改用别的加载路径。
@@ -161,7 +209,7 @@ class FrpcRuntime(private val appContext: Context) {
 
     /** 卸载引擎。 */
     fun uninstall(): Boolean {
-        installedVersion = null
+        storeVersion(null)
         return !engineFile.exists() || engineFile.delete()
     }
 
@@ -184,9 +232,9 @@ class FrpcRuntime(private val appContext: Context) {
      * 校验并安装前的最后一关：读文件头，交给 [validateElfHeader] 判定。
      *
      * 规则本身与用户可见的错误文案都在静态方法里（见那边的注释），这里只负责
-     * 读盘与把结果转成异常。
+     * 读盘与把结果转成异常。版本号不在这里处理 —— 它与内容无关，见 [storeVersion]。
      */
-    private fun validate(file: File, name: String?) {
+    private fun validate(file: File) {
         val length = file.length()
 
         val header = ByteArray(20)
@@ -194,8 +242,5 @@ class FrpcRuntime(private val appContext: Context) {
         val effectiveHeader = if (read > 0) header.copyOf(read) else ByteArray(0)
 
         validateElfHeader(effectiveHeader, length)?.let { throw IllegalArgumentException(it) }
-
-        // 版本号仅用于展示与排障，认不出来不阻断安装。
-        installedVersion = parseVersion(name)
     }
 }
