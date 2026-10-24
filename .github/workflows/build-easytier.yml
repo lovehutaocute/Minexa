@@ -50,20 +50,24 @@ jobs:
           fi
           cargo ndk --version
 
-      - name: Locate NDK
+      - name: Install NDK 26
         run: |
           set -euo pipefail
-          # GitHub 的 android runner 预装 NDK，变量名随镜像版本变化，逐个兜底
-          NDK_DIR="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
-          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
-            NDK_DIR=$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/ndk/* 2>/dev/null | sort -V | tail -n1)
-          fi
-          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
-            echo "未找到 Android NDK（ANDROID_NDK_LATEST_HOME/HOME/ROOT 与 sdk/ndk 均无）" >&2
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDKMGR=$(ls "$SDK_ROOT"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1)
+          if [ -z "$SDKMGR" ]; then
+            echo "未找到 sdkmanager（$SDK_ROOT/cmdline-tools/*/bin）" >&2
             exit 1
           fi
-          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
-          echo "使用 NDK: $NDK_DIR"
+          yes | "$SDKMGR" --licenses >/dev/null 2>&1 || true
+          # 刻意锁 NDK 26（与上游 mobile.yml 一致），不用 runner 预装的最新 NDK：
+          # NDK 30 的 sys/cdefs.h 会拒绝不带 API level 的 target triple，
+          # 而 kcp-sys 的 bindgen 正好那样传 —— 直接
+          # "Unversioned target triples are not supported!"（第三次跑踩到）。
+          "$SDKMGR" --install "ndk;26.0.10792818" >/dev/null
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/26.0.10792818" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$SDK_ROOT/ndk/26.0.10792818" >> "$GITHUB_ENV"
+          echo "使用 NDK: $SDK_ROOT/ndk/26.0.10792818"
 
       - name: Fetch EasyTier source
         run: |
