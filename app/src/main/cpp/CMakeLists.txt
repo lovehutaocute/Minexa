@@ -4,6 +4,9 @@ project("mineserve_frp" C)
 
 set(CMAKE_C_STANDARD 11)
 
+# 16KB 页设备的 ELF 对齐要求（Android 15+）。加在全局：所有产物统一吃这条。
+add_link_options(-Wl,-z,max-page-size=16384)
+
 # ─── libfrpcloader.so ─── frpc 启动器（dlopen 数据目录里的 libfrpc.so）
 #
 # 关键技巧：产物是**可执行文件**，但命名为 `libfrpcloader.so`。
@@ -23,8 +26,10 @@ set_target_properties(frpcloader PROPERTIES
         OUTPUT_NAME "frpcloader")
 
 # 显式声明 PIE：需要生成可被内核 exec 的 PT_INTERP 入口。
+# max-page-size=16384：16KB 页设备的 ELF 对齐要求（Android 15+），不加会在
+# 系统的「应用兼容性」清单里挂上"LOAD 区段未对齐"。
 target_compile_options(frpcloader PRIVATE -fPIE)
-target_link_options(frpcloader PRIVATE -fPIE -pie)
+target_link_options(frpcloader PRIVATE -fPIE -pie -Wl,-z,max-page-size=16384)
 
 # dl：dlopen/dlsym/dlerror；log：__android_log_print（便于用 logcat 排查启动失败）。
 target_link_libraries(frpcloader dl log)

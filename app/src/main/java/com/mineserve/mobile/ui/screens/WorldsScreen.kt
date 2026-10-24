@@ -51,10 +51,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mineserve.mobile.R
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.McCard
@@ -104,8 +106,8 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
         ActivityResultContracts.OpenDocument()
     ) { uri: Uri? ->
         if (uri != null) {
-            val fallback = "导入世界_" + System.currentTimeMillis().toString().takeLast(5)
-            val preferred = queryDisplayName(context, uri)?.let { stripZipExt(it) } ?: fallback
+            val fallback = context.getString(R.string.wl_import_default_name) + "_" + System.currentTimeMillis().toString().takeLast(5)
+            val preferred = queryDisplayName(context, uri)?.let { stripZipExt(context, it) } ?: fallback
             vm.importWorldFromUri(uri, preferred)
         }
     }
@@ -121,10 +123,10 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                 .padding(paddingValues)
                 .background(MaterialTheme.colorScheme.background)
         ) {
-            BackBar("世界管理", onBack)
+            BackBar(stringResource(R.string.wl_title), onBack)
             if (!isBootstrapped) {
                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("请先在「下载」页完成服务端部署", color = Muted, fontSize = 13.sp)
+                    Text(stringResource(R.string.wl_not_deployed), color = Muted, fontSize = 13.sp)
                 }
             } else {
                 Column(
@@ -133,7 +135,7 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                         .verticalScroll(rememberScrollState())
                         .padding(bottom = 18.dp)
                 ) {
-                    McCard(title = "当前世界") {
+                    McCard(title = stringResource(R.string.wl_card_active)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Outlined.CheckCircle, null, tint = Indigo, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(6.dp))
@@ -146,14 +148,14 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                         }
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "服务端启动时读取的世界。切换后需要重启服务端才会生效。",
+                            stringResource(R.string.wl_active_desc),
                             color = Muted,
                             fontSize = 11.sp
                         )
                     }
 
                     McCard(
-                        title = "世界列表",
+                        title = stringResource(R.string.wl_card_list),
                         trailing = {
                             if (loading) {
                                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -162,7 +164,7 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                     ) {
                         if (worlds.isEmpty()) {
                             Text(
-                                if (loading) "正在统计世界占用…" else "还没有生成任何世界。启动一次服务端后会在这里出现。",
+                                if (loading) stringResource(R.string.wl_loading_usage) else stringResource(R.string.wl_empty),
                                 color = Muted,
                                 fontSize = 12.sp
                             )
@@ -174,7 +176,7 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                                     onActivate = { vm.setActiveWorld(world.name) },
                                     onExport = {
                                         pendingExport = world.name
-                                        exportLauncher.launch("世界_${world.name}.zip")
+                                        exportLauncher.launch("${context.getString(R.string.wl_export_prefix)}_${world.name}.zip")
                                     },
                                     onReset = { pendingReset = world }
                                 )
@@ -182,9 +184,9 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                         }
                     }
 
-                    McCard(title = "导入 / 维护") {
+                    McCard(title = stringResource(R.string.wl_card_maintain)) {
                         Text(
-                            "导入支持本应用导出的存档，也支持原版 world 文件夹直接打包的 zip。",
+                            stringResource(R.string.wl_import_desc),
                             color = Muted,
                             fontSize = 11.sp
                         )
@@ -200,25 +202,25 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                             ) {
                                 Icon(Icons.Outlined.FileUpload, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("导入世界", fontSize = 13.sp)
+                                Text(stringResource(R.string.wl_import), fontSize = 13.sp)
                             }
                             OutlinedButton(onClick = { vm.clearWorldSeed() }, shape = McShape.ControlCompact) {
                                 Icon(Icons.Outlined.RestartAlt, null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("清空种子", fontSize = 13.sp)
+                                Text(stringResource(R.string.wl_clear_seed), fontSize = 13.sp)
                             }
                         }
                         Spacer(Modifier.height(6.dp))
                         Text(
-                            "清空种子后，服务端下次生成新地图时使用随机种子（已存在的世界不受影响）。",
+                            stringResource(R.string.wl_clear_seed_desc),
                             color = Muted,
                             fontSize = 11.sp
                         )
                     }
 
-                    McCard(title = "导出说明") {
+                    McCard(title = stringResource(R.string.wl_card_export_note)) {
                         Text(
-                            "导出时会把世界连同它的下界、末地维度一起打包。除了另存到自选位置，导出的备份也会留在手机公共目录「备份/世界导出」下，卸载应用不会丢失。",
+                            stringResource(R.string.wl_export_note),
                             color = Muted,
                             fontSize = 11.sp
                         )
@@ -232,10 +234,10 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
     pendingReset?.let { world ->
         AlertDialog(
             onDismissRequest = { pendingReset = null },
-            title = { Text("重置世界「${world.name}」？") },
+            title = { Text(stringResource(R.string.wl_reset_title, world.name)) },
             text = {
                 Text(
-                    "会先把这个世界完整导出为一份备份，然后删除目录，服务端下次启动会重新生成一张新地图。\n\n此操作不可撤销，请确认。",
+                    stringResource(R.string.wl_reset_body),
                     fontSize = 13.sp
                 )
             },
@@ -243,10 +245,10 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                 TextButton(onClick = {
                     vm.resetWorld(world.name)
                     pendingReset = null
-                }) { Text("备份并重置", color = Coral, fontWeight = FontWeight.SemiBold) }
+                }) { Text(stringResource(R.string.wl_reset_confirm), color = Coral, fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
-                TextButton(onClick = { pendingReset = null }) { Text("取消") }
+                TextButton(onClick = { pendingReset = null }) { Text(stringResource(R.string.s402)) }
             }
         )
     }
@@ -262,8 +264,8 @@ private fun WorldRow(
 ) {
     val kindLabel = when (world.kind) {
         Worlds.Kind.Java -> "Java"
-        Worlds.Kind.Bedrock -> "基岩"
-        Worlds.Kind.Unknown -> "未知"
+        Worlds.Kind.Bedrock -> stringResource(R.string.wl_kind_bedrock)
+        Worlds.Kind.Unknown -> stringResource(R.string.wl_kind_unknown)
     }
     Column(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -288,7 +290,7 @@ private fun WorldRow(
                         append(" · ")
                         append(world.sizeText)
                         if (world.sizeTruncated) append("+")
-                        if (world.isActive) append(" · 当前使用中")
+                        if (world.isActive) append(stringResource(R.string.wl_in_use_suffix))
                     },
                     fontSize = 11.sp,
                     color = Muted
@@ -301,18 +303,18 @@ private fun WorldRow(
                         .background(MaterialTheme.colorScheme.primaryContainer)
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
-                    Text("使用中", fontSize = 10.sp, color = Indigo, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.wl_in_use), fontSize = 10.sp, color = Indigo, fontWeight = FontWeight.SemiBold)
                 }
             } else {
                 TextButton(onClick = onActivate) {
-                    Text("设为当前", fontSize = 12.sp, color = Indigo, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.wl_set_active), fontSize = 12.sp, color = Indigo, fontWeight = FontWeight.SemiBold)
                 }
             }
         }
         Spacer(Modifier.height(2.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            SmallAction(icon = Icons.Outlined.FileDownload, label = "导出", onClick = onExport)
-            SmallAction(icon = Icons.Outlined.DeleteOutline, label = "重置", tint = Coral, onClick = onReset)
+            SmallAction(icon = Icons.Outlined.FileDownload, label = stringResource(R.string.wl_export), onClick = onExport)
+            SmallAction(icon = Icons.Outlined.DeleteOutline, label = stringResource(R.string.wl_reset), tint = Coral, onClick = onReset)
         }
     }
 }
@@ -343,5 +345,6 @@ private fun queryDisplayName(context: Context, uri: Uri): String? = try {
     null
 }
 
-private fun stripZipExt(name: String): String =
-    name.removeSuffix(".zip").removeSuffix(".ZIP").ifBlank { "导入世界" }
+private fun stripZipExt(context: Context, name: String): String =
+    name.removeSuffix(".zip").removeSuffix(".ZIP")
+        .ifBlank { context.getString(R.string.wl_import_default_name) }

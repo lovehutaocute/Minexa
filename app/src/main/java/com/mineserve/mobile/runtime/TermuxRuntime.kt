@@ -616,6 +616,7 @@ class TermuxRuntime(context: Context) {
      */
     private fun containerJavaUninstallCommand(profile: ProotContainerProfile): String {
         val pkg = profile.aptPackage
+        val packages = profile.relatedAptPackages.joinToString(" ")
         // 校验用的候选路径必须非空。空列表会展开成 `if ; then`（空命令恒真），
         // 于是「卸载后仍检测到 java」的判定会永远成立、每次卸载都报失败。
         // 候选来自 ProotContainerProfile 的常量列表，正常不会为空；这里拦一道，
@@ -631,12 +632,13 @@ class TermuxRuntime(context: Context) {
           echo "[proot] dpkg 恢复失败，未继续卸载；请稍后重试"
           exit 1
         fi
-        echo "[proot] 正在卸载 $pkg"
-        # 只 purge 目标包，刻意不做 autoremove：多版本共存时它可能拔掉
-        # 其他 JDK 仍需要的公共依赖，问题要到下次启动才暴露。
-        apt-get -o DPkg::Lock::Timeout=60 purge -y $pkg || exit 1
-        # 目录残留（配置文件、apt 未跟踪的文件）一并清掉，否则
-        # 就绪判定可能因为 java 还在而继续报「已安装」。
+        echo "[proot] 正在卸载 $packages"
+        # 必须连 headless / jre-headless 一起 purge：只清 meta 包时它们仍是
+        # installed，且与 JDK 共享同一个 /usr/lib/jvm 目录 —— 接着 rm 这个目录
+        # 就会留下「dpkg 说装了、磁盘上没文件」的残状态，之后再装永远报「已是最新」。
+        # 刻意不做 autoremove：多版本共存时它可能拔掉其他 JDK 仍需要的公共依赖。
+        apt-get -o DPkg::Lock::Timeout=60 purge -y $packages || exit 1
+        # purge 之后才清目录：apt 不跟踪的残留（手动塞进去的东西）顺手带走。
         rm -rf '${profile.javaHomeInGuest}'
         # 校验：所有已知 layout 下都不能再有可执行的 java，否则这次卸载算失败
         # （Java 8 的包把 JRE 放在 jre/bin/java，只查新 layout 会漏判）
@@ -1270,14 +1272,28 @@ class TermuxRuntime(context: Context) {
                 throw IllegalStateException("${profile.distro.displayName} 容器无法启动，请先修复运行环境")
             }
             onProgress?.invoke(60)
-            emitLog("[proot] 正在容器内安装 ${profile.aptPackage}，首次安装可能需要数分钟")
-            val code = runUbuntu(
-                containerJavaInstallCommand(profile),
+            // 空间预检：openjdk-21-jdk 解包后约 500MB，加 apt 缓存与依赖要 ~1.5GB。
+            // 空间不够时 apt 会在解包中途失败，而 proot 往往先被拖崩，日志里只剩
+            // 一句「signal 11」—— 让用户误以为是不兼容，实际是存储满了。
+            val freeMb = installer.rootDir.usableSpace / (1024 * 1024)
+            if (freeMb < CONTAINER_INSTALL_MIN_FREE_MB) {
+                throw IllegalStateException(
+                    "容器所在分区只剩 ${freeMb}MB，安装 ${profile.aptPackage} 需要约 " +
+                        "${CONTAINER_INSTALL_MIN_FREE_MB}MB，请清理存储后重试"
+                )
+            }
+            emitLog("[proot] 正在容器内安装 ${profile.aptPackage}，首次安装可能需要数分钟（可用空间 ${freeMb}MB）")
+            val code = runUbuntuResilient(
+                label = profile.displayName,
+                command = containerJavaInstallCommand(profile),
                 timeoutMs = 900_000,
                 profile = profile
             )
             if (code != 0) {
-                throw IllegalStateException("${profile.displayName} 校验失败（exit=$code）")
+                emitLog("[proot] 设备环境：内存页 ${pageSize()}（16KB 页设备上旧版 proot 兼容性更差）")
+                throw IllegalStateException(
+                    prootInstallFailureMessage(profile.displayName, code, executor.lastTail)
+                )
             }
             marker.parentFile?.mkdirs()
             marker.writeText("${profile.distro.codename}-arm64-${profile.aptPackage}\n")
@@ -1328,11 +1344,21 @@ class TermuxRuntime(context: Context) {
             "test -x $it"
         }
         val javaVersionCheck = profile.guestJavaBinaryCandidates.first()
+        // 一起装/一起清的包：meta 包只依赖 headless，真正装文件的是 headless。
+        val packages = profile.relatedAptPackages.joinToString(" ")
         return """
+        echo "[proot] 容器可用空间: ${'$'}(df -h / 2>/dev/null | tail -1)"
         echo "[proot] 正在恢复容器内未完成的软件包事务..."
-        if ! dpkg --configure -a || ! apt-get -o DPkg::Lock::Timeout=60 -f install -y; then
-          echo "[proot] dpkg 恢复失败，未继续切换软件源；请稍后重试运行环境修复"
-          exit 1
+        # 上一次安装被强杀（proot 崩溃 / 用户退出）会留下 dpkg 锁与半完成事务，
+        # 不清掉就会一直卡在「另一个进程持有锁」，而日志里只会看到一条 apt 报错。
+        rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null
+        if ! dpkg --configure -a; then
+          echo "[proot] dpkg --configure -a 失败：容器内的软件包事务没能恢复"
+          exit 11
+        fi
+        if ! apt-get -o DPkg::Lock::Timeout=60 -f install -y; then
+          echo "[proot] apt-get -f install 失败，未继续切换软件源；请稍后重试运行环境修复"
+          exit 12
         fi
         $installFn() {
           mirror="${'$'}1"
@@ -1343,17 +1369,47 @@ class TermuxRuntime(context: Context) {
             "deb ${'$'}mirror $codename-security main restricted universe multiverse" \
             > /etc/apt/sources.list
           rm -rf /var/lib/apt/lists/*
-          if apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 && \
-            apt-get install -y --no-install-recommends $pkg ca-certificates fontconfig fonts-dejavu-core; then
-            ($javaCheck) && \
-              $javaVersionCheck -version 2>&1 | grep -q '$versionPattern'
-            return ${'$'}?
+          if ! apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30; then
+            echo "[proot] apt-get update 失败（源 ${'$'}mirror）"
+            return 1
           fi
-          return 1
+          # 关键分支：dpkg 说「已安装」但 java 不存在 ⇒ 文件层面残缺。
+          # 这种状态 apt 只会跑 postinst，**永远不会**把文件补回来，
+          # 于是每次重装都得到「0 newly installed / 0 upgraded」，然后校验失败。
+          if ! ($javaCheck) && dpkg -s $pkg >/dev/null 2>&1; then
+            echo "[proot] $pkg 记录为已安装但 java 文件缺失，强制重新解包"
+            if ! apt-get install -y --no-install-recommends --reinstall $packages \
+                ca-certificates fontconfig fonts-dejavu-core; then
+              echo "[proot] 强制重装失败，改为清除后重装"
+              apt-get -o DPkg::Lock::Timeout=60 purge -y $packages >/dev/null 2>&1 || true
+              if ! apt-get install -y --no-install-recommends $packages \
+                  ca-certificates fontconfig fonts-dejavu-core; then
+                echo "[proot] 清除后重装仍失败（源 ${'$'}mirror）"
+                return 1
+              fi
+            fi
+          elif ! apt-get install -y --no-install-recommends $packages \
+              ca-certificates fontconfig fonts-dejavu-core; then
+            echo "[proot] apt-get install 失败（源 ${'$'}mirror）"
+            return 1
+          fi
+          if ! ($javaCheck); then
+            echo "[proot] 安装结束但找不到 java 可执行文件（$javaVersionCheck），容器内的包状态已损坏"
+            return 1
+          fi
+          if ! $javaVersionCheck -version 2>&1 | grep -q '$versionPattern'; then
+            echo "[proot] java -version 与期望版本不符："
+            $javaVersionCheck -version 2>&1 | head -2
+            return 1
+          fi
+          return 0
         }
         # 容器 rootfs 里可能还没有 CA 证书，因此这一轮引导只用国内 HTTP 源，
         # 把 ca-certificates 与 JDK 一起装上，后续才能走 HTTPS。
-        $mirrorCalls
+        $mirrorCalls || {
+          echo "[proot] 全部软件源均安装失败，容器内可用的 Java 版本未发生变化"
+          exit 13
+        }
         """.trimIndent()
     }
 
@@ -1581,29 +1637,69 @@ class TermuxRuntime(context: Context) {
         }
     }
 
-    private fun prootEnvironment(): Map<String, String> {
+    private fun prootEnvironment(tuning: ProotLaunchTuning = ProotLaunchTuning()): Map<String, String> {
         val prefix = installer.rootDir.absolutePath
         val tmp = File(installer.rootDir, "tmp").apply { mkdirs() }.absolutePath
-        return mapOf(
-            "PROOT_TMP_DIR" to tmp,
-            "TMPDIR" to tmp,
-            "TERMUX_PREFIX" to prefix,
-            "TERMUX_HOME" to "$prefix/home",
-            "TERMUX__PREFIX" to prefix,
-            "TERMUX__HOME" to "$prefix/home",
-            "TERMUX_APP_PACKAGE" to "com.mineserve.mobile",
-            "TERMUX_APP__PACKAGE_NAME" to "com.mineserve.mobile",
-            "PROOT_LOADER" to "$prefix/libexec/proot/loader",
-            "PROOT_LOADER_32" to "$prefix/libexec/proot/loader32",
-            "TERMUX_VERSION" to "mineServe"
-        )
+        return buildMap {
+            put("PROOT_TMP_DIR", tmp)
+            put("TMPDIR", tmp)
+            put("TERMUX_PREFIX", prefix)
+            put("TERMUX_HOME", "$prefix/home")
+            put("TERMUX__PREFIX", prefix)
+            put("TERMUX__HOME", "$prefix/home")
+            put("TERMUX_APP_PACKAGE", "com.mineserve.mobile")
+            put("TERMUX_APP__PACKAGE_NAME", "com.mineserve.mobile")
+            put("PROOT_LOADER", "$prefix/libexec/proot/loader")
+            put("PROOT_LOADER_32", "$prefix/libexec/proot/loader32")
+            put("TERMUX_VERSION", "mineServe")
+            // 关掉 proot 自带的 seccomp 加速器：部分厂商内核的 seccomp 过滤规则与
+            // proot 的加速路径不兼容，proot 会在处理某个 syscall 时自己 SIGSEGV
+            // （日志 `proot warning: signal 11 received from process -1`）。
+            // 退化成纯 ptrace 模式后 syscall 逐个代理，慢一些但不会崩。
+            if (tuning.noSeccomp) put("PROOT_NO_SECCOMP", "1")
+        }
+    }
+
+    /**
+     * proot 启动参数的可降级档位。
+     *
+     * 为什么需要一组档位而不是一个开关：`proot warning: signal 11` 是**设备相关**的
+     * 段错误 —— 同一条命令在维护者机器上跑得好好的，换台厂商内核更激进（seccomp
+     * 过滤更严、SYSV IPC 被裁掉）的设备就崩。能导致它的机制不止一种，所以按
+     * 「先关加速、再关 SYSV IPC、最后放弃强杀 tracee」逐级退让，把兼容性换回来。
+     */
+    internal data class ProotLaunchTuning(
+        val noSeccomp: Boolean = false,
+        val sysvipc: Boolean = true,
+        val killOnExit: Boolean = true,
+        val label: String = "默认参数"
+    ) {
+        companion object {
+            /** 依次尝试的档位：越往后越保守（更慢），但能过更多设备。 */
+            val fallbacks: List<ProotLaunchTuning> = listOf(
+                ProotLaunchTuning(),
+                ProotLaunchTuning(noSeccomp = true, label = "关闭 seccomp 加速"),
+                ProotLaunchTuning(
+                    noSeccomp = true,
+                    sysvipc = false,
+                    label = "关闭 seccomp 加速 + 不映射 SYSV IPC"
+                ),
+                ProotLaunchTuning(
+                    noSeccomp = true,
+                    sysvipc = false,
+                    killOnExit = false,
+                    label = "关闭 seccomp 加速 + 不映射 SYSV IPC + 不强杀子进程"
+                )
+            )
+        }
     }
 
     private fun runUbuntu(
         command: String,
         timeoutMs: Long = 120_000,
         extraBinds: List<String> = emptyList(),
-        profile: ProotContainerProfile = legacyJava8Profile
+        profile: ProotContainerProfile = legacyJava8Profile,
+        tuning: ProotLaunchTuning = ProotLaunchTuning()
     ): Int =
         if (!repairUbuntuRootfs(profile)) {
             emitLog("[proot] ${profile.distro.displayName} rootfs 缺少可执行 shell，无法启动")
@@ -1616,11 +1712,11 @@ class TermuxRuntime(context: Context) {
                 profile.hostResolvConf(installer.rootDir),
                 "${profile.distro.dirName}-resolv.conf"
             )
-            val args = mutableListOf(
-                "proot",
-                "--kill-on-exit",
-                "--link2symlink",
-                "--sysvipc",
+            val args = mutableListOf("proot")
+            if (tuning.killOnExit) args += "--kill-on-exit"
+            args += "--link2symlink"
+            if (tuning.sysvipc) args += "--sysvipc"
+            args += listOf(
                 "-L",
                 "--change-id=0:0",
                 "--rootfs=${rootfs.absolutePath}",
@@ -1645,8 +1741,41 @@ class TermuxRuntime(context: Context) {
                 "-c",
                 command
             )
-            execOnceWithTimeout(timeoutMs, *args.toTypedArray(), env = prootEnvironment())
+            executor.execOnceWithTimeoutCapture(
+                timeoutMs, *args.toTypedArray(), env = prootEnvironment(tuning)
+            ).code
         }
+
+    /**
+     * 带降级的 [runUbuntu]：只在**判定为 proot 自己崩溃**时换参数重试。
+     *
+     * 为什么不做「任何失败都重试」：apt 源 404、磁盘写满、校验不通过这类失败换
+     * 参数也救不了，盲目重跑只会把 900 秒的超时乘以档位数，用户看到的是长时间
+     * 无进展。只有崩溃（信号类退出码 / `signal 11` 字样）才值得换一档。
+     */
+    private fun runUbuntuResilient(
+        label: String,
+        command: String,
+        timeoutMs: Long,
+        profile: ProotContainerProfile,
+        extraBinds: List<String> = emptyList()
+    ): Int {
+        var last = -1
+        for ((index, tuning) in ProotLaunchTuning.fallbacks.withIndex()) {
+            if (index > 0) {
+                emitLog(
+                    "[proot] proot 在容器里崩溃（signal 11），改用「${tuning.label}」重试" +
+                        "（${index}/${ProotLaunchTuning.fallbacks.size - 1}）"
+                )
+            }
+            last = runUbuntu(command, timeoutMs, extraBinds, profile, tuning)
+            if (last == 0) return 0
+            if (!isProotCrashSignal(last, executor.lastTail)) return last
+        }
+        emitLog("[proot] $label 在全部兼容档位下均崩溃，最近一次 exit=$last")
+        return last
+    }
+
 
     /** Give the isolated rootfs Android's active DNS servers. */
     private fun prepareUbuntuDns(
@@ -4856,4 +4985,82 @@ internal fun launchCommandProblems(
         }
     }
     return problems
+}
+
+/**
+ * 判断一次容器命令的失败是否由 **proot 自己崩溃** 引起。
+ *
+ * 判据两条，任一条成立即认为可换参数重试：
+ *  - 退出码是「被信号终止」（128+sig）：`proot warning: signal 11 received from
+ *    process -1` 之后 proot 自己 SEGV，Java 侧看到的就是 139；OOM 被杀是 137。
+ *  - 输出里出现 proot 的崩溃告警——脚本里的 `exit 11/12/13` 会把信号退出码盖掉，
+ *    所以不能只信退出码。
+ *
+ * 超时（124）**不算**：换参数只会更慢。
+ */
+internal fun isProotCrashSignal(exitCode: Int, output: String?): Boolean {
+    if (exitCode == 124) return false
+    if (exitCode in PROOT_SIGNAL_EXIT_CODES) return true
+    val text = output ?: return false
+    return PROOT_CRASH_MARKERS.any { text.contains(it) }
+}
+
+/**
+ * 被信号终止的退出码，只收「proot 自己崩」这一类：SEGV(11) / BUS(7) / ABRT(6) /
+ * ILL(4) / TRAP(5)。
+ *
+ * **137（SIGKILL）刻意不收**：它几乎总是系统 OOM 或用户强杀，换 proot 参数救不了，
+ * 应当提示清理内存/存储，而不是骗用户再等一轮 15 分钟的重试。
+ */
+private val PROOT_SIGNAL_EXIT_CODES = setOf(139, 135, 134, 133, 132)
+
+/** proot 崩溃时打在 stderr 上的特征串（会随 redirectErrorStream 合并进输出）。 */
+private val PROOT_CRASH_MARKERS = listOf(
+    "signal 11 received from process",
+    "signal 7 received from process",
+    "signal 6 received from process",
+    "Segmentation fault"
+)
+
+/** 容器内装 JDK 需要的最小可用空间（MB）：openjdk-21-jdk 解包 ~500MB + apt 缓存 + 依赖。 */
+internal const val CONTAINER_INSTALL_MIN_FREE_MB = 1536
+
+/**
+ * 把容器安装的退出码翻成用户能照做的提示。
+ *
+ * 为什么不能只显示 `exit=1`：apt 与 proot 的退出码语义完全不同 —— 脚本自己
+ * `exit 11/12/13` 表示走到了第几步失败，139/137 是 proot 被信号杀掉。混成一句
+ * 「校验失败」时，用户只能反复重试同一个注定失败的动作；分开讲清才能让他
+ * 选对下一步（清存储 / 换 Pojav JRE / 修复容器 / 等网络）。
+ */
+internal fun prootInstallFailureMessage(displayName: String, exitCode: Int, tail: String?): String {
+    if (isProotCrashSignal(exitCode, tail)) {
+        return "$displayName 安装失败：proot 在容器里崩溃（signal 11，exit=$exitCode），" +
+            "已自动尝试全部兼容模式仍失败。可改用 Pojav JRE 的同一版本，或更换发行版后重试"
+    }
+    // 退出码 13 涵盖的原因太多（索引下载失败 / 解包失败 / 装完仍缺文件），
+    // 先让脚本自己报的那一句说话，实在认不出来才退回按码解释。
+    val text = tail.orEmpty()
+    val detail = when {
+        text.contains("容器内的包状态已损坏") || text.contains("记录为已安装但 java 文件缺失") ->
+            "$displayName 安装失败：容器里这个 JDK 的记录是「已安装」但文件缺失，" +
+                "apt 反复重装都补不回来。请删除该容器后重新安装（服务器数据不受影响）"
+        text.contains("apt-get update 失败") ->
+            "$displayName 安装失败：软件源索引下载失败，请检查网络或稍后重试"
+        text.contains("与期望版本不符") ->
+            "$displayName 安装失败：装上的 java 版本与所选不符，请换一个 Java 版本或修复容器"
+        else -> null
+    }
+    if (detail != null) return detail
+
+    return when (exitCode) {
+        11 -> "$displayName 安装失败：容器内的软件包事务停在半完成状态，无法自动恢复（exit=11）。" +
+            "请到运行环境里执行一次修复/重置后重试"
+        12 -> "$displayName 安装失败：容器内的依赖关系已损坏（exit=12），需要修复运行环境"
+        13 -> "$displayName 安装失败：全部软件源均未能完成安装（exit=13），请检查网络后重试"
+        124 -> "$displayName 安装失败：安装超时（超过 15 分钟），网络较慢时可稍后重试"
+        137 -> "$displayName 安装失败：安装过程被系统终止（exit=137），多是内存/存储不足，清理后重试"
+        126 -> "$displayName 无法启动：容器 rootfs 缺少可执行 shell，请修复运行环境"
+        else -> "$displayName 校验失败（exit=$exitCode）"
+    }
 }

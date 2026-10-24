@@ -286,7 +286,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                 compact = true,
                 trailing = {
                     Text(
-                        "支持导入服务器",
+                        stringResource(R.string.dlx_supports_import),
                         color = Muted,
                         fontSize = 9.sp,
                         modifier = Modifier
@@ -351,7 +351,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                     onClick = { showImportDialog = true },
                     modifier = Modifier.fillMaxWidth(),
                     shape = McShape.ControlCompact
-                ) { Text("导入服务器", color = Indigo, fontSize = 12.sp) }
+                ) { Text(stringResource(R.string.dlx_import_server), color = Indigo, fontSize = 12.sp) }
             }
 
             McCard(title = if (usesCoreVersion) stringResource(R.string.dl_select_version) else stringResource(R.string.s471), compact = true) {
@@ -391,11 +391,11 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                     }
                     if (availableVersions.size > shownVersions.size) {
                         TextButton(onClick = { showAllVersions = true }) {
-                            Text("显示全部 ${availableVersions.size} 个版本", color = Indigo, fontSize = 12.sp)
+                            Text(stringResource(R.string.dlx_show_all, availableVersions.size), color = Indigo, fontSize = 12.sp)
                         }
                     } else if (showAllVersions && availableVersions.size > 8) {
                         TextButton(onClick = { showAllVersions = false }) {
-                            Text("仅显示常用版本", color = Indigo, fontSize = 12.sp)
+                            Text(stringResource(R.string.dlx_show_common), color = Indigo, fontSize = 12.sp)
                         }
                     }
                 }
@@ -605,25 +605,25 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
             if (showImportDialog) {
                 AlertDialog(
                     onDismissRequest = { if (!importingServer) { showImportDialog = false; pendingImport = null } },
-                    title = { Text("导入服务器") },
+                    title = { Text(stringResource(R.string.dlx_import_server)) },
                     text = {
                         Column {
-                            Text("选择导入方式：文件夹和压缩包用于已有完整服务端；JAR 用于单个服务端核心；整合包仅支持 Modrinth .mrpack，会自动下载服务端模组并应用 overrides。", color = Muted, fontSize = 12.sp)
+                            Text(stringResource(R.string.dlx_import_desc), color = Muted, fontSize = 12.sp)
                             Spacer(Modifier.height(8.dp))
                             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                OutlinedButton(onClick = { folderImportLauncher.launch(null) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("文件夹", fontSize = 11.sp) }
-                                OutlinedButton(onClick = { archiveImportLauncher.launch(arrayOf("application/zip", "application/gzip", "application/x-tar", "application/octet-stream")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("压缩包", fontSize = 11.sp) }
+                                OutlinedButton(onClick = { folderImportLauncher.launch(null) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text(stringResource(R.string.dlx_folder), fontSize = 11.sp) }
+                                OutlinedButton(onClick = { archiveImportLauncher.launch(arrayOf("application/zip", "application/gzip", "application/x-tar", "application/octet-stream")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text(stringResource(R.string.dlx_archive), fontSize = 11.sp) }
                                 OutlinedButton(onClick = { jarImportLauncher.launch(arrayOf("application/java-archive", "application/octet-stream")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("JAR", fontSize = 11.sp) }
-                                OutlinedButton(onClick = { modpackImportLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text("整合包", fontSize = 11.sp) }
+                                OutlinedButton(onClick = { modpackImportLauncher.launch(arrayOf("application/octet-stream", "application/zip")) }, enabled = !importingServer, shape = McShape.ControlCompact) { Text(stringResource(R.string.dlx_modpack), fontSize = 11.sp) }
                             }
                             if (pendingImport != null) {
                                 Spacer(Modifier.height(8.dp))
-                                OutlinedTextField(value = importName, onValueChange = { importName = it }, label = { Text("服务器名称") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(value = importName, onValueChange = { importName = it }, label = { Text(stringResource(R.string.dlx_server_name)) }, singleLine = true, modifier = Modifier.fillMaxWidth())
                             }
                             if (importingServer) {
                                 Spacer(Modifier.height(10.dp))
                                 LinearProgressIndicator(progress = { importProgress ?: 0f }, modifier = Modifier.fillMaxWidth())
-                                Text("正在导入 ${((importProgress ?: 0f) * 100).toInt()}%", color = Muted, fontSize = 11.sp)
+                                Text(stringResource(R.string.dlx_importing, ((importProgress ?: 0f) * 100).toInt()), color = Muted, fontSize = 11.sp)
                             }
                         }
                     },
@@ -639,9 +639,9 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                                     else -> vm.importServerFromArchive(selected.uri, importName.trim())
                                 }
                             }
-                        ) { Text("开始导入", color = Indigo) }
+                        ) { Text(stringResource(R.string.dlx_start_import), color = Indigo) }
                     },
-                    dismissButton = { TextButton(enabled = !importingServer, onClick = { showImportDialog = false; pendingImport = null }) { Text("取消", color = Muted) } }
+                    dismissButton = { TextButton(enabled = !importingServer, onClick = { showImportDialog = false; pendingImport = null }) { Text(stringResource(R.string.s402), color = Muted) } }
                 )
             }
             Spacer(Modifier.height(16.dp))

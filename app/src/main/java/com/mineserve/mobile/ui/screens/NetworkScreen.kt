@@ -3,10 +3,14 @@ package com.mineserve.mobile.ui.screens
 import androidx.compose.ui.res.stringResource
 import com.mineserve.mobile.R
 
+import android.app.Activity
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -37,7 +41,9 @@ import androidx.compose.material.icons.outlined.Link
 import androidx.compose.material.icons.outlined.OpenInFull
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Stop
+import androidx.compose.material.icons.outlined.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -78,6 +84,8 @@ import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.server.tunnel.StunDiagnostics
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import com.mineserve.mobile.ui.AddressCopyRow
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.DebouncedTextField
@@ -105,18 +113,25 @@ import kotlinx.coroutines.flow.collectLatest
  *
  * ## 组织方式
  *
- * 页面只有**两条独立的通道**，各自一张卡片、各自一套启停按钮：
+ * 页面只有**三条独立的通道**，各自一张卡片、各自一套启停按钮：
  *
  * 1. 本地连接地址 —— 本机与局域网怎么连（不涉及公网）；
  * 2. FRP 卡 —— frp 家族（自建 frp / SakuraFrp / ME Frp）共用一条通道，
  *    靠「多份配置」切换具体用哪一份；
- * 3. STUN 卡 —— 自成一通道，可与 FRP 同时运行。
+ * 3. STUN 卡 —— 自成一通道，可与 FRP 同时运行；
+ * 4. EasyTier 卡 —— App 内 VpnService 组网，与前两条互不干扰。
+ *
+ * FRP 与 STUN 面向「谁拿到地址谁就能进」；EasyTier 相反 —— 它把服务器和玩家
+ * 拉进同一个虚拟局域网，玩家按**局域网的方式**连进来。所以那张卡上没有「公网地址」，
+ * 只有「玩家连接地址」，以及一个把网络名/密钥交给玩家的入口（引导页 + 二维码）。
  *
  * 原先那张「连接与穿透状态」卡已删除：它把所有后端的状态糊成一份，
  * 既表达不了「两条同时在跑」，其中的速度/流量统计也只有已下线 bore 后端会上报。
  * 现在每张卡订阅自己的状态流，显示的都是该通道的真实运行结果。
  *
  * @param onOpenFrpEditor 打开 FRP 配置编辑页；参数是配置 id，null 表示新建。
+ * @param onOpenEasyTierGuide 打开组网引导页（邀请玩家）。
+ * @param onOpenEasyTierEngine 打开依赖页的 EasyTier 引擎下载卡片（引擎未下载时用）。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -124,7 +139,9 @@ fun NetworkScreen(
     vm: McViewModel,
     onBack: () -> Unit,
     showBackBar: Boolean = true,
-    onOpenFrpEditor: (String?) -> Unit = {}
+    onOpenFrpEditor: (String?) -> Unit = {},
+    onOpenEasyTierGuide: () -> Unit = {},
+    onOpenEasyTierEngine: () -> Unit = {}
 ) {
     val config by vm.config.collectAsState()
     // 端口真源：服务端配置文件里的 server-port（未生成时退回 localPort）。
@@ -133,6 +150,7 @@ fun NetworkScreen(
     val serverState by vm.serverState.collectAsState()
     val frpState by vm.frpState.collectAsState()
     val stunState by vm.stunState.collectAsState()
+    val easyTierState by vm.easyTierState.collectAsState()
     val stunDiag by vm.stunDiagnostics.collectAsState()
     val consoleLines by vm.consoleLines.collectAsState()
     val context = LocalContext.current
@@ -142,6 +160,9 @@ fun NetworkScreen(
     // 端口真源也在这里补读一次：用户可能在别处（文件管理器、服务端配置页）改过端口，
     // 只靠「服务端配置页」那一次读取的话，本页地址栏会一直显示旧端口。
     LaunchedEffect(Unit) { vm.loadServerProperties() }
+    // 组网身份补齐：网络名/密钥为空时自动生成一套。
+    // 「填个网络名就能分享给任何人」的前提是用户不用自己想名字，也不该被一个空密钥卡住。
+    LaunchedEffect(Unit) { vm.ensureEasyTierIdentity() }
     // 收集操作结果和错误消息，通过 Snackbar 显示（修复"点击无反应"Bug的关键）
     LaunchedEffect(Unit) {
         vm.messageFlow.collectLatest { snackbarHostState.showSnackbar(it) }
@@ -205,13 +226,26 @@ fun NetworkScreen(
                 onCopy = { url -> vm.copyPublicUrl(context, url) }
             )
 
-            // ── 4. 隧道日志 ───────────────────────────────────
+            // ── 4. EasyTier 组网 ──────────────────────────────
+            EasyTierCard(
+                vm = vm,
+                config = config,
+                easyTierState = easyTierState,
+                serverRunning = serverState.isRunning,
+                serverPort = serverPort,
+                onStart = { vm.startEasyTier() },
+                onStop = { vm.stopEasyTier() },
+                onOpenGuide = onOpenEasyTierGuide,
+                onOpenEnginePage = onOpenEasyTierEngine
+            )
+
+            // ── 5. 隧道日志 ───────────────────────────────────
             TunnelLogPreview(consoleLines, frpState, stunState)
 
-            // ── 5. 免费 FRP 平台 ──────────────────────────────
+            // ── 6. 免费 FRP 平台 ──────────────────────────────
             FreeFrpPlatformsCard(context)
 
-            // ── 6. 操作指南 ───────────────────────────────────
+            // ── 7. 操作指南 ───────────────────────────────────
             NetworkGuide()
 
             Spacer(Modifier.height(16.dp))
@@ -309,16 +343,23 @@ private fun TunnelActionRow(
 }
 
 /**
- * 运行前/运行中的提示条，两张卡共用。
+ * 运行前/运行中的提示条，三张卡共用。
  *
- * 「服务端没开」这条提醒必须留在卡里：穿透只是把公网流量转到本机端口，
+ * 「服务端没开」这条提醒必须留在卡里：穿透只是把流量转到本机端口，
  * 服务端没运行就没人接 —— 原先这条挂在已删除的总状态卡上。
+ *
+ * [serverStoppedText] 用来换掉「服务端未运行」那句：默认文案里点名要按「启动穿透」，
+ * 而组网卡上的按钮叫「启动组网」，沿用默认文案会把人指向一个不存在的按钮。
  */
 @Composable
-private fun TunnelPreconditionNotes(state: TunnelState, serverRunning: Boolean) {
+private fun TunnelPreconditionNotes(
+    state: TunnelState,
+    serverRunning: Boolean,
+    serverStoppedText: String? = null
+) {
     if (!serverRunning && state.status != TunnelStatus.Running) {
         Spacer(Modifier.height(10.dp))
-        WarnNote(stringResource(R.string.net_tunnel_server_stopped))
+        WarnNote(serverStoppedText ?: stringResource(R.string.net_tunnel_server_stopped))
     }
     if (state.status == TunnelStatus.Failed && state.errorMessage.isNotBlank()) {
         Spacer(Modifier.height(10.dp))
@@ -881,7 +922,215 @@ private fun StunConfigSection(vm: McViewModel, config: McConfig) {
     }
 }
 
-// ── 4. 隧道日志预览 ───────────────────────────────────────────
+// ── 4. EasyTier 组网卡片 ──────────────────────────────────────
+
+/**
+ * EasyTier 组网卡。
+ *
+ * 与另外两张卡的**根本区别**：那两张是「把本机端口搬到公网」，玩家拿公网地址进；
+ * 这一张是把服务器和玩家拉进同一个虚拟局域网，玩家用局域网地址进。所以：
+ *
+ * - 状态行下永远不出现「公网地址」，只有「玩家连接地址」；
+ * - 身份信息（网络名 + 密钥）必须能整段交给玩家 —— 这就是「邀请玩家」那个入口存在的理由，
+ *   让用户自己在两个输入框里抄给别人，抄错的概率远高于扫一张码。
+ *
+ * 启动前必须先要 VPN 授权：`establish()` 没有授权时只返回 null，既无异常也无错误码。
+ * 授权框只能由 Activity 弹，所以这里用 ActivityResult 契约，而不是让 Service 自己试。
+ */
+@Composable
+private fun EasyTierCard(
+    vm: McViewModel,
+    config: McConfig,
+    easyTierState: TunnelState,
+    serverRunning: Boolean,
+    serverPort: Int,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    onOpenGuide: () -> Unit,
+    onOpenEnginePage: () -> Unit
+) {
+    val context = LocalContext.current
+    val available = vm.easyTierAvailable
+
+    val vpnLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) onStart() else vm.notifyEasyTierVpnDenied()
+    }
+
+    // 虚拟 IP 与地址都在界面侧现算，不额外存一份：
+    // 网络名或服务端端口一改，这里立刻跟着变，不会出现「说明文字里是旧地址」。
+    // 端口是**转发端口**（非服务端端口）—— 两个监听不能占同一个端口。
+    val virtualIp = config.easyTierVirtualIp.trim().ifBlank {
+        val name = config.easyTierNetworkName.trim()
+        if (name.isBlank()) "" else EasyTierSettings.deriveVirtualIp(name)
+    }
+    val address = EasyTierSettings.playerAddress(virtualIp, serverPort)
+    val running = easyTierState.status == TunnelStatus.Running
+
+    McCard(
+        title = stringResource(R.string.easytier_card_title),
+        trailing = if (available) {
+            {
+                IconButton(onClick = onOpenGuide, modifier = Modifier.size(McIcon.TouchCompact)) {
+                    Icon(
+                        Icons.Outlined.Share,
+                        contentDescription = stringResource(R.string.easytier_guide_entry),
+                        tint = Indigo,
+                        modifier = Modifier.size(McIcon.Inline)
+                    )
+                }
+            }
+        } else null
+    ) {
+        TunnelStatusHeader(easyTierState.status, null)
+        Spacer(Modifier.height(10.dp))
+        HintNote(stringResource(R.string.easytier_intro))
+
+        if (!available) {
+            // 红色醒目：引擎没下载意味着这张卡整个不可用，必须第一眼就看到原因和出口。
+            // 别用 WarnNote —— 它是"提醒"级别，这里要的是"阻塞"级别。
+            Spacer(Modifier.height(10.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Coral.copy(alpha = 0.12f))
+                    .border(1.dp, Coral, RoundedCornerShape(10.dp))
+                    .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Icon(
+                    Icons.Outlined.Warning,
+                    contentDescription = null,
+                    tint = Coral,
+                    modifier = Modifier.size(16.dp)
+                )
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    stringResource(R.string.easytier_engine_card_missing),
+                    color = Coral,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                TextButton(onClick = onOpenEnginePage) {
+                    Text(
+                        stringResource(R.string.easytier_engine_goto),
+                        color = Coral,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            }
+        }
+
+        // ── 网络名 ────────────────────────────────────────────
+        Spacer(Modifier.height(12.dp))
+        Text(
+            stringResource(R.string.easytier_network_name),
+            color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold
+        )
+        Spacer(Modifier.height(6.dp))
+        DebouncedTextField(
+            value = config.easyTierNetworkName,
+            onValueChange = { v -> vm.updateConfig { it.copy(easyTierNetworkName = v) } },
+            enabled = !running && available,
+            singleLine = true,
+            placeholder = { Text(stringResource(R.string.easytier_network_name_hint)) },
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        // ── 网络密钥 ──────────────────────────────────────────
+        Spacer(Modifier.height(12.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.easytier_network_secret),
+                color = Muted, fontSize = 11.sp, fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
+            TextButton(
+                onClick = { vm.regenerateEasyTierSecret() },
+                enabled = !running && available
+            ) {
+                Icon(
+                    Icons.Outlined.Refresh,
+                    contentDescription = null, tint = Indigo, modifier = Modifier.size(14.dp)
+                )
+                Spacer(Modifier.size(4.dp))
+                Text(stringResource(R.string.easytier_regenerate), color = Indigo, fontSize = 11.sp)
+            }
+        }
+        DebouncedTextField(
+            value = config.easyTierNetworkSecret,
+            onValueChange = { v -> vm.updateConfig { it.copy(easyTierNetworkSecret = v) } },
+            enabled = !running && available,
+            singleLine = true,
+            // 不设 placeholder：下方 HintNote 常驻显示同一句话，两者并存会重复一遍
+            modifier = Modifier.fillMaxWidth()
+        )
+        Spacer(Modifier.height(4.dp))
+        HintNote(stringResource(R.string.easytier_secret_hint))
+
+        // ── 玩家连接地址 ──────────────────────────────────────
+        Spacer(Modifier.height(12.dp))
+        if (address.isBlank()) {
+            Text(stringResource(R.string.easytier_address_needs_name), color = Muted, fontSize = 11.sp)
+        } else {
+            AddressCopyRow(
+                label = stringResource(R.string.easytier_address),
+                value = address,
+                onCopy = { vm.copyPublicUrl(context, address) },
+                icon = Icons.Outlined.Lan,
+                accent = Mint,
+                containerColor = MintSoft,
+                borderColor = Mint
+            )
+            Spacer(Modifier.height(6.dp))
+            Text(stringResource(R.string.easytier_address_hint), color = Muted, fontSize = 10.sp)
+        }
+
+        TunnelPreconditionNotes(
+            easyTierState,
+            serverRunning,
+            serverStoppedText = stringResource(R.string.easytier_server_stopped)
+        )
+
+        // ── 启停 ──────────────────────────────────────────────
+        Spacer(Modifier.height(12.dp))
+        TunnelActionRow(
+            startText = stringResource(R.string.easytier_start),
+            stopText = stringResource(R.string.easytier_stop),
+            startEnabled = available &&
+                easyTierState.status != TunnelStatus.Starting &&
+                config.easyTierNetworkName.isNotBlank() &&
+                config.easyTierNetworkSecret.isNotBlank(),
+            stopEnabled = easyTierState.status == TunnelStatus.Running ||
+                easyTierState.status == TunnelStatus.Starting,
+            onStart = {
+                // 已授权时 prepareIntent 返回 null，直接起；否则先弹系统授权框
+                val prepare = EasyTierEngine.prepareIntent(context)
+                if (prepare == null) onStart() else vpnLauncher.launch(prepare)
+            },
+            onStop = onStop
+        )
+
+        if (available) {
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = onOpenGuide,
+                shape = RoundedCornerShape(10.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Icon(Icons.Outlined.Share, contentDescription = null, tint = Indigo, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(stringResource(R.string.easytier_guide_entry), color = Indigo, fontSize = 12.sp)
+            }
+        }
+    }
+}
+
+// ── 5. 隧道日志预览 ───────────────────────────────────────────
 
 @Composable
 private fun TunnelLogPreview(
@@ -999,14 +1248,14 @@ private fun TunnelLogPreview(
 // ── 5. 免费 FRP 平台 ──────────────────────────────────────────
 
 /** 免费 FRP 平台清单（官方网址，点击跳转浏览器） */
-private data class FrpPlatform(val name: String, val url: String)
+private data class FrpPlatform(val nameRes: Int, val url: String)
 
 private val freeFrpPlatforms = listOf(
-    FrpPlatform("OpenFrp", "https://www.openfrp.net/"),
-    FrpPlatform("ChmlFrp", "https://www.chmlfrp.cn/"),
-    FrpPlatform("StarryFrp（星空FRP）", "https://frp.starryfrp.com/"),
-    FrpPlatform("SakuraFrp（樱花映射）", "https://www.natfrp.com/"),
-    FrpPlatform("ME Frp", "https://www.mefrp.com/")
+    FrpPlatform(R.string.nwx_platform_openfrp, "https://www.openfrp.net/"),
+    FrpPlatform(R.string.nwx_platform_chmlfrp, "https://www.chmlfrp.cn/"),
+    FrpPlatform(R.string.nwx_platform_starry, "https://frp.starryfrp.com/"),
+    FrpPlatform(R.string.nwx_platform_sakura, "https://www.natfrp.com/"),
+    FrpPlatform(R.string.nwx_platform_mefrp, "https://www.mefrp.com/")
 )
 
 @Composable
@@ -1034,7 +1283,7 @@ private fun FreeFrpPlatformsCard(context: Context) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(p.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(p.nameRes), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                     Text(p.url, color = Indigo, fontSize = 10.sp)
                 }
                 Icon(

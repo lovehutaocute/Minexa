@@ -1669,6 +1669,8 @@
     <string name="frpc_engine_uninstall_confirm">卸载后 frp 系隧道将无法启动，需要重新导入引擎。确定卸载？</string>
     <string name="frpc_engine_where">引擎来源（arm64）：Gitee 发行页 gitee.com/venti1112/EdgeCubePackage-Frpc/releases 下载 frpc*-aarch64.ecpkg 后直接导入；也可自建 —— 用 Go 编译 frp 源码的 cmd/frpclib（-buildmode=c-shared），产物即 libfrpc.so。</string>
     <string name="frpc_engine_open_release">打开发行页下载</string>
+    <string name="easytier_notif_title">EasyTier 组网运行中</string>
+    <string name="easytier_notif_text">其他节点正在通过虚拟网络访问本机服务器</string>
     <string name="net_tunnel_server_stopped">服务端未运行：请先在概览页启动服务端，再点「启动穿透」，否则玩家连上公网地址也进不去</string>
     <string name="net_public_url_unknown">无法显示公网地址，请前往 FRP 平台查看公网地址。</string>
 
@@ -1746,4 +1748,287 @@
     <!-- 概览页：两条通道的地址各显示一行 -->
     <string name="net_dash_frp_address">FRP 公网地址</string>
     <string name="net_dash_stun_address">STUN 公网地址</string>
+
+    <!-- 设置页：语言 -->
+    <string name="set_language_title">语言</string>
+    <string name="set_language_hint">选择应用界面语言。选择后立即生效，并在下次启动时继续使用。</string>
+    <string name="set_language_change">更改</string>
+    <string name="set_language_system">跟随系统语言</string>
+
+    <!-- Server management screen -->
+    <string name="sm_eyebrow">服务器</string>
+    <string name="sm_title">服务器管理</string>
+    <string name="sm_select_core_first">请先选择服务器核心</string>
+    <string name="sm_not_running">服务器未运行</string>
+    <string name="sm_entry_plugins">模组与插件</string>
+    <string name="sm_entry_plugins_desc">安装、更新和管理服务器插件或模组</string>
+    <string name="sm_entry_worlds">世界管理</string>
+    <string name="sm_entry_worlds_desc">切换、导入、导出与重置世界存档</string>
+    <string name="sm_entry_props">服务器配置</string>
+    <string name="sm_entry_props_desc">编辑当前核心对应的配置文件</string>
+    <string name="sm_entry_icon">服务器图标</string>
+    <string name="sm_entry_icon_desc">更换 Java Edition 的 server-icon.png</string>
+    <string name="sm_entry_info">修改服务器信息</string>
+    <string name="sm_entry_info_desc">编辑当前服务器的显示名称与版本号</string>
+    <string name="sm_bedrock_icon_note">PowerNukkitX 暂不支持 Java Edition 的服务器图标。</string>
+    <string name="sm_dlg_title">修改服务器信息</string>
+    <string name="sm_dlg_name">显示名称</string>
+    <string name="sm_dlg_version">显示版本号</string>
+    <string name="sm_dlg_core">核心类型</string>
+    <string name="sm_core_current">（当前）</string>
+    <string name="sm_dlg_name_note">名称与版本号仅修改显示信息，不会影响实际版本与核心。</string>
+    <string name="sm_dlg_core_note">修改核心类型会改变应用对该服务器的处理方式（启动参数、插件/模组目录等），请确保与实际核心一致。</string>
+
+
+    <!-- Worlds screen -->
+    <string name="wl_title">世界管理</string>
+    <string name="wl_not_deployed">请先在「下载」页完成服务端部署</string>
+    <string name="wl_card_active">当前世界</string>
+    <string name="wl_active_desc">服务端启动时读取的世界。切换后需要重启服务端才会生效。</string>
+    <string name="wl_card_list">世界列表</string>
+    <string name="wl_loading_usage">正在统计世界占用…</string>
+    <string name="wl_empty">还没有生成任何世界。启动一次服务端后会在这里出现。</string>
+    <string name="wl_card_maintain">导入 / 维护</string>
+    <string name="wl_import_desc">导入支持本应用导出的存档，也支持原版 world 文件夹直接打包的 zip。</string>
+    <string name="wl_import">导入世界</string>
+    <string name="wl_clear_seed">清空种子</string>
+    <string name="wl_clear_seed_desc">清空种子后，服务端下次生成新地图时使用随机种子（已存在的世界不受影响）。</string>
+    <string name="wl_card_export_note">导出说明</string>
+    <string name="wl_export_note">导出时会把世界连同它的下界、末地维度一起打包。除了另存到自选位置，导出的备份也会留在手机公共目录「备份/世界导出」下，卸载应用不会丢失。</string>
+    <string name="wl_reset_title">重置世界「%1$s」？</string>
+    <string name="wl_reset_body">会先把这个世界完整导出为一份备份，然后删除目录，服务端下次启动会重新生成一张新地图。\n\n此操作不可撤销，请确认。</string>
+    <string name="wl_reset_confirm">备份并重置</string>
+    <string name="wl_kind_bedrock">基岩</string>
+    <string name="wl_kind_unknown">未知</string>
+    <string name="wl_in_use_suffix"> · 当前使用中</string>
+    <string name="wl_in_use">使用中</string>
+    <string name="wl_set_active">设为当前</string>
+    <string name="wl_export">导出</string>
+    <string name="wl_reset">重置</string>
+    <string name="wl_import_default_name">导入世界</string>
+    <string name="wl_export_prefix">世界</string>
+
+
+    <!-- Terminal screen -->
+    <string name="tm_send">发送</string>
+    <string name="tm_title">终端</string>
+    <string name="tm_settings">终端设置</string>
+    <string name="tm_clear_session">清空当前会话</string>
+    <string name="tm_resume_scroll">继续自动滚动</string>
+    <string name="tm_pause_scroll">暂停自动滚动</string>
+    <string name="tm_copied">已复制当前日志</string>
+    <string name="tm_copy_log">复制当前日志</string>
+    <string name="tm_new_session">新建会话</string>
+    <string name="tm_close">关闭</string>
+    <string name="tm_done">完成</string>
+    <string name="tm_localize">常用日志汉化\n仅改变终端显示，保留原始日志</string>
+    <string name="tm_danger_title">确认执行危险指令</string>
+    <string name="tm_danger_body">该指令可能停止服务端、清除实体或关闭白名单：\n\n%1$s</string>
+    <string name="tm_danger_confirm">确认执行</string>
+    <string name="tc_weather_clear">晴天</string>
+    <string name="tc_weather_rain">下雨</string>
+    <string name="tc_weather_thunder">雷雨</string>
+    <string name="tc_time_day">白天</string>
+    <string name="tc_time_night">夜晚</string>
+    <string name="tc_time_noon">正午</string>
+    <string name="tc_gm_survival">生存模式</string>
+    <string name="tc_gm_creative">创造模式</string>
+    <string name="tc_gm_adventure">冒险模式</string>
+    <string name="tc_gm_spectator">旁观模式</string>
+    <string name="tc_diff_peaceful">和平难度</string>
+    <string name="tc_diff_normal">普通难度</string>
+    <string name="tc_diff_hard">困难难度</string>
+    <string name="tc_kill_entities">杀死实体</string>
+    <string name="tc_player_list">玩家列表</string>
+    <string name="tc_spawnpoint">出生点</string>
+    <string name="tc_clear_effects">清空效果</string>
+    <string name="tc_keep_inventory">保留物品</string>
+    <string name="tc_whitelist_off">关闭白名单</string>
+    <string name="tc_whitelist_on">开启白名单</string>
+    <string name="tc_save_world">保存世界</string>
+    <string name="tc_help">帮助</string>
+    <string name="tc_stop_server">停止服务端</string>
+
+
+    <!-- Backup screen -->
+    <string name="bk_auto_title">自动备份</string>
+    <string name="bk_auto_desc">仅在服务端运行时写入公共备份目录，自动清理仅作用于同服务器、同类型的自动备份。</string>
+    <string name="bk_off">关闭</string>
+    <string name="bk_30m">30分钟</string>
+    <string name="bk_1h">1小时</string>
+    <string name="bk_3h">3小时</string>
+    <string name="bk_custom_interval">自定义间隔（分钟）</string>
+    <string name="bk_keep_count">自动保留数量</string>
+    <string name="bk_range_hint">间隔范围 5–10080 分钟；保留数量范围 1–100。关闭自动备份请点上方「关闭」。</string>
+    <string name="bk_manual_title">手动世界备份</string>
+    <string name="bk_save_to">保存到 /storage/emulated/0/世界与服务器的备份/</string>
+    <string name="bk_type_world">世界备份</string>
+    <string name="bk_type_server">完整服务器</string>
+    <string name="bk_core_prefix"> · 核心: %1$s</string>
+    <string name="bk_dir_prefix">目录: %1$s</string>
+    <string name="bk_origin_manual">手动</string>
+    <string name="bk_origin_auto">自动</string>
+    <string name="bk_origin_history">历史</string>
+    <string name="bk_unknown_time">未知时间</string>
+    <string name="bk_snapshots_title">历史私有快照（%1$d）</string>
+
+
+    <!-- Download / players screens -->
+    <string name="dlx_supports_import">支持导入服务器</string>
+    <string name="dlx_import_server">导入服务器</string>
+    <string name="dlx_show_all">显示全部 %1$d 个版本</string>
+    <string name="dlx_show_common">仅显示常用版本</string>
+    <string name="dlx_import_desc">选择导入方式：文件夹和压缩包用于已有完整服务端；JAR 用于单个服务端核心；整合包仅支持 Modrinth .mrpack，会自动下载服务端模组并应用 overrides。</string>
+    <string name="dlx_folder">文件夹</string>
+    <string name="dlx_archive">压缩包</string>
+    <string name="dlx_modpack">整合包</string>
+    <string name="dlx_server_name">服务器名称</string>
+    <string name="dlx_importing">正在导入 %1$d%%</string>
+    <string name="dlx_start_import">开始导入</string>
+    <string name="plx_interrupted_suffix">  |  中断</string>
+    <string name="plx_activity_title">活动记录</string>
+    <string name="plx_recent_join">最近进服</string>
+    <string name="plx_recent_leave">最近离服</string>
+    <string name="plx_total_online">累计在线</string>
+    <string name="plx_last_exit_reason">最后退出原因</string>
+    <string name="plx_no_record">暂无记录</string>
+    <string name="plx_online_now">当前在线</string>
+
+
+    <!-- Misc screens -->
+    <string name="plx_loading">加载中...</string>
+    <string name="plx_site_spigot">SpigotMC Resources</string>
+    <string name="plx_site_hangar">Hangar（Paper 官方）</string>
+    <string name="plx_site_modrinth">Modrinth</string>
+    <string name="plx_site_builtbybit">BuiltByBit（原 MC-Market）</string>
+    <string name="plx_site_curseforge">CurseForge Bukkit 分区</string>
+    <string name="mcpx_lan_title">局域网访问</string>
+    <string name="mcpx_lan_allow">允许局域网访问</string>
+    <string name="mcpx_lan_on_hint">局域网内任何设备都可访问，请保管好令牌</string>
+    <string name="mcpx_lan_off_hint">仅本机（127.0.0.1）可访问</string>
+    <string name="mcpx_lan_off_hint_long">仅本机可访问（默认只监听 127.0.0.1）</string>
+    <string name="mcpx_snippet_hint">将以下片段加入 MCP 客户端配置（仅本机可访问，地址固定为 127.0.0.1）</string>
+    <string name="shx_updated">已更新 · %1$s</string>
+    <string name="shx_phase">启动阶段：%1$s（%2$d%%）</string>
+    <string name="shx_pipeline">准备环境 · 下载依赖 · 启动 Java · 加载核心 · 创建世界 · 启动网络</string>
+    <string name="shx_phase_idle">未启动</string>
+    <string name="shx_phase_env">准备环境</string>
+    <string name="shx_phase_java">启动 Java</string>
+    <string name="shx_phase_deps">下载依赖</string>
+    <string name="shx_phase_core">加载核心</string>
+    <string name="shx_phase_net">启动网络</string>
+    <string name="shx_phase_world">创建世界</string>
+    <string name="shx_phase_ready">已完成</string>
+    <string name="shx_phase_failed">启动失败</string>
+    <string name="shx_just_now">刚刚</string>
+    <string name="shx_secs_ago">%1$d秒前</string>
+    <string name="shx_mins_ago">%1$d分钟前</string>
+    <string name="shx_hours_ago">%1$d小时前</string>
+    <string name="kax_screen_on_title">运行时屏幕常亮</string>
+    <string name="kax_screen_on_subtitle">仅主界面可见时生效，服务器运行中保持屏幕常亮。</string>
+    <string name="kax_overlay_title">运行状态悬浮窗</string>
+    <string name="kax_overlay_subtitle">显示可拖动状态点；需要授予“显示在其他应用上层”权限。</string>
+    <string name="nwx_platform_openfrp">OpenFrp</string>
+    <string name="nwx_platform_chmlfrp">ChmlFrp</string>
+    <string name="nwx_platform_starry">StarryFrp（星空FRP）</string>
+    <string name="nwx_platform_sakura">SakuraFrp（樱花映射）</string>
+    <string name="nwx_platform_mefrp">ME Frp</string>
+    <string name="frpx_fetch_failed">拉取失败</string>
+    <string name="frpx_create_failed">创建失败</string>
+
+
+    <!-- ViewModel / overlay messages -->
+    <string name="vm_engine_downloaded">引擎下载完成</string>
+    <string name="vm_version_suffix">（版本 %1$s）</string>
+    <string name="vm_download_failed">下载失败：%1$s</string>
+    <string name="vm_network_unavailable">网络不可用</string>
+    <string name="vm_cannot_read_file">无法读取所选文件</string>
+    <string name="vm_engine_imported">引擎导入成功</string>
+    <string name="vm_import_failed">导入失败：%1$s</string>
+    <string name="vm_engine_uninstalled">引擎已卸载</string>
+    <string name="vm_uninstall_failed">卸载失败，请重试</string>
+    <string name="vm_name_empty">服务器名称不能为空</string>
+    <string name="vm_server_not_found">未找到服务器：%1$s</string>
+    <string name="vm_server_duplicate">已存在同名服务器：%1$s</string>
+    <string name="vm_mirror_selected">已选用可用下载源：%1$s</string>
+    <string name="vm_mirror_all_failed">全部下载源均不可用，请检查网络后重试</string>
+    <string name="vm_mirror_test_failed">测试失败：%1$s</string>
+    <string name="vm_unknown_error">未知错误</string>
+    <string name="vm_search_first">请先执行搜索</string>
+    <string name="vm_no_more_results">没有更多结果</string>
+    <string name="vm_exit_interrupted">服务停止或应用重启导致中断</string>
+    <string name="vm_exit_unknown">日志未提供退出原因</string>
+    <string name="sox_running_stats">运行中 CPU:%1$s｜内存:%2$s</string>
+
+
+    <!-- ViewModel / overlay messages -->
+
+
+    <!-- Mirrors / install steps -->
+    <string name="mirror_auto">自动（镜像优先）</string>
+    <string name="mirror_github">GitHub 直连</string>
+    <string name="mirror_tuna">清华镜像 (TUNA)</string>
+    <string name="mirror_aliyun">阿里云镜像</string>
+    <string name="mirror_ustc">中科大镜像 (USTC)</string>
+    <string name="mirror_nju">南京大学镜像</string>
+    <string name="mirror_official">清华镜像 (旧配置)</string>
+    <string name="step_jdk">JDK 17 运行环境</string>
+    <string name="step_wget">Wget 下载工具</string>
+    <string name="step_rclone">Rclone 远程挂载</string>
+    <string name="step_proot">PRoot 兼容层</string>
+
+    <!-- ── EasyTier 组网 ─────────────────────────────────────── -->
+    <string name="easytier_card_title">EasyTier 组网</string>
+    <string name="easytier_intro">把服务器和玩家拉进同一个虚拟局域网：玩家装个客户端、填同一个网络名，就能像在同一间屋里一样直接连进来。不依赖中转服务器，也不用改路由器。</string>
+    <string name="easytier_engine_card_missing">组网引擎未下载，此功能不可用</string>
+    <string name="easytier_engine_goto">去下载</string>
+    <string name="easytier_engine_title">EasyTier 组网引擎</string>
+    <string name="easytier_engine_installed">引擎已下载</string>
+    <string name="easytier_engine_missing">引擎未下载</string>
+    <string name="easytier_engine_hint">组网功能依赖此引擎（约 16MB），按需下载，下载后无需重启</string>
+    <string name="easytier_engine_download">下载引擎</string>
+    <string name="easytier_engine_downloading">下载中</string>
+    <string name="easytier_engine_reinstall">重新下载</string>
+    <string name="easytier_engine_import">导入引擎</string>
+    <string name="easytier_engine_replace">替换引擎</string>
+    <string name="easytier_engine_uninstall">卸载引擎</string>
+    <string name="easytier_engine_uninstall_confirm">卸载后组网将无法启动，已下载的引擎文件会被删除。确定卸载？</string>
+    <string name="easytier_engine_where">引擎保存在应用私有目录；升级或重新下载会自动替换旧文件</string>
+    <string name="easytier_network_name">网络名</string>
+    <string name="easytier_network_name_hint">网络名相同的人才能互相看见</string>
+    <string name="easytier_network_secret">网络密钥</string>
+    <string name="easytier_secret_hint">相当于房间口令，泄漏了就换一个</string>
+    <string name="easytier_regenerate">换一个密钥</string>
+    <string name="easytier_secret_regenerated">已生成新的网络密钥，旧密钥立刻失效</string>
+    <string name="easytier_address">玩家连接地址</string>
+    <string name="easytier_address_hint">同一个网络永远是同一个地址，发一次就够。端口是专给组网用的转发端口，和服务端端口不同，照抄即可</string>
+    <string name="easytier_address_needs_name">填好网络名后自动算出地址</string>
+    <string name="easytier_server_stopped">服务端未运行：请先在概览页启动服务端，再点「启动组网」，否则玩家加入了网络也进不去</string>
+    <string name="easytier_start">启动组网</string>
+    <string name="easytier_stop">停止组网</string>
+    <string name="easytier_guide_entry">邀请玩家</string>
+    <string name="easytier_vpn_denied">没有拿到 VPN 授权，组网没有启动</string>
+    <string name="easytier_copied">已复制组网说明，直接发给玩家即可</string>
+    <string name="easytier_share_text">【Minexa 组网服务器】\n1. 安装 EasyTier 客户端\n2. 加入网络\n   网络名：%1$s\n   网络密钥：%2$s\n3. 加入后，在游戏里连接：%3$s</string>
+
+    <!-- 组网引导页 -->
+    <string name="easytier_guide_eyebrow">组网</string>
+    <string name="easytier_guide_title">邀请玩家</string>
+    <string name="easytier_guide_lead">把下面这张码发给玩家，或者点「复制全部说明」把整段文字发出去。玩家照三步做就能进服。</string>
+    <string name="easytier_guide_step1_t">装客户端</string>
+    <string name="easytier_guide_step1_d">应用商店或官网搜 EasyTier，装官方客户端（Windows / Android / iOS / macOS 都有）。</string>
+    <string name="easytier_guide_step2_t">加入同一个网络</string>
+    <string name="easytier_guide_step2_d">网络名和网络密钥必须一模一样，差一个字符都进不来。</string>
+    <string name="easytier_guide_step3_t">在游戏里连这个地址</string>
+    <string name="easytier_guide_step3_d">客户端显示已连接后，在 Minecraft 里添加服务器，地址填下面这个。</string>
+    <string name="easytier_guide_qr_hint">扫码即可看到网络名、密钥和连接地址</string>
+    <string name="easytier_guide_qr_title">扫码加入</string>
+    <string name="easytier_guide_steps_title">玩家要做的三步</string>
+    <string name="easytier_guide_values_title">要发给玩家的信息</string>
+    <string name="easytier_guide_copy_all">复制全部说明</string>
+    <string name="easytier_guide_note">只发给信任的人：知道网络名和密钥的人都能进这个虚拟局域网。</string>
+    <string name="easytier_engine_open_release">打开发行页</string>
+    <string name="settings_github_repo">GitHub 仓库</string>
+    <string name="settings_github_repo_desc">查看源代码、提交问题与获取最新版本</string>
+
 </resources>

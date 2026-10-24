@@ -89,11 +89,13 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mineserve.mobile.data.InstallStep
 import com.mineserve.mobile.data.JavaRuntime
 import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ServerState
+import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.data.StepStatus
 import kotlinx.coroutines.delay
 import com.mineserve.mobile.ui.theme.Coral
@@ -353,7 +355,7 @@ fun HeroBlock(
             if (!isRefreshing && lastRefreshAtMs > 0L) {
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    "已更新 · ${formatRefreshAgo(lastRefreshAtMs)}",
+                    stringResource(R.string.shx_updated, formatRefreshAgo(lastRefreshAtMs)),
                     color = Color.White.copy(alpha = 0.55f),
                     fontSize = 9.sp
                 )
@@ -385,12 +387,12 @@ fun HeroBlock(
                 )
                 Spacer(Modifier.height(5.dp))
                 Text(
-                    "启动阶段：${state.startupPhase.label}（${(state.startupPhase.progress * 100).toInt()}%）",
+                    stringResource(R.string.shx_phase, startupPhaseLabel(state.startupPhase), (state.startupPhase.progress * 100).toInt()),
                     color = Color.White.copy(alpha = 0.7f),
                     fontSize = 10.sp
                 )
                 Text(
-                    "准备环境 · 下载依赖 · 启动 Java · 加载核心 · 创建世界 · 启动网络",
+                    stringResource(R.string.shx_pipeline),
                     color = Color.White.copy(alpha = 0.52f),
                     fontSize = 9.sp,
                     maxLines = 2,
@@ -531,14 +533,38 @@ private fun formatUptime(ms: Long): String {
  * 存在的意义是让「刷新」这个动作**可被观察到**：采集带缓存，数值经常不变，
  * 光看数字无法判断按钮是否生效。
  */
+@Composable
 private fun formatRefreshAgo(refreshAtMs: Long): String {
     val elapsedSec = ((System.currentTimeMillis() - refreshAtMs).coerceAtLeast(0L)) / 1000
     return when {
-        elapsedSec < 5 -> "刚刚"
-        elapsedSec < 60 -> "${elapsedSec}秒前"
-        elapsedSec < 3600 -> "${elapsedSec / 60}分钟前"
-        else -> "${elapsedSec / 3600}小时前"
+        elapsedSec < 5 -> stringResource(R.string.shx_just_now)
+        elapsedSec < 60 -> stringResource(R.string.shx_secs_ago, elapsedSec.toInt())
+        elapsedSec < 3600 -> stringResource(R.string.shx_mins_ago, (elapsedSec / 60).toInt())
+        else -> stringResource(R.string.shx_hours_ago, (elapsedSec / 3600).toInt())
     }
+}
+
+/** 依赖安装步骤的本地化文案（枚举里的 label 是简体中文基线，不能直接展示）。 */
+@Composable
+fun installStepLabel(step: InstallStep): String = when (step) {
+    InstallStep.Jdk -> stringResource(R.string.step_jdk)
+    InstallStep.Wget -> stringResource(R.string.step_wget)
+    InstallStep.Rclone -> stringResource(R.string.step_rclone)
+    InstallStep.Proot -> stringResource(R.string.step_proot)
+}
+
+/** 启动阶段枚举的本地化文案（枚举本身只带进度，不带可直接展示的中文）。 */
+@Composable
+private fun startupPhaseLabel(phase: StartupPhase): String = when (phase) {
+    StartupPhase.Idle -> stringResource(R.string.shx_phase_idle)
+    StartupPhase.PreparingEnvironment -> stringResource(R.string.shx_phase_env)
+    StartupPhase.StartingJava -> stringResource(R.string.shx_phase_java)
+    StartupPhase.DownloadingDependencies -> stringResource(R.string.shx_phase_deps)
+    StartupPhase.LoadingCore -> stringResource(R.string.shx_phase_core)
+    StartupPhase.StartingNetwork -> stringResource(R.string.shx_phase_net)
+    StartupPhase.CreatingWorld -> stringResource(R.string.shx_phase_world)
+    StartupPhase.Ready -> stringResource(R.string.shx_phase_ready)
+    StartupPhase.Failed -> stringResource(R.string.shx_phase_failed)
 }
 
 /**

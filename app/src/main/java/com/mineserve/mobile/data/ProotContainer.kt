@@ -72,6 +72,22 @@ data class ProotContainerProfile(
             JavaVersion.Java25 -> "openjdk-25-jdk"
         }
 
+    /**
+     * 同一次安装 / 卸载要一起处理的包。
+     *
+     * 为什么不能只认 [aptPackage]：`openjdk-21-jdk` 只是个 **meta 包**，真正的
+     * 文件在 `openjdk-21-jdk-headless` 与 `openjdk-21-jre-headless` 里。
+     * 只 purge meta 包时 headless 仍是 installed，而它们共享同一个
+     * `/usr/lib/jvm/java-21-openjdk-arm64` 目录 —— 若此时再 `rm -rf` 该目录，
+     * 就得到「dpkg 说已安装、磁盘上没有 java」的残状态：apt 之后永远报
+     * 「已是最新版本」，装不上也修不好（1.3.1 之后用户实机撞到过）。
+     */
+    val relatedAptPackages: List<String>
+        get() {
+            val prefix = aptPackage.removeSuffix("-jdk") // openjdk-21
+            return listOf(aptPackage, "$prefix-jdk-headless", "$prefix-jre-headless")
+        }
+
     /** 用来给用户看的一句话：`Ubuntu 22.04 (jammy) · Java 17`。 */
     val displayName: String get() = "${distro.displayName} · ${version.displayName}"
 

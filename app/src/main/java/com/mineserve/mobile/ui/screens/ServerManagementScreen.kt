@@ -28,6 +28,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.res.stringResource
+import com.mineserve.mobile.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -71,7 +73,7 @@ fun ServerManagementScreen(
     Column(Modifier.fillMaxSize()) {
         // 与其它一级页面统一：同一个标题栏（eyebrow + 标题）承接状态栏避让，
         // 标题字号/位置与概览、设置等页面完全一致；正文改用统一页面边距。
-        HeaderBlock(eyebrow = "服务器", title = "服务器管理")
+        HeaderBlock(eyebrow = stringResource(R.string.sm_eyebrow), title = stringResource(R.string.sm_title))
         Column(
             Modifier
                 .fillMaxSize()
@@ -82,7 +84,7 @@ fun ServerManagementScreen(
             // 状态摘要：核心与运行状态用与全局一致的语义色（Coral / Mint），
             // 不再各自写一份硬编码的红绿。
             Text(
-                active?.let { "${it.name} · ${it.core.displayName} ${it.version}" } ?: "请先选择服务器核心",
+                active?.let { "${it.name} · ${it.core.displayName} ${it.version}" } ?: stringResource(R.string.sm_select_core_first),
                 color = if (active == null) Coral else Muted,
                 fontSize = 12.sp,
                 modifier = Modifier.padding(horizontal = 2.dp)
@@ -99,25 +101,25 @@ fun ServerManagementScreen(
                 )
                 Spacer(Modifier.size(6.dp))
                 Text(
-                    if (state.isRunning) "服务器运行中" else "服务器未运行",
+                    if (state.isRunning) stringResource(R.string.sm_running) else stringResource(R.string.sm_not_running),
                     color = if (state.isRunning) Mint else Muted,
                     fontSize = 12.sp
                 )
             }
             Spacer(Modifier.height(2.dp))
-            ManagementEntry("模组与插件", "安装、更新和管理服务器插件或模组", Icons.Outlined.Extension, onPlugins)
+            ManagementEntry(stringResource(R.string.sm_entry_plugins), stringResource(R.string.sm_entry_plugins_desc), Icons.Outlined.Extension, onPlugins)
             // 世界（存档）是服务端目录下的实体，属服务器管理；原先藏在「更多」里，路径太长
-            ManagementEntry("世界管理", "切换、导入、导出与重置世界存档", Icons.Outlined.Map, onWorlds)
-            ManagementEntry("服务器配置", "编辑当前核心对应的配置文件", Icons.Outlined.Tune, onProperties)
-            ManagementEntry("服务器图标", "更换 Java Edition 的 server-icon.png", Icons.Outlined.Image, onIcon)
+            ManagementEntry(stringResource(R.string.sm_entry_worlds), stringResource(R.string.sm_entry_worlds_desc), Icons.Outlined.Map, onWorlds)
+            ManagementEntry(stringResource(R.string.sm_entry_props), stringResource(R.string.sm_entry_props_desc), Icons.Outlined.Tune, onProperties)
+            ManagementEntry(stringResource(R.string.sm_entry_icon), stringResource(R.string.sm_entry_icon_desc), Icons.Outlined.Image, onIcon)
             if (active != null) {
-                ManagementEntry("修改服务器信息", "编辑当前服务器的显示名称与版本号", Icons.Outlined.Edit) {
+                ManagementEntry(stringResource(R.string.sm_entry_info), stringResource(R.string.sm_entry_info_desc), Icons.Outlined.Edit) {
                     showEditDialog = true
                 }
             }
             if (active?.core?.isBedrock == true) {
                 Text(
-                    "PowerNukkitX 暂不支持 Java Edition 的服务器图标。",
+                    stringResource(R.string.sm_bedrock_icon_note),
                     color = Coral,
                     fontSize = 11.sp,
                     modifier = Modifier.padding(horizontal = 2.dp)
@@ -153,20 +155,20 @@ private fun EditServerInfoDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("修改服务器信息", fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
+        title = { Text(stringResource(R.string.sm_dlg_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = name,
                     onValueChange = { name = it },
-                    label = { Text("显示名称") },
+                    label = { Text(stringResource(R.string.sm_dlg_name)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = version,
                     onValueChange = { version = it },
-                    label = { Text("显示版本号") },
+                    label = { Text(stringResource(R.string.sm_dlg_version)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -174,7 +176,7 @@ private fun EditServerInfoDialog(
                     value = selectedCore.displayName,
                     onValueChange = {},
                     readOnly = true,
-                    label = { Text("核心类型") },
+                    label = { Text(stringResource(R.string.sm_dlg_core)) },
                     trailingIcon = {
                         androidx.compose.material3.IconButton(onClick = { coreMenuExpanded = !coreMenuExpanded }) {
                             Icon(
@@ -194,7 +196,7 @@ private fun EditServerInfoDialog(
                         androidx.compose.material3.DropdownMenuItem(
                             text = {
                                 Text(
-                                    core.displayName + if (core == currentCore) "（当前）" else "",
+                                    core.displayName + if (core == currentCore) stringResource(R.string.sm_core_current) else "",
                                     fontWeight = if (core == selectedCore) FontWeight.SemiBold else FontWeight.Normal
                                 )
                             },
@@ -206,13 +208,13 @@ private fun EditServerInfoDialog(
                     }
                 }
                 Text(
-                    "名称与版本号仅修改显示信息，不会影响实际版本与核心。",
+                    stringResource(R.string.sm_dlg_name_note),
                     color = Coral,
                     fontSize = 11.sp
                 )
                 if (selectedCore != currentCore) {
                     Text(
-                        "修改核心类型会改变应用对该服务器的处理方式（启动参数、插件/模组目录等），请确保与实际核心一致。",
+                        stringResource(R.string.sm_dlg_core_note),
                         color = Coral,
                         fontSize = 11.sp,
                         fontWeight = FontWeight.SemiBold
@@ -227,10 +229,10 @@ private fun EditServerInfoDialog(
             TextButton(onClick = {
                 val problem = vm.updateServerDisplayInfo(currentName, name, version, selectedCore)
                 if (problem == null) onDismiss() else error = problem
-            }) { Text("保存", color = Indigo, fontWeight = FontWeight.SemiBold) }
+            }) { Text(stringResource(R.string.s328), color = Indigo, fontWeight = FontWeight.SemiBold) }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("取消") }
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.s402)) }
         }
     )
 }

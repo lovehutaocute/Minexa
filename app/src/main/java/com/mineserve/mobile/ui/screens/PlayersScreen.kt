@@ -389,7 +389,7 @@ private fun PlayerHistoryDialog(
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
-                                Text(buildString { append(h.time); if (h.sessionStart != null && h.sessionEnd != null) append("  |  ${formatActivitySeconds(((h.sessionEnd - h.sessionStart) / 1000).coerceAtLeast(0))}"); if (h.interrupted) append("  |  中断") }, color = Muted, fontSize = 10.sp)
+                                Text(buildString { append(h.time); if (h.sessionStart != null && h.sessionEnd != null) append("  |  ${formatActivitySeconds(((h.sessionEnd - h.sessionStart) / 1000).coerceAtLeast(0))}"); if (h.interrupted) append(stringResource(R.string.plx_interrupted_suffix)) }, color = Muted, fontSize = 10.sp)
                             }
                         }
                     }
@@ -1057,11 +1057,13 @@ private fun PlayerDetailDialog(
 
                 activity?.let { summary ->
                     Spacer(Modifier.height(8.dp))
-                    Text("活动记录", color = Indigo, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-                    DetailRow("最近进服", summary.lastJoinTime ?: "暂无记录")
-                    DetailRow("最近离服", summary.lastLeaveTime ?: if (summary.active) "当前在线" else "暂无记录")
-                    DetailRow("累计在线", formatActivitySeconds(summary.totalSeconds))
-                    DetailRow("最后退出原因", summary.lastExitReason ?: if (summary.active) "当前在线" else "暂无记录")
+                    val onlineNow = stringResource(R.string.plx_online_now)
+                    val noRecord = stringResource(R.string.plx_no_record)
+                    Text(stringResource(R.string.plx_activity_title), color = Indigo, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                    DetailRow(stringResource(R.string.plx_recent_join), summary.lastJoinTime ?: noRecord)
+                    DetailRow(stringResource(R.string.plx_recent_leave), summary.lastLeaveTime ?: if (summary.active) onlineNow else noRecord)
+                    DetailRow(stringResource(R.string.plx_total_online), formatActivitySeconds(summary.totalSeconds))
+                    DetailRow(stringResource(R.string.plx_last_exit_reason), summary.lastExitReason ?: if (summary.active) onlineNow else noRecord)
                 }
 
                 Spacer(Modifier.height(12.dp))

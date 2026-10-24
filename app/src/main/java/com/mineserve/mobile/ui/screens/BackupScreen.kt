@@ -162,11 +162,16 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
         ) {
             HeaderBlock(eyebrow = stringResource(R.string.eyebrow_backup), title = stringResource(R.string.s324))
 
-            McCard(title = "自动备份") {
-                Text("仅在服务端运行时写入公共备份目录，自动清理仅作用于同服务器、同类型的自动备份。", color = Muted, fontSize = 11.sp)
+            McCard(title = stringResource(R.string.bk_auto_title)) {
+                Text(stringResource(R.string.bk_auto_desc), color = Muted, fontSize = 11.sp)
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(0 to "关闭", 30 to "30分钟", 60 to "1小时", 180 to "3小时").forEach { (minutes, label) ->
+                    listOf(
+                        0 to stringResource(R.string.bk_off),
+                        30 to stringResource(R.string.bk_30m),
+                        60 to stringResource(R.string.bk_1h),
+                        180 to stringResource(R.string.bk_3h)
+                    ).forEach { (minutes, label) ->
                         SegPill(text = label, selected = config.autoBackupIntervalMin == minutes) {
                             vm.setAutoBackupInterval(minutes)
                         }
@@ -175,7 +180,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     AutoBackupType.entries.forEach { type ->
-                        SegPill(text = type.displayName, selected = config.autoBackupType == type) {
+                        SegPill(text = autoBackupTypeLabel(type), selected = config.autoBackupType == type) {
                             vm.setAutoBackupType(type)
                         }
                     }
@@ -192,7 +197,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                         raw.toIntOrNull()?.let { vm.setAutoBackupInterval(it.coerceIn(5, 10080)) }
                     },
                     sanitize = { it.filter(Char::isDigit) },
-                    label = { Text("自定义间隔（分钟）") },
+                    label = { Text(stringResource(R.string.bk_custom_interval)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.width(180.dp)
@@ -200,12 +205,12 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                 OutlinedTextField(
                     value = config.maxSnapshots.toString(),
                     onValueChange = { vm.setMaxSnapshots(it.toIntOrNull() ?: config.maxSnapshots) },
-                    label = { Text("自动保留数量") },
+                    label = { Text(stringResource(R.string.bk_keep_count)) },
                     singleLine = true,
                     modifier = Modifier.width(150.dp)
                 )
             }
-            Text("间隔范围 5–10080 分钟；保留数量范围 1–100。关闭自动备份请点上方「关闭」。", color = Muted, fontSize = 11.sp)
+            Text(stringResource(R.string.bk_range_hint), color = Muted, fontSize = 11.sp)
 
             if (!hasStoragePerm) {
                 Box(
@@ -271,8 +276,8 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                 )
             }
 
-            McCard(title = "手动世界备份") {
-                Text("保存到 /storage/emulated/0/世界与服务器的备份/", color = Muted, fontSize = 11.sp)
+            McCard(title = stringResource(R.string.bk_manual_title)) {
+                Text(stringResource(R.string.bk_save_to), color = Muted, fontSize = 11.sp)
                 Spacer(Modifier.height(10.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
@@ -360,10 +365,10 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                     extBackups.forEachIndexed { i, f ->
                         if (i > 0) Spacer(Modifier.height(6.dp))
                         val info = vm.externalBackupInfo(f)
-                        val kindLabel = if (info.kind == BackupManager.BackupKind.World) "世界备份" else "完整服务器"
-                        val coreLabel = if (info.kind == BackupManager.BackupKind.Server) " · 核心: ${info.coreTag ?: "—"}" else ""
-                        val detail = "$kindLabel · ${info.origin?.label ?: "历史"} · 目录: ${info.dirName ?: "—"}" +
-                            "$coreLabel · ${formatBackupTime(info.createdTime, f.lastModified())} · ${formatBytesCompat(f.length())}"
+                        val kindLabel = if (info.kind == BackupManager.BackupKind.World) stringResource(R.string.bk_type_world) else stringResource(R.string.bk_type_server)
+                        val coreLabel = if (info.kind == BackupManager.BackupKind.Server) stringResource(R.string.bk_core_prefix, info.coreTag ?: "—") else ""
+                        val detail = "$kindLabel · ${originLabel(info.origin)} · ${stringResource(R.string.bk_dir_prefix, info.dirName ?: "—")}" +
+                            "$coreLabel · ${formatBackupTime(info.createdTime, f.lastModified(), stringResource(R.string.bk_unknown_time))} · ${formatBytesCompat(f.length())}"
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(f.name, fontSize = 11.sp, fontWeight = FontWeight.Medium, maxLines = 1)
@@ -523,7 +528,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
 
             // 旧应用私有快照仅保留读取、恢复和删除能力，不再创建新文件。
             McCard(
-                title = "历史私有快照（${snapshots.size}）",
+                title = stringResource(R.string.bk_snapshots_title, snapshots.size),
                 trailing = {
                     IconButton(onClick = { vm.loadSnapshots() }, modifier = Modifier.size(McIcon.Touch)) {
                         Icon(Icons.Outlined.Refresh, stringResource(R.string.s333), tint = Indigo, modifier = Modifier.size(McIcon.Action))
@@ -591,7 +596,20 @@ private fun formatBytesCompat(bytes: Long): String {
     return "%.1f MB".format(bytes / 1024.0 / 1024.0)
 }
 
-private fun formatBackupTime(parsed: Long, modified: Long): String {
+private fun formatBackupTime(parsed: Long, modified: Long, unknownLabel: String): String {
     val time = parsed.takeIf { it > 0 } ?: modified
-    return if (time > 0) SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(time)) else "未知时间"
+    return if (time > 0) SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(time)) else unknownLabel
+}
+
+@Composable
+private fun autoBackupTypeLabel(type: AutoBackupType): String = when (type) {
+    AutoBackupType.World -> stringResource(R.string.bk_type_world)
+    AutoBackupType.Server -> stringResource(R.string.bk_type_server)
+}
+
+@Composable
+private fun originLabel(origin: BackupManager.BackupOrigin?): String = when (origin) {
+    BackupManager.BackupOrigin.Manual -> stringResource(R.string.bk_origin_manual)
+    BackupManager.BackupOrigin.Automatic -> stringResource(R.string.bk_origin_auto)
+    null -> stringResource(R.string.bk_origin_history)
 }

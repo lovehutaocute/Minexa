@@ -43,37 +43,39 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.Context
+import androidx.compose.ui.res.stringResource
+import com.mineserve.mobile.R
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.TerminalDisplayLine
 import com.mineserve.mobile.ui.TerminalLogTone
 import com.mineserve.mobile.ui.TerminalSessionType
 
-private data class QuickMcCommand(val emoji: String, val label: String, val command: String)
+private data class QuickMcCommand(val emoji: String, val labelRes: Int, val command: String)
 
 private val quickMcCommands = listOf(
-    QuickMcCommand("☀️", "晴天", "weather clear"),
-    QuickMcCommand("🌧️", "下雨", "weather rain"),
-    QuickMcCommand("⛈️", "雷雨", "weather thunder"),
-    QuickMcCommand("🌅", "白天", "time set day"),
-    QuickMcCommand("🌙", "夜晚", "time set night"),
-    QuickMcCommand("🕛", "正午", "time set noon"),
-    QuickMcCommand("🕹️", "生存模式", "gamemode survival @p"),
-    QuickMcCommand("🧱", "创造模式", "gamemode creative @p"),
-    QuickMcCommand("🗺️", "冒险模式", "gamemode adventure @p"),
-    QuickMcCommand("👁️", "旁观模式", "gamemode spectator @p"),
-    QuickMcCommand("🕊️", "和平难度", "difficulty peaceful"),
-    QuickMcCommand("⚔️", "普通难度", "difficulty normal"),
-    QuickMcCommand("🔥", "困难难度", "difficulty hard"),
-    QuickMcCommand("💀", "杀死实体", "kill @e[type=!player]"),
-    QuickMcCommand("👥", "玩家列表", "list"),
-    QuickMcCommand("📍", "出生点", "spawnpoint @p"),
-    QuickMcCommand("🎒", "清空效果", "effect clear @p"),
-    QuickMcCommand("🛡️", "保留物品", "gamerule keepInventory true"),
-    QuickMcCommand("🚫", "关闭白名单", "whitelist off"),
-    QuickMcCommand("✅", "开启白名单", "whitelist on"),
-    QuickMcCommand("💾", "保存世界", "save-all"),
-    QuickMcCommand("❓", "帮助", "help"),
-    QuickMcCommand("🛑", "停止服务端", "stop")
+    QuickMcCommand("☀️", R.string.tc_weather_clear, "weather clear"),
+    QuickMcCommand("🌧️", R.string.tc_weather_rain, "weather rain"),
+    QuickMcCommand("⛈️", R.string.tc_weather_thunder, "weather thunder"),
+    QuickMcCommand("🌅", R.string.tc_time_day, "time set day"),
+    QuickMcCommand("🌙", R.string.tc_time_night, "time set night"),
+    QuickMcCommand("🕛", R.string.tc_time_noon, "time set noon"),
+    QuickMcCommand("🕹️", R.string.tc_gm_survival, "gamemode survival @p"),
+    QuickMcCommand("🧱", R.string.tc_gm_creative, "gamemode creative @p"),
+    QuickMcCommand("🗺️", R.string.tc_gm_adventure, "gamemode adventure @p"),
+    QuickMcCommand("👁️", R.string.tc_gm_spectator, "gamemode spectator @p"),
+    QuickMcCommand("🕊️", R.string.tc_diff_peaceful, "difficulty peaceful"),
+    QuickMcCommand("⚔️", R.string.tc_diff_normal, "difficulty normal"),
+    QuickMcCommand("🔥", R.string.tc_diff_hard, "difficulty hard"),
+    QuickMcCommand("💀", R.string.tc_kill_entities, "kill @e[type=!player]"),
+    QuickMcCommand("👥", R.string.tc_player_list, "list"),
+    QuickMcCommand("📍", R.string.tc_spawnpoint, "spawnpoint @p"),
+    QuickMcCommand("🎒", R.string.tc_clear_effects, "effect clear @p"),
+    QuickMcCommand("🛡️", R.string.tc_keep_inventory, "gamerule keepInventory true"),
+    QuickMcCommand("🚫", R.string.tc_whitelist_off, "whitelist off"),
+    QuickMcCommand("✅", R.string.tc_whitelist_on, "whitelist on"),
+    QuickMcCommand("💾", R.string.tc_save_world, "save-all"),
+    QuickMcCommand("❓", R.string.tc_help, "help"),
+    QuickMcCommand("🛑", R.string.tc_stop_server, "stop")
 )
 
 @Composable
@@ -87,12 +89,14 @@ fun TerminalScreen(vm: McViewModel) {
     val logPrefs = remember { context.getSharedPreferences("log_prefs", Context.MODE_PRIVATE) }
     var translateLogs by remember { mutableStateOf(logPrefs.getBoolean("localize", true)) }
     var showSettings by remember { mutableStateOf(false) }
+    // 日志汉化只对中文界面有意义，其它语言下隐藏入口并强制关闭翻译
+    val isChineseUi = java.util.Locale.getDefault().language == "zh"
     var autoScrollPaused by rememberSaveable { mutableStateOf(false) }
     var pendingDangerousCommand by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
     val rawLines = if (active.type == TerminalSessionType.Minecraft) mcLines else active.lines
     LaunchedEffect(Unit) {
-        vm.setLogTranslationEnabled(translateLogs)
+        vm.setLogTranslationEnabled(translateLogs && isChineseUi)
         vm.loadRecentTerminalLog()
     }
     // Keep the full session history for copy/export, but cap Compose nodes on low-end devices.
@@ -189,7 +193,7 @@ fun TerminalScreen(vm: McViewModel) {
                         .size(48.dp)
                         .background(Color(0xFF3996FF), RoundedCornerShape(8.dp))
                 ) {
-                    Icon(Icons.AutoMirrored.Outlined.Send, "发送", tint = Color.White)
+                    Icon(Icons.AutoMirrored.Outlined.Send, stringResource(R.string.tm_send), tint = Color.White)
                 }
             }
         }
@@ -202,33 +206,33 @@ fun TerminalScreen(vm: McViewModel) {
             .padding(terminalPadding)
     ) {
         Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("终端", color = Color(0xFFE8E8E8), fontSize = 22.sp, fontFamily = FontFamily.Monospace)
+            Text(stringResource(R.string.tm_title), color = Color(0xFFE8E8E8), fontSize = 22.sp, fontFamily = FontFamily.Monospace)
             Row {
-                IconButton(onClick = { showSettings = true }) { Icon(Icons.Outlined.Settings, "终端设置", tint = Color.White) }
+                if (isChineseUi) IconButton(onClick = { showSettings = true }) { Icon(Icons.Outlined.Settings, stringResource(R.string.tm_settings), tint = Color.White) }
                 IconButton(onClick = {
                     if (active.type == TerminalSessionType.Minecraft) vm.clearConsole()
                     else vm.clearTerminalSession(active.id)
-                }) { Icon(Icons.Outlined.Delete, "清空当前会话", tint = Color(0xFFFFA7A7)) }
+                }) { Icon(Icons.Outlined.Delete, stringResource(R.string.tm_clear_session), tint = Color(0xFFFFA7A7)) }
                 IconButton(onClick = { autoScrollPaused = !autoScrollPaused }) {
                     Icon(
                         if (autoScrollPaused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
-                        if (autoScrollPaused) "继续自动滚动" else "暂停自动滚动",
+                        if (autoScrollPaused) stringResource(R.string.tm_resume_scroll) else stringResource(R.string.tm_pause_scroll),
                         tint = if (autoScrollPaused) Color(0xFFFFC857) else Color.White
                     )
                 }
                 IconButton(onClick = {
                     val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     clipboard.setPrimaryClip(android.content.ClipData.newPlainText(active.name, rawLines.joinToString("\n") { it.text }))
-                    android.widget.Toast.makeText(context, "已复制当前日志", android.widget.Toast.LENGTH_SHORT).show()
-                }) { Icon(Icons.Outlined.ContentCopy, "复制当前日志", tint = Color.White) }
-                IconButton(onClick = vm::createTerminalSession) { Icon(Icons.Outlined.Add, "新建会话", tint = Color.White) }
+                    android.widget.Toast.makeText(context, context.getString(R.string.tm_copied), android.widget.Toast.LENGTH_SHORT).show()
+                }) { Icon(Icons.Outlined.ContentCopy, stringResource(R.string.tm_copy_log), tint = Color.White) }
+                IconButton(onClick = vm::createTerminalSession) { Icon(Icons.Outlined.Add, stringResource(R.string.tm_new_session), tint = Color.White) }
             }
         }
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             sessions.forEach { session ->
                 Row(Modifier.background(if (session.id == activeId) Color(0xFF2B313C) else Color(0xFF20242C), RoundedCornerShape(8.dp)).padding(start = 12.dp), horizontalArrangement = Arrangement.Center) {
                     Text(session.name, color = Color(0xFFE8E8E8), fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp).clickable { vm.selectTerminalSession(session.id) })
-                    if (session.type == TerminalSessionType.Termux) IconButton(onClick = { vm.closeTerminalSession(session.id) }) { Icon(Icons.Outlined.Close, "关闭", tint = Color(0xFF999999)) } else Spacer(Modifier.width(8.dp))
+                    if (session.type == TerminalSessionType.Termux) IconButton(onClick = { vm.closeTerminalSession(session.id) }) { Icon(Icons.Outlined.Close, stringResource(R.string.tm_close), tint = Color(0xFF999999)) } else Spacer(Modifier.width(8.dp))
                 }
             }
         }
@@ -237,7 +241,7 @@ fun TerminalScreen(vm: McViewModel) {
                 quickMcCommands.forEach { item ->
                     AssistChip(
                         onClick = { sendCommand(item.command) },
-                        label = { Text("${item.emoji} ${item.label}", fontSize = 11.sp) }
+                        label = { Text("${item.emoji} ${stringResource(item.labelRes)}", fontSize = 11.sp) }
                     )
                 }
             }
@@ -263,29 +267,29 @@ fun TerminalScreen(vm: McViewModel) {
     }
     if (showSettings) AlertDialog(
         onDismissRequest = { showSettings = false },
-        title = { Text("终端设置") },
+        title = { Text(stringResource(R.string.tm_settings)) },
         text = {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text("常用日志汉化\n仅改变终端显示，保留原始日志")
+                Text(stringResource(R.string.tm_localize))
                 Switch(
                     checked = translateLogs,
                     onCheckedChange = {
                         translateLogs = it
                         logPrefs.edit().putBoolean("localize", it).apply()
-                        vm.setLogTranslationEnabled(it)
+                        vm.setLogTranslationEnabled(it && isChineseUi)
                     }
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { showSettings = false }) { Text("完成") } }
+        confirmButton = { TextButton(onClick = { showSettings = false }) { Text(stringResource(R.string.tm_done)) } }
     )
     pendingDangerousCommand?.let { command ->
         AlertDialog(
             onDismissRequest = { pendingDangerousCommand = null },
-            title = { Text("确认执行危险指令", color = Color(0xFFFF7B72)) },
-            text = { Text("该指令可能停止服务端、清除实体或关闭白名单：\n\n$command") },
+            title = { Text(stringResource(R.string.tm_danger_title), color = Color(0xFFFF7B72)) },
+            text = { Text(stringResource(R.string.tm_danger_body, command)) },
             dismissButton = {
-                TextButton(onClick = { pendingDangerousCommand = null }) { Text("取消") }
+                TextButton(onClick = { pendingDangerousCommand = null }) { Text(stringResource(R.string.s402)) }
             },
             confirmButton = {
                 TextButton(
@@ -294,7 +298,7 @@ fun TerminalScreen(vm: McViewModel) {
                         vm.sendCommand(command)
                     },
                     colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFF7B72))
-                ) { Text("确认执行") }
+                ) { Text(stringResource(R.string.tm_danger_confirm)) }
             }
         )
     }

@@ -8,6 +8,7 @@ import com.mineserve.mobile.data.TunnelStateAggregator
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.server.tunnel.BoreBackend
+import com.mineserve.mobile.server.tunnel.EasyTierBackend
 import com.mineserve.mobile.server.tunnel.FrpBackend
 import com.mineserve.mobile.server.tunnel.MeFrpBackend
 import com.mineserve.mobile.server.tunnel.SakuraFrpBackend
@@ -88,7 +89,9 @@ class TunnelManager internal constructor(
         TunnelType.Bore to BoreBackend(),
         TunnelType.Stun to stunBackendImpl,
         TunnelType.SakuraFrp to SakuraFrpBackend(frpcRuntime, frpcProcessManager),
-        TunnelType.MeFrp to MeFrpBackend(frpcRuntime, frpcProcessManager)
+        TunnelType.MeFrp to MeFrpBackend(frpcRuntime, frpcProcessManager),
+        // EasyTier 是独立通道：不占 frpc 进程、不占 STUN 的 socket，可与前两条并存
+        TunnelType.EasyTier to EasyTierBackend(context)
     ).onEach { (_, backend) ->
         backend.attachLog { msg -> logSink("[tunnel] $msg") }
     }
@@ -108,6 +111,11 @@ class TunnelManager internal constructor(
 
     /** STUN 通道的实时状态（网络页 STUN 卡片订阅）。 */
     val stunState: StateFlow<TunnelState> = _stunState.asStateFlow()
+
+    private val _easyTierState = MutableStateFlow(TunnelState())
+
+    /** EasyTier 通道的实时状态（网络页组网卡片订阅）。 */
+    val easyTierState: StateFlow<TunnelState> = _easyTierState.asStateFlow()
 
     /**
      * 两条通道的聚合状态，保留给不区分通道的旧调用方。
@@ -132,6 +140,8 @@ class TunnelManager internal constructor(
                             if (backend === frpBackend) publish(TunnelLane.Frp, backendState)
 
                         TunnelLane.Stun -> publish(TunnelLane.Stun, backendState)
+
+                        TunnelLane.EasyTier -> publish(TunnelLane.EasyTier, backendState)
                     }
                 }
             }
@@ -139,8 +149,11 @@ class TunnelManager internal constructor(
     }
 
     /** 后端所属通道。按 [TunnelType] 判定，而不是按对象身份 —— 便于测试注入替身。 */
-    private fun laneOf(backend: TunnelBackend): TunnelLane =
-        if (backend.type == TunnelType.Stun) TunnelLane.Stun else TunnelLane.Frp
+    private fun laneOf(backend: TunnelBackend): TunnelLane = when (backend.type) {
+        TunnelType.Stun -> TunnelLane.Stun
+        TunnelType.EasyTier -> TunnelLane.EasyTier
+        else -> TunnelLane.Frp
+    }
 
     /**
      * 本次启动该用哪个后端类型。
@@ -158,6 +171,7 @@ class TunnelManager internal constructor(
      */
     private fun typeFor(lane: TunnelLane, config: McConfig): TunnelType = when (lane) {
         TunnelLane.Stun -> TunnelType.Stun
+        TunnelLane.EasyTier -> TunnelType.EasyTier
         TunnelLane.Frp -> config.tunnelType
     }
 
@@ -182,6 +196,20 @@ class TunnelManager internal constructor(
     suspend fun stopStun() = stopLane(TunnelLane.Stun)
 
     /**
+     * 启动 EasyTier 组网。与 FRP / STUN 完全独立 —— 它走 App 内的 VpnService，
+     * 不和 frpc 进程抢资源，也不占 STUN 的 socket。
+     */
+    suspend fun startEasyTier(config: McConfig): Result<Unit> =
+        startOnLane(TunnelLane.EasyTier, config)
+
+    /** 停止 EasyTier 组网。不影响另外两条通道。 */
+    suspend fun stopEasyTier() = stopLane(TunnelLane.EasyTier)
+
+    /** EasyTier 后端实例（界面要读它派生的虚拟 IP 做"玩家该连哪个地址"的说明）。 */
+    val easyTierBackend: EasyTierBackend?
+        get() = backends[TunnelType.EasyTier] as? EasyTierBackend
+
+    /**
      * 往隧道日志里写一行调用方的说明。
      *
      * 界面上的 Snackbar 一闪而过，而「隧道日志」是用户出问题时唯一会回头看的地方，
@@ -204,6 +232,7 @@ class TunnelManager internal constructor(
     suspend fun stop() {
         stopFrp()
         stopStun()
+        stopEasyTier()
     }
 
     private suspend fun startOnLane(lane: TunnelLane, config: McConfig): Result<Unit> {
@@ -266,15 +295,19 @@ class TunnelManager internal constructor(
     private fun currentBackend(lane: TunnelLane): TunnelBackend? = when (lane) {
         TunnelLane.Frp -> frpBackend
         TunnelLane.Stun -> backends[TunnelType.Stun]
+        TunnelLane.EasyTier -> backends[TunnelType.EasyTier]
     }
 
     private fun publish(lane: TunnelLane, state: TunnelState) {
         when (lane) {
             TunnelLane.Frp -> _frpState.value = state
             TunnelLane.Stun -> _stunState.value = state
+            TunnelLane.EasyTier -> _easyTierState.value = state
         }
         // 通道流一改动就同步重算聚合值，避免聚合值落后一拍。
-        _state.value = TunnelStateAggregator.aggregate(_frpState.value, _stunState.value)
+        _state.value = TunnelStateAggregator.aggregate(
+            _frpState.value, _stunState.value, _easyTierState.value
+        )
     }
 
     fun destroy() {

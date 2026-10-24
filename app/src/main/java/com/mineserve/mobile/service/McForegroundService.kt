@@ -64,6 +64,15 @@ class McForegroundService : Service() {
     @Volatile private var cachedDirName: String? = null
     /** 是否已调用过 startForeground（幂等护栏，见 [ensureForeground]） */
     @Volatile private var foregroundStarted = false
+
+    /**
+     * 常驻通知正文来自 `getString`，Service 的 base Context 不走 Application 那层覆盖，
+     * 必须自己套一次，否则应用内切了语言、通知仍是系统语言。
+     */
+    override fun attachBaseContext(base: android.content.Context) {
+        super.attachBaseContext(com.mineserve.mobile.data.LocaleManager.wrap(base))
+    }
+
     private val watchdogStarted = java.util.concurrent.atomic.AtomicBoolean(false)
     private val chatRegex = Regex("<([A-Za-z0-9_]{1,16})>\\s*(.+)$")
     private val joinRegex = Regex(":\\s*([A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?joined the game")

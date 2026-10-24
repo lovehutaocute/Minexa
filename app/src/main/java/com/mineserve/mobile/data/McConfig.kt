@@ -64,7 +64,17 @@ enum class TunnelType(val displayName: String, val description: String) {
     Bore("bore", "自建服务器，协议最简，纯手机端运行无需下载二进制"),
     Stun("STUN 直连", "无需服务器，全锥形 NAT 下直连，带宽即家宽上行"),
     SakuraFrp("SakuraFrp", "填入 Token 管理隧道，官方节点，无需自建服务器"),
-    MeFrp("ME Frp", "填入 Token 管理隧道，免费节点，无需自建服务器")
+    MeFrp("ME Frp", "填入 Token 管理隧道，免费节点，无需自建服务器"),
+
+    /**
+     * EasyTier 组网。
+     *
+     * 它**不是** [tunnelType] 的候选：其余几项互斥（共用 frpc 进程或占用 frp 通道），
+     * 而 EasyTier 是独立通道（VpnService + JNI），可以和上面任意一条同时运行。
+     * 放在枚举里只是为了让 [com.mineserve.mobile.server.tunnel.TunnelBackend.type]
+     * 的表达完整 —— 界面上的入口是网络页单独一张卡片，不走"选择隧道类型"。
+     */
+    EasyTier("EasyTier 组网", "把服务器和玩家拉进同一个虚拟局域网，不依赖中转服务器")
 }
 
 /**
@@ -605,6 +615,34 @@ data class McConfig(
     val stunShowConnectionLog: Boolean = true,
     /** STUN: 自定义 STUN 服务器（host 或 host:port）；留空使用内置列表 */
     val stunServers: String = "",
+
+    /**
+     * EasyTier 组网参数。
+     *
+     * **独立通道**，不参与 [tunnelType] 的互斥选择 —— 它走 App 内的 VpnService + JNI，
+     * 与 frpc 子进程、与 STUN 的 socket 都不冲突，可以和它们同时开。
+     * 所以这里没有「是否启用」的开关：启停由网络页那张卡片上的按钮表达，
+     * 多存一个布尔只会在「配置说开着、进程其实没起」时制造歧义。
+     */
+
+    /** EasyTier: 网络名。玩家必须填同一个才在同一个虚拟局域网里。 */
+    val easyTierNetworkName: String = "",
+
+    /**
+     * EasyTier: 网络密钥。
+     *
+     * 这是**唯一**的访问控制手段（EasyTier 没有账号体系、没有 ACL），
+     * 所以等同于密码：长度给足、界面上默认掩码显示。
+     */
+    val easyTierNetworkSecret: String = "",
+
+    /**
+     * EasyTier: 本机虚拟 IP（不带掩码）。
+     *
+     * 留空表示按网络名稳定派生（见 `EasyTierSettings.deriveVirtualIp`）——
+     * 同一个网络名永远得到同一个地址，玩家那边的说明文字才不会每次都变。
+     */
+    val easyTierVirtualIp: String = "",
     val maxHeapMb: Int = 1024,            // -Xmx JVM 堆上限，按设备 RAM 给推荐值
     val autoRestartOnCrash: Boolean = false, // 默认关闭省电，避免误触发
     /**

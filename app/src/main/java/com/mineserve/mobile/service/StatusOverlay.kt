@@ -9,6 +9,7 @@ import android.graphics.drawable.StateListDrawable
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import com.mineserve.mobile.R
 import android.provider.Settings
 import android.util.Log
 import android.view.Gravity
@@ -61,7 +62,7 @@ internal object StatusOverlay {
                 background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(0xFF48D597.toInt()) }
                 layoutParams = LinearLayout.LayoutParams(dp(8), dp(8)).apply { marginEnd = dp(10) }
             })
-            addView(TextView(context).also { info = it }.apply { text = "运行中 CPU:--%｜内存:--M"; setTextColor(0xFFE6EDF7.toInt()); textSize = 11f; maxLines = 1; layoutParams = LinearLayout.LayoutParams(0, WindowManager.LayoutParams.WRAP_CONTENT, 1f) })
+            addView(TextView(context).also { info = it }.apply { text = context.getString(R.string.sox_running_stats, "--%", "--M"); setTextColor(0xFFE6EDF7.toInt()); textSize = 11f; maxLines = 1; layoutParams = LinearLayout.LayoutParams(0, WindowManager.LayoutParams.WRAP_CONTENT, 1f) })
         }
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
         val params = WindowManager.LayoutParams(dp(180), dp(32), type, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE, PixelFormat.TRANSLUCENT).apply { gravity = Gravity.TOP or Gravity.START; x = dp(10); y = dp(80) }
@@ -78,7 +79,11 @@ internal object StatusOverlay {
             .onFailure { Log.w(TAG, "Unable to attach status overlay", it) }
     }
     fun update(cpuPercent: Int?, memoryMb: Long) {
-        mainHandler.post { info?.text = "运行中 CPU:${cpuPercent?.let { "$it%" } ?: "--%"}｜内存:${if (memoryMb > 0) "${memoryMb}M" else "--M"}" }
+        mainHandler.post {
+            val cpu = cpuPercent?.let { "$it%" } ?: "--%"
+            val mem = if (memoryMb > 0) "${memoryMb}M" else "--M"
+            info?.text = com.mineserve.mobile.McApplication.get().getString(R.string.sox_running_stats, cpu, mem)
+        }
     }
     @Synchronized
     fun hide(context: Context) {

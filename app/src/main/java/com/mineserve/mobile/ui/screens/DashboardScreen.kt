@@ -59,6 +59,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -98,6 +99,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -120,6 +122,7 @@ import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.ProgressTrack
 import com.mineserve.mobile.ui.QqGroupDialog
 import com.mineserve.mobile.ui.StepRow
+import com.mineserve.mobile.ui.installStepLabel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.FieldGray
@@ -670,7 +673,7 @@ private fun DashboardDependenciesCard(
                     com.mineserve.mobile.data.StepStatus.Active -> stringResource(R.string.s362)
                     com.mineserve.mobile.data.StepStatus.Wait -> stringResource(R.string.s363)
                 }
-                StepRow(name = "${idx + 1}. ${step.step.label}", status = step.status, tag = tag)
+                StepRow(name = "${idx + 1}. ${installStepLabel(step.step)}", status = step.status, tag = tag)
             }
             // 引擎排在依赖之后，同样用 StepRow 保持视觉一致。
             StepRow(
@@ -1348,7 +1351,7 @@ private fun SheetSwitchRow(
  *
  * 承载原先「服务控制」卡片里的运行环境选择与「高级启动选项」卡片里的自定义启动命令，
  * 外加运行模式、崩溃自动重启、跳过启动中进度。顺序固定为：
- * ① 运行环境 → ② 版本 → ③ 自定义启动命令 → ④ 崩溃自动重启 → ⑤ 跳过启动中进度。
+ * ① 运行环境 → ② 版本 → ③ JVM 内存上限 → ④ 自定义启动命令 → ⑤ 崩溃自动重启 → ⑥ 跳过启动中进度。
  *
  * 版本选择按运行环境**互不混用**：选 Termux Java 只列 Termux 的版本，选 FCL Java
  * 只列 FCL 已发布的版本（上游没有 8/11），选 PHP 只列 PHP。改动一律走
@@ -1363,6 +1366,7 @@ private fun StartSettingsSheet(
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val scope = rememberCoroutineScope()
+    val context = androidx.compose.ui.platform.LocalContext.current
     // 必须先把下滑动画播完再移除组件：ModalBottomSheet 不会自己退场，
     // 直接 onDismiss() 会让抽屉"啪"地消失。
     val closeSheet: () -> Unit = {
@@ -1609,7 +1613,53 @@ private fun StartSettingsSheet(
 
             Spacer(Modifier.height(14.dp))
 
-            // ③ 自定义启动命令
+            // ③ JVM 内存上限（原在设置页，现统一收到启动设置里：它本来就是启动参数 -Xmx）
+            Text(
+                stringResource(R.string.s1003),
+                color = Muted,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold
+            )
+            Spacer(Modifier.height(4.dp))
+            DebouncedTextField(
+                value = maxHeapMb.toString(),
+                onValueChange = { value ->
+                    // 范围 256–65536 MB，超界自动收敛并提示（不静默改值），与设置页原行为一致
+                    value.toIntOrNull()?.let { raw ->
+                        val mb = raw.coerceIn(256, 65536)
+                        if (mb != raw) {
+                            android.widget.Toast.makeText(
+                                context,
+                                context.getString(R.string.set_max_heap_range_hint),
+                                android.widget.Toast.LENGTH_SHORT
+                            ).show()
+                        }
+                        vm.setMaxHeap(mb)
+                    }
+                },
+                sanitize = { it.filter(Char::isDigit) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(stringResource(R.string.s1006), fontSize = 11.sp) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                textStyle = androidx.compose.ui.text.TextStyle(fontSize = 12.sp)
+            )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                stringResource(R.string.s1004),
+                color = Muted,
+                fontSize = 10.sp
+            )
+            Spacer(Modifier.height(2.dp))
+            Text(
+                stringResource(R.string.s1005),
+                color = Coral,
+                fontSize = 10.sp
+            )
+
+            Spacer(Modifier.height(14.dp))
+
+            // ④ 自定义启动命令
             SheetSwitchRow(
                 title = stringResource(R.string.dash_custom_command_title),
                 note = stringResource(R.string.dash_custom_command_note),
@@ -1649,7 +1699,7 @@ private fun StartSettingsSheet(
 
             Spacer(Modifier.height(14.dp))
 
-            // ④ 崩溃自动重启
+            // ⑤ 崩溃自动重启
             SheetSwitchRow(
                 title = stringResource(R.string.s396),
                 note = stringResource(R.string.s397),
@@ -1659,19 +1709,12 @@ private fun StartSettingsSheet(
 
             Spacer(Modifier.height(6.dp))
 
-            // ⑤ 跳过启动中进度
+            // ⑥ 跳过启动中进度
             SheetSwitchRow(
                 title = stringResource(R.string.dash_skip_startup_progress),
                 note = stringResource(R.string.dash_skip_startup_progress_note),
                 checked = skipStartupProgress,
                 onCheckedChange = { vm.setSkipStartupProgress(it) }
-            )
-
-            Spacer(Modifier.height(12.dp))
-            Text(
-                stringResource(R.string.s398, maxHeapMb),
-                color = Muted,
-                fontSize = 10.sp
             )
         }
     }

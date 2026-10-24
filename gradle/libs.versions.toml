@@ -14,6 +14,7 @@ commonsCompress = "1.27.1"
 aircompressor = "2.0.3"
 immutableCollections = "0.3.8"
 ftpserver = "1.2.0"
+zxing = "3.5.3"
 junit = "4.13.2"
 kotlinTest = "2.0.21"
 robolectric = "4.14.1"
@@ -40,6 +41,8 @@ commons-compress = { group = "org.apache.commons", name = "commons-compress", ve
 aircompressor = { group = "io.airlift", name = "aircompressor", version.ref = "aircompressor" }
 kotlinx-collections-immutable = { group = "org.jetbrains.kotlinx", name = "kotlinx-collections-immutable", version.ref = "immutableCollections" }
 apache-ftpserver = { group = "org.apache.ftpserver", name = "ftpserver-core", version.ref = "ftpserver" }
+# 纯 Java 的二维码编码器（不含 Android 依赖，只用来把引导文本画成位图）
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 kotlin-test-junit = { group = "org.jetbrains.kotlin", name = "kotlin-test-junit", version.ref = "kotlinTest" }
 robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }

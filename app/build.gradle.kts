@@ -27,8 +27,8 @@ android {
         applicationId = "com.mineserve.mobile"
         minSdk = 26
         targetSdk = 28
-        versionCode = 57
-        versionName = "1.3.1"
+        versionCode = 58
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -145,6 +145,8 @@ dependencies {
     implementation(libs.aircompressor)
     implementation(libs.kotlinx.collections.immutable)
     implementation(libs.apache.ftpserver)
+    // 二维码：玩家引导页把「网络名 + 密钥 + 直连地址」编成一张码，玩家扫码即可照抄
+    implementation(libs.zxing.core)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test.junit)

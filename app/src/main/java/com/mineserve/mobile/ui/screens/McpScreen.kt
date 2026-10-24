@@ -182,13 +182,13 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
 
             // 监听地址开关：默认只绑 127.0.0.1（更安全），需要手机以外的 AI 助手接入时才显式开放局域网。
             // 修改后由 McpServerManager 观察到 (mcpAllowLan) 变化自动重启服务生效。
-            McCard(title = "局域网访问") {
+            McCard(title = stringResource(R.string.mcpx_lan_title)) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text("允许局域网访问", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.mcpx_lan_allow), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            if (config.mcpAllowLan) "局域网内任何设备都可访问，请保管好令牌"
-                            else "仅本机（127.0.0.1）可访问",
+                            if (config.mcpAllowLan) stringResource(R.string.mcpx_lan_on_hint)
+                            else stringResource(R.string.mcpx_lan_off_hint),
                             fontSize = 11.sp,
                             color = Muted
                         )
@@ -261,8 +261,8 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 }
                 Spacer(Modifier.height(4.dp))
                 Text(
-                    if (config.mcpAllowLan) "局域网内任何设备都可访问，请保管好令牌"
-                    else "仅本机可访问（默认只监听 127.0.0.1）",
+                    if (config.mcpAllowLan) stringResource(R.string.mcpx_lan_on_hint)
+                    else stringResource(R.string.mcpx_lan_off_hint_long),
                     fontSize = 11.sp,
                     color = Muted
                 )
@@ -279,7 +279,7 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(2.dp))
                 Text(
                     if (config.mcpAllowLan) stringResource(R.string.mcp_client_config_desc)
-                    else "将以下片段加入 MCP 客户端配置（仅本机可访问，地址固定为 127.0.0.1）",
+                    else stringResource(R.string.mcpx_snippet_hint),
                     fontSize = 11.sp,
                     color = Muted
                 )

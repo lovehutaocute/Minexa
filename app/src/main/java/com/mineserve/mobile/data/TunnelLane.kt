@@ -13,10 +13,13 @@ package com.mineserve.mobile.data
  *   所以 Frp / SakuraFrp / MeFrp 天生互斥）；
  * - [Stun]：应用内自己开 socket 做打洞与转发，不占用那个进程。
  *
- * 所以「FRP 与 STUN 可以同时运行」在技术上是成立的，需要的只是把
+ * - [EasyTier]：App 进程内的 VpnService + JNI 组网，既不是子进程也不占 frp 的进程，
+ *   所以同样可以与前两条并存。
+ *
+ * 所以「多条隧道可以同时运行」在技术上是成立的，需要的只是把
  * 「一个当前后端」拆成「每条通道一个当前后端」。
  */
-enum class TunnelLane { Frp, Stun }
+enum class TunnelLane { Frp, Stun, EasyTier }
 
 /**
  * 两条通道的聚合视图。
@@ -33,13 +36,23 @@ enum class TunnelLane { Frp, Stun }
  */
 object TunnelStateAggregator {
 
-    fun aggregate(frp: TunnelState, stun: TunnelState): TunnelState {
-        if (frp.status == TunnelStatus.Running) return frp
-        if (stun.status == TunnelStatus.Running) return stun
-        if (isActive(frp.status)) return frp
-        if (isActive(stun.status)) return stun
+    fun aggregate(frp: TunnelState, stun: TunnelState): TunnelState =
+        aggregate(frp, stun, TunnelState())
+
+    /**
+     * 三条通道的聚合。优先级：Frp > Stun > EasyTier。
+     *
+     * EasyTier 排最后是因为它面向「固定小圈子」——对外可访问性最弱的一条，
+     * 聚合值主要用于"有没有路能进服务器"这类判断，不宜由它充当代表。
+     */
+    fun aggregate(frp: TunnelState, stun: TunnelState, easyTier: TunnelState): TunnelState {
+        val running = listOf(frp, stun, easyTier).firstOrNull { it.status == TunnelStatus.Running }
+        if (running != null) return running
+        val active = listOf(frp, stun, easyTier).firstOrNull { isActive(it.status) }
+        if (active != null) return active
         if (frp.status != TunnelStatus.Idle) return frp
-        return stun
+        if (stun.status != TunnelStatus.Idle) return stun
+        return easyTier
     }
 
     /** 是否处于「用户看得见动静」的状态（既没在跑、也不算彻底静默）。 */

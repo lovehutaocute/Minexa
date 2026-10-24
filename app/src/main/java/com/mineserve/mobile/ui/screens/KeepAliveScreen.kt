@@ -164,15 +164,15 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(8.dp))
                 KeepAliveToggle(
-                    title = "运行时屏幕常亮",
-                    subtitle = "仅主界面可见时生效，服务器运行中保持屏幕常亮。",
+                    title = stringResource(R.string.kax_screen_on_title),
+                    subtitle = stringResource(R.string.kax_screen_on_subtitle),
                     checked = config.keepScreenOnWhileRunning,
                     onChange = vm::setKeepScreenOnWhileRunning
                 )
                 Spacer(Modifier.height(8.dp))
                 KeepAliveToggle(
-                    title = "运行状态悬浮窗",
-                    subtitle = "显示可拖动状态点；需要授予“显示在其他应用上层”权限。",
+                    title = stringResource(R.string.kax_overlay_title),
+                    subtitle = stringResource(R.string.kax_overlay_subtitle),
                     checked = config.keepStatusOverlay,
                     onChange = { enabled ->
                         if (enabled && Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(context)) {

@@ -17,39 +17,50 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Bolt
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.mineserve.mobile.McApplication
+import com.mineserve.mobile.data.AppLanguage
+import com.mineserve.mobile.data.AppUpdateService
 import com.mineserve.mobile.data.AptMirror
 import com.mineserve.mobile.data.DownloadMirror
+import com.mineserve.mobile.data.LocaleManager
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.QqGroupCard
 import com.mineserve.mobile.ui.SegPill
-import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.SubPage
-import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Muted
 
@@ -67,45 +78,52 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
     ) {
         HeaderBlock(eyebrow = stringResource(R.string.eyebrow_settings), title = stringResource(R.string.s186))
 
-        // JVM 内存上限
-        McCard(title = stringResource(R.string.s1003)) {
-            Text(
-                stringResource(R.string.s1004),
-                color = Muted,
-                fontSize = 11.sp
+        // 语言（全局偏好，放最前，一眼能找到）
+        LanguageCard()
+
+        // 关于：紧跟语言卡片，版本号 / 检查更新 / 仓库入口集中在一处
+        McCard(title = stringResource(R.string.s1023)) {
+            SettingEntry(
+                title = stringResource(R.string.update_current_version),
+                subtitle = "v${BuildConfig.VERSION_NAME}",
+                onClick = {} // 版本号行不可点击
             )
-            Text(
-                stringResource(R.string.s1005),
-                color = Coral,
-                fontSize = 10.sp
+            Spacer(Modifier.height(4.dp))
+            SettingEntry(
+                title = stringResource(R.string.update_check),
+                subtitle = lastCheckResult ?: stringResource(R.string.s1025),
+                onClick = { vm.checkForUpdate(manual = true) }
             )
-            Spacer(Modifier.height(8.dp))
-            DebouncedTextField(
-                value = config.maxHeapMb.toString(),
-                onValueChange = { v ->
-                    // 内存上限范围 256–65536 MB，超界自动收敛并提示（不静默改值）
-                    v.toIntOrNull()?.let { raw ->
-                        val mb = raw.coerceIn(256, 65536)
-                        if (mb != raw) {
-                            android.widget.Toast.makeText(
-                                context,
-                                context.getString(R.string.set_max_heap_range_hint),
-                                android.widget.Toast.LENGTH_SHORT
-                            ).show()
-                        }
-                        vm.setMaxHeap(mb)
-                    }
-                },
-                sanitize = { it.filter(Char::isDigit) },
-                singleLine = true,
-                label = { Text(stringResource(R.string.s1006)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
+            Spacer(Modifier.height(4.dp))
+            SettingEntry(
+                title = stringResource(R.string.settings_github_repo),
+                subtitle = stringResource(R.string.settings_github_repo_desc),
+                onClick = { openExternal(context, AppUpdateService.PROJECT_URL) }
             )
         }
 
         // 下载源设置（Termux bootstrap rootfs 下载源）
-        McCard(title = stringResource(R.string.s1007)) {
+        // 右上角闪电图标 = 「依次尝试下载源」：按顺序逐个测试，找到第一个可用源即选中它。
+        // 原先是一整条按钮，占掉一行高度；改成图标后信息密度更高，行为完全不变。
+        val testing by vm.mirrorTestRunning.collectAsState()
+        val testResult = vm.mirrorTestResult.collectAsState().value
+        McCard(
+            title = stringResource(R.string.s1007),
+            trailing = {
+                IconButton(
+                    onClick = { vm.testDownloadSources() },
+                    enabled = !testing,
+                    modifier = Modifier.size(McIcon.Touch)
+                ) {
+                    Icon(
+                        Icons.Outlined.Bolt,
+                        contentDescription = stringResource(R.string.st_mirror_test),
+                        tint = if (testing) Muted else Indigo,
+                        modifier = Modifier.size(McIcon.Action)
+                    )
+                }
+            }
+        ) {
             Text(
                 stringResource(R.string.st_mirror_hint),
                 color = Muted,
@@ -117,31 +135,19 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 DownloadMirror.values().forEach { mirror ->
                     SegPill(
-                        text = mirror.displayName,
+                        text = downloadMirrorLabel(mirror),
                         selected = config.downloadMirror == mirror,
                         onClick = { vm.setDownloadMirror(mirror) }
                     )
                 }
             }
-            Spacer(Modifier.height(10.dp))
-            // 「依次尝试下载源」：按顺序逐个测试，找到第一个可用源即选中它。
-            val testing by vm.mirrorTestRunning.collectAsState()
-            val testResult = vm.mirrorTestResult.collectAsState().value
-            Button(
-                onClick = { vm.testDownloadSources() },
-                enabled = !testing,
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = McShape.Control,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+            if (testing || testResult != null) {
+                Spacer(Modifier.height(8.dp))
                 Text(
-                    stringResource(if (testing) R.string.st_mirror_test_running else R.string.st_mirror_test),
-                    fontSize = 13.sp
+                    if (testing) stringResource(R.string.st_mirror_test_running) else testResult.orEmpty(),
+                    color = Muted,
+                    fontSize = 11.sp
                 )
-            }
-            if (testResult != null) {
-                Spacer(Modifier.height(6.dp))
-                Text(testResult, color = Muted, fontSize = 11.sp)
             }
         }
 
@@ -158,7 +164,7 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 AptMirror.values().filter { it != AptMirror.Official }.forEach { mirror ->
                     SegPill(
-                        text = mirror.displayName,
+                        text = aptMirrorLabel(mirror),
                         selected = config.aptMirror == mirror,
                         onClick = { vm.setAptMirror(mirror) }
                     )
@@ -248,47 +254,12 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
             }
         }
 
-        // 后台保活（大尺寸独立入口）
-        McCard(title = stringResource(R.string.s542)) {
-            Text(
-                stringResource(R.string.s1018),
-                color = Muted,
-                fontSize = 11.sp
-            )
-            Spacer(Modifier.height(10.dp))
-            Button(
-                onClick = { onNavigate(SubPage.KeepAlive) },
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = McShape.Control,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-            ) {
-                Text(stringResource(R.string.s1019), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-
         // 快捷入口（子页面跳转）
         McCard(title = stringResource(R.string.s1020)) {
             SettingEntry(
                 title = stringResource(R.string.s1021),
                 subtitle = stringResource(R.string.s1022),
                 onClick = { onNavigate(SubPage.DownloadHelp) }
-            )
-        }
-
-        // 关于
-        McCard(title = stringResource(R.string.s1023)) {
-            SettingEntry(
-                title = stringResource(R.string.update_current_version),
-                subtitle = "v${BuildConfig.VERSION_NAME}",
-                onClick = {} // 版本号行不可点击
-            )
-            Spacer(Modifier.height(4.dp))
-            SettingEntry(
-                title = stringResource(R.string.update_check),
-                subtitle = lastCheckResult ?: stringResource(R.string.s1025),
-                onClick = { vm.checkForUpdate(manual = true) }
             )
         }
 
@@ -367,5 +338,128 @@ private fun SettingEntry(
             Text(subtitle, color = Muted, fontSize = 11.sp)
         }
         Text("→", color = Indigo, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/**
+ * 语言选择卡片。
+ *
+ * 列表直接遍历 [AppLanguage.entries]，新增语言只需要加枚举项 + 一个 values-xx 资源目录，
+ * 这里不用改。切换后保存并 `recreate()` 当前 Activity —— 只有重建才会重新走
+ * `attachBaseContext`，让整棵 Compose 树与通知/桌面组件一起换成新语言。
+ */
+@Composable
+private fun downloadMirrorLabel(mirror: DownloadMirror): String = when (mirror) {
+    DownloadMirror.Auto -> stringResource(R.string.mirror_auto)
+    DownloadMirror.GitHub -> stringResource(R.string.mirror_github)
+    // 其余都是镜像域名本身，各语言一致，直接用枚举里的名字
+    else -> mirror.displayName
+}
+
+@Composable
+private fun aptMirrorLabel(mirror: AptMirror): String = when (mirror) {
+    AptMirror.Tuna -> stringResource(R.string.mirror_tuna)
+    AptMirror.Aliyun -> stringResource(R.string.mirror_aliyun)
+    AptMirror.Ustc -> stringResource(R.string.mirror_ustc)
+    AptMirror.Nju -> stringResource(R.string.mirror_nju)
+    AptMirror.Official -> stringResource(R.string.mirror_official)
+}
+
+@Composable
+private fun LanguageCard() {
+    val context = LocalContext.current
+    val current = remember { LocaleManager.current(context) }
+    var expanded by remember { mutableStateOf(false) }
+
+    McCard(title = stringResource(R.string.set_language_title)) {
+        Text(
+            stringResource(R.string.set_language_hint),
+            color = Muted,
+            fontSize = 11.sp
+        )
+        Spacer(Modifier.height(8.dp))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = true }
+                .padding(vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    languageLabel(current),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = Indigo
+                )
+            }
+            Text(stringResource(R.string.set_language_change), color = Indigo, fontSize = 12.sp)
+        }
+    }
+
+    if (expanded) {
+        AlertDialog(
+            onDismissRequest = { expanded = false },
+            shape = McShape.Dialog,
+            title = { Text(stringResource(R.string.set_language_title), fontWeight = FontWeight.Bold) },
+            text = {
+                Column(Modifier.fillMaxWidth()) {
+                    AppLanguage.selectable().forEach { language ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    expanded = false
+                                    if (LocaleManager.select(context, language)) {
+                                        // 先补刷不随 Activity 重建的界面，再重建整棵树
+                                        McApplication.get().refreshLocalizedSurfaces()
+                                        (context as? android.app.Activity)?.recreate()
+                                    }
+                                }
+                                .padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = language == current,
+                                onClick = null
+                            )
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                languageLabel(language),
+                                fontSize = 14.sp,
+                                color = if (language == current) Indigo else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { expanded = false }) {
+                    Text(stringResource(R.string.s620), color = Muted)
+                }
+            }
+        )
+    }
+}
+
+/** 语言的展示名：跟随系统用资源文案，其余用该语言自身的写法 */
+@Composable
+private fun languageLabel(language: AppLanguage): String =
+    if (language.isSystem) stringResource(R.string.set_language_system) else language.endonym
+
+/**
+ * 用系统浏览器打开外部链接。
+ *
+ * 无浏览器 / 无匹配 Activity 时静默返回 —— 与下面「意见反馈」的处理一致，
+ * 不为「点一下没反应」这种场景弹崩溃对话框。
+ */
+private fun openExternal(context: android.content.Context, url: String) {
+    try {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    } catch (e: Exception) {
+        // 设备无可用的浏览器，静默
     }
 }

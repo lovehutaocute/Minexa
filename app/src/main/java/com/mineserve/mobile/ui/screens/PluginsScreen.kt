@@ -116,31 +116,31 @@ private enum class PluginTab(val labelRes: Int) { Installed(R.string.s735), Uplo
 private enum class ResourceType(val labelRes: Int) { Plugin(R.string.s737), Mod(R.string.s738) }
 
 /** 插件资源站点（点击跳转官网） */
-private data class PluginSite(val name: String, val descRes: Int, val url: String)
+private data class PluginSite(val nameRes: Int, val descRes: Int, val url: String)
 
 private val pluginSites = listOf(
     PluginSite(
-        "SpigotMC Resources",
+        R.string.plx_site_spigot,
         R.string.s739,
         "https://www.spigotmc.org/resources/"
     ),
     PluginSite(
-        "Hangar（Paper 官方）",
+        R.string.plx_site_hangar,
         R.string.s741,
         "https://hangar.papermc.io/"
     ),
     PluginSite(
-        "Modrinth",
+        R.string.plx_site_modrinth,
         R.string.s742,
         "https://modrinth.com/plugins"
     ),
     PluginSite(
-        "BuiltByBit（原 MC-Market）",
+        R.string.plx_site_builtbybit,
         R.string.s744,
         "https://builtbybit.com"
     ),
     PluginSite(
-        "CurseForge Bukkit 分区",
+        R.string.plx_site_curseforge,
         R.string.s746,
         "https://www.curseforge.com/minecraft/bukkit-plugins"
     )
@@ -529,7 +529,7 @@ fun PluginsScreen(vm: McViewModel) {
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
-                            Text(site.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            Text(stringResource(site.nameRes), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             Text(
                                 stringResource(site.descRes),
                                 color = Muted,
@@ -1383,7 +1383,7 @@ fontWeight = FontWeight.SemiBold
                 enabled = !isLoadingMore,
                 modifier = Modifier.fillMaxWidth().height(36.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text(if (isLoadingMore) "加载中..." else stringResource(R.string.pl_load_more), color = Indigo, fontSize = 11.sp) }
+            ) { Text(if (isLoadingMore) stringResource(R.string.plx_loading) else stringResource(R.string.pl_load_more), color = Indigo, fontSize = 11.sp) }
         }
     }
 
@@ -1567,7 +1567,7 @@ private fun PluginModrinthCard(
                 enabled = !isLoadingMore,
                 modifier = Modifier.fillMaxWidth().height(36.dp),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp, vertical = 0.dp)
-            ) { Text(if (isLoadingMore) "加载中..." else stringResource(R.string.pl_load_more), color = Indigo, fontSize = 11.sp) }
+            ) { Text(if (isLoadingMore) stringResource(R.string.plx_loading) else stringResource(R.string.pl_load_more), color = Indigo, fontSize = 11.sp) }
         }
     }
 

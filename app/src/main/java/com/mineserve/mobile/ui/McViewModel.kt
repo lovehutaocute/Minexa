@@ -53,6 +53,9 @@ import com.mineserve.mobile.server.PlayerManager
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
 import com.mineserve.mobile.server.tunnel.StunDiagnostics
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngineStore
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
 import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntimeDownloader
 import com.mineserve.mobile.server.PowerNukkitXConfigManager
@@ -566,6 +569,88 @@ class McViewModel(
      */
     val stunDiagnostics: StateFlow<StunDiagnostics> = tunnelManager.stunDiagnostics
 
+    // ── EasyTier 组网引擎（联网下载） ─────────────────────────────
+
+    /** EasyTier 引擎信息快照，供依赖页展示。结构复用 frpc 的那套。 */
+    data class EasyTierEngineInfo(
+        val installed: Boolean = false,
+        val version: String? = null,
+        val sizeBytes: Long = 0,
+        val sha256: String? = null
+    )
+
+    private val _easyTierEngine = MutableStateFlow(EasyTierEngineInfo())
+    val easyTierEngine: StateFlow<EasyTierEngineInfo> = _easyTierEngine.asStateFlow()
+
+    private val _easyTierEngineMessage = MutableStateFlow<String?>(null)
+    val easyTierEngineMessage: StateFlow<String?> = _easyTierEngineMessage.asStateFlow()
+
+    fun clearEasyTierEngineMessage() {
+        _easyTierEngineMessage.value = null
+    }
+
+    /** 在线下载状态（与 frpc 引擎共用 [DownloadState]）。 */
+    private val _easyTierDownload = MutableStateFlow<DownloadState>(DownloadState.Idle)
+    val easyTierDownload: StateFlow<DownloadState> = _easyTierDownload.asStateFlow()
+
+    /** 刷新 EasyTier 引擎状态（含 SHA-256 计算，走 IO 线程）。 */
+    fun refreshEasyTierEngine() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val installed = EasyTierEngineStore.isInstalled()
+            _easyTierEngine.value = EasyTierEngineInfo(
+                installed = installed,
+                version = if (installed) EasyTierEngineStore.ENGINE_VERSION else null,
+                sizeBytes = if (installed) EasyTierEngineStore.engineFile().length() else 0,
+                sha256 = if (installed) EasyTierEngineStore.installedSha256() else null
+            )
+        }
+    }
+
+    fun downloadEasyTierEngine() {
+        if (_easyTierDownload.value is DownloadState.Downloading) return
+        viewModelScope.launch(Dispatchers.IO) {
+            _easyTierDownload.value = DownloadState.Downloading(-1f)
+            try {
+                val version = EasyTierEngineStore.download { fraction ->
+                    _easyTierDownload.value = DownloadState.Downloading(fraction)
+                }
+                _easyTierEngineMessage.value = str(R.string.vm_engine_downloaded) +
+                    str(R.string.vm_version_suffix, version)
+            } catch (e: Exception) {
+                _easyTierEngineMessage.value =
+                    str(R.string.vm_download_failed, e.message ?: str(R.string.vm_network_unavailable))
+            } finally {
+                _easyTierDownload.value = DownloadState.Idle
+                refreshEasyTierEngine()
+            }
+        }
+    }
+
+    /** 从用户选中的文件导入 EasyTier 引擎（.so）。 */
+    fun importEasyTierEngine(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                app.contentResolver.openInputStream(uri)?.use { input ->
+                    EasyTierEngineStore.install(input)
+                } ?: throw IllegalStateException(str(R.string.vm_cannot_read_file))
+                _easyTierEngineMessage.value = str(R.string.vm_engine_imported) +
+                    str(R.string.vm_version_suffix, EasyTierEngineStore.ENGINE_VERSION)
+                refreshEasyTierEngine()
+            } catch (e: Exception) {
+                _easyTierEngineMessage.value = str(R.string.vm_import_failed, e.message ?: "")
+            }
+        }
+    }
+
+    fun uninstallEasyTierEngine() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val ok = EasyTierEngineStore.uninstall()
+            _easyTierEngineMessage.value =
+                if (ok) str(R.string.vm_engine_uninstalled) else str(R.string.vm_uninstall_failed)
+            refreshEasyTierEngine()
+        }
+    }
+
     // ── frpc 引擎（内置引擎，不依赖 Termux） ────────────────────────
 
     /** frpc 引擎信息快照，供隧道页展示「已安装 / 未安装」。 */
@@ -630,10 +715,10 @@ class McViewModel(
                 val result = downloader.downloadAndInstall(manifest) { fraction ->
                     _frpcDownload.value = DownloadState.Downloading(fraction)
                 }
-                _frpcEngineMessage.value = "引擎下载完成" +
-                    (result.version?.let { "（版本 $it）" } ?: "")
+                _frpcEngineMessage.value = str(R.string.vm_engine_downloaded) +
+                    (result.version?.let { str(R.string.vm_version_suffix, it) } ?: "")
             } catch (e: Exception) {
-                _frpcEngineMessage.value = "下载失败：${e.message ?: "网络不可用"}"
+                _frpcEngineMessage.value = str(R.string.vm_download_failed, e.message ?: str(R.string.vm_network_unavailable))
             } finally {
                 _frpcDownload.value = DownloadState.Idle
                 refreshFrpcEngine()
@@ -654,12 +739,12 @@ class McViewModel(
                 val name = queryDisplayName(uri)
                 app.contentResolver.openInputStream(uri)?.use { input ->
                     frpcRuntime.install(input, name)
-                } ?: throw IllegalStateException("无法读取所选文件")
-                _frpcEngineMessage.value = "引擎导入成功" +
-                    (frpcRuntime.installedVersion?.let { "（版本 $it）" } ?: "")
+                } ?: throw IllegalStateException(str(R.string.vm_cannot_read_file))
+                _frpcEngineMessage.value = str(R.string.vm_engine_imported) +
+                    (frpcRuntime.installedVersion?.let { str(R.string.vm_version_suffix, it) } ?: "")
                 refreshFrpcEngine()
             } catch (e: Exception) {
-                _frpcEngineMessage.value = "导入失败：${e.message}"
+                _frpcEngineMessage.value = str(R.string.vm_import_failed, e.message ?: "")
             }
         }
     }
@@ -668,7 +753,7 @@ class McViewModel(
     fun uninstallFrpcEngine() {
         viewModelScope.launch(Dispatchers.IO) {
             val ok = frpcRuntime.uninstall()
-            _frpcEngineMessage.value = if (ok) "引擎已卸载" else "卸载失败，请重试"
+            _frpcEngineMessage.value = if (ok) str(R.string.vm_engine_uninstalled) else str(R.string.vm_uninstall_failed)
             refreshFrpcEngine()
         }
     }
@@ -1584,12 +1669,12 @@ class McViewModel(
     fun updateServerDisplayInfo(oldName: String, newName: String, newVersion: String, newCore: com.mineserve.mobile.data.ServerCore? = null): String? {
         val name = newName.trim()
         val version = newVersion.trim()
-        if (name.isEmpty()) return "服务器名称不能为空"
+        if (name.isEmpty()) return str(R.string.vm_name_empty)
         val current = config.value
         val target = current.installedCores.firstOrNull { it.name == oldName }
-            ?: return "未找到服务器：$oldName"
+            ?: return str(R.string.vm_server_not_found, oldName)
         if (current.installedCores.any { it.name == name && it.name != oldName }) {
-            return "已存在同名服务器：$name"
+            return str(R.string.vm_server_duplicate, name)
         }
         updateConfig { cfg ->
             cfg.copy(
@@ -2282,12 +2367,12 @@ class McViewModel(
                 if (mirror != null) {
                     updateConfig { it.copy(downloadMirror = mirror) }
                     repo.termuxRuntime.setDownloadMirror(mirror)
-                    appendMirrorTest("已选用可用下载源：${mirror.displayName}")
+                    appendMirrorTest(str(R.string.vm_mirror_selected, mirror.displayName))
                 } else {
-                    appendMirrorTest("全部下载源均不可用，请检查网络后重试")
+                    appendMirrorTest(str(R.string.vm_mirror_all_failed))
                 }
             } catch (e: Exception) {
-                appendMirrorTest("测试失败：${e.message ?: "未知错误"}")
+                appendMirrorTest(str(R.string.vm_mirror_test_failed, e.message ?: str(R.string.vm_unknown_error)))
             } finally {
                 _mirrorTestRunning.value = false
             }
@@ -2614,6 +2699,148 @@ class McViewModel(
         }
     }
 
+    // ── EasyTier 组网 ────────────────────────────────────────
+    //
+    // 与 FRP / STUN 的区别全在「谁掌握角色」上：那两条是「把本机端口暴露到公网」，
+    // 玩家用公网地址进；EasyTier 是把服务器和玩家拉进同一个虚拟局域网，
+    // 玩家用**局域网地址**进。所以这里没有「公网地址」的概念，
+    // 取而代之的是「本机虚拟 IP」——永远同一台网络下同一个地址。
+
+    /** EasyTier 通道的实时状态（网络页组网卡片订阅）。 */
+    val easyTierState: StateFlow<TunnelState> = tunnelManager.easyTierState
+
+    /**
+     * 引擎是否可用。未下载时为 false —— UI 据此禁用并给出下载指引。
+     * 下载完成后再次调用即返回 true（引擎是延迟加载的）。
+     */
+    val easyTierAvailable: Boolean get() = EasyTierEngine.available
+
+    /** 引擎文件是否已下载到本地（与"能否加载"是两回事：加载还依赖首次使用）。 */
+    val easyTierEngineInstalled: Boolean get() = EasyTierEngineStore.isInstalled()
+
+    /**
+     * 补齐组网身份：网络名或密钥为空时自动生成一套。
+     *
+     * 「填个网络名就能分享给任何人」的前提是**用户不用自己想名字**。
+     * 名字生成成 `mc-xxxxxx` 这种带随机后缀的形式，两个人同时第一次用也不会撞名。
+     * 已有值的字段一律不覆盖 —— 用户改过的网络名不能被一次进入页面就冲掉。
+     */
+    fun ensureEasyTierIdentity() {
+        val cfg = config.value
+        if (cfg.easyTierNetworkName.isNotBlank() && cfg.easyTierNetworkSecret.isNotBlank()) return
+        updateConfig {
+            it.copy(
+                easyTierNetworkName = it.easyTierNetworkName.ifBlank {
+                    "mc-" + EasyTierSettings.generateSecret().take(6)
+                },
+                easyTierNetworkSecret = it.easyTierNetworkSecret.ifBlank {
+                    EasyTierSettings.generateSecret()
+                }
+            )
+        }
+    }
+
+    /**
+     * 换一套网络密钥。
+     *
+     * 用途是「把之前那批人踢出去」：EasyTier 没有账号体系、没有 ACL，
+     * 密钥是**唯一**的访问控制手段，泄漏了只能换。
+     */
+    fun regenerateEasyTierSecret() {
+        updateConfig { it.copy(easyTierNetworkSecret = EasyTierSettings.generateSecret()) }
+        _messageFlow.tryEmit(str(R.string.easytier_secret_regenerated))
+    }
+
+    /**
+     * 本机在虚拟网里的地址（`虚拟IP:转发端口`）。网络名为空时返回空串。
+     *
+     * 端口取的是**转发端口**而不是服务端端口：两个监听不能占同一个端口，
+     * 谁后绑谁失败（见 `EasyTierSettings.toToml`）。服务端端口一变，
+     * 转发目标跟着变，但玩家看到的端口固定是转发端口。
+     */
+    fun easyTierAddress(): String {
+        val cfg = config.value
+        val name = cfg.easyTierNetworkName.trim()
+        val ip = cfg.easyTierVirtualIp.trim()
+            .ifBlank { if (name.isBlank()) "" else EasyTierSettings.deriveVirtualIp(name) }
+        return EasyTierSettings.playerAddress(ip, realServerPort())
+    }
+
+    /** 给玩家的整段说明。复制按钮与二维码用的是**同一份文本**，不允许各拼一套。 */
+    fun easyTierShareText(): String {
+        val cfg = config.value
+        return str(
+            R.string.easytier_share_text,
+            cfg.easyTierNetworkName.trim(),
+            cfg.easyTierNetworkSecret.trim(),
+            easyTierAddress()
+        )
+    }
+
+    fun startEasyTier() {
+        if (!isBootstrapped.value) {
+            _errorFlow.tryEmit(str(R.string.s192))
+            return
+        }
+        if (!EasyTierEngine.available) {
+            _errorFlow.tryEmit(str(R.string.easytier_engine_missing))
+            return
+        }
+        if (easyTierState.value.status == TunnelStatus.Starting) {
+            _errorFlow.tryEmit(str(R.string.s200))
+            return
+        }
+        viewModelScope.launch {
+            try {
+                // 端口真源，理由同 STUN：配置文件被外部改动过时，
+                // port_forward 会把虚拟网里的流量转到一个没人监听的端口上。
+                refreshServerPropertiesNow()
+                val targetPort = realServerPort()
+                val result = tunnelManager.startEasyTier(
+                    config.value.copy(localPort = targetPort, tunnelType = TunnelType.EasyTier)
+                )
+                val failure = result.exceptionOrNull()
+                if (failure != null) {
+                    _errorFlow.tryEmit(failure.message ?: str(R.string.s204, ""))
+                } else {
+                    reportStart(easyTierState.value)
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit(str(R.string.s206, e.message))
+            }
+        }
+    }
+
+    fun stopEasyTier() {
+        viewModelScope.launch {
+            try {
+                tunnelManager.stopEasyTier()
+                _messageFlow.tryEmit(str(R.string.s207))
+            } catch (e: Exception) {
+                _errorFlow.tryEmit(str(R.string.s208, e.message))
+            }
+        }
+    }
+
+    /**
+     * 用户在系统 VPN 授权框上点了「拒绝」/直接返回。
+     *
+     * 必须单独提示：`establish()` 在无授权时只返回 null，日志里也只有一句
+     * 「系统拒绝」，从那条信息看不出是用户自己关掉的还是系统拦的。
+     */
+    fun notifyEasyTierVpnDenied() {
+        _errorFlow.tryEmit(str(R.string.easytier_vpn_denied))
+    }
+
+    /** 复制给玩家的整段说明（组网卡片与引导页共用）。 */
+    fun copyEasyTierGuide(context: android.content.Context) {
+        val text = easyTierShareText()
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("EasyTier", text))
+        _messageFlow.tryEmit(str(R.string.easytier_copied))
+    }
+
     /**
      * 启动调用返回后的统一提示。
      *
@@ -2908,7 +3135,7 @@ class McViewModel(
     /** 分页加载更多 Modrinth 模组（追加到现有结果） */
     fun loadMoreModrinthMods() {
         val args = lastModrinthModQuery ?: run {
-            _messageFlow.tryEmit("请先执行搜索")
+            _messageFlow.tryEmit(str(R.string.vm_search_first))
             return
         }
         if (_isLoadingMoreMods.value) return
@@ -2923,7 +3150,7 @@ class McViewModel(
                 // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
                 if (token != modrinthModSearchToken) return@launch
                 if (more.isEmpty()) {
-                    _messageFlow.tryEmit("没有更多结果")
+                    _messageFlow.tryEmit(str(R.string.vm_no_more_results))
                 } else {
                     _modrinthResults.value = (_modrinthResults.value + more).distinctBy { it.slug }
                 }
@@ -3034,7 +3261,7 @@ class McViewModel(
     /** 分页加载更多 Modrinth 插件（追加到现有结果） */
     fun loadMoreModrinthPlugin() {
         val args = lastModrinthPluginQuery ?: run {
-            _messageFlow.tryEmit("请先执行搜索")
+            _messageFlow.tryEmit(str(R.string.vm_search_first))
             return
         }
         if (_isLoadingMorePlugins.value) return
@@ -3049,7 +3276,7 @@ class McViewModel(
                 // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
                 if (token != modrinthPluginSearchToken) return@launch
                 if (more.isEmpty()) {
-                    _messageFlow.tryEmit("没有更多结果")
+                    _messageFlow.tryEmit(str(R.string.vm_no_more_results))
                 } else {
                     _pluginModrinthResults.value = (_pluginModrinthResults.value + more).distinctBy { it.slug }
                 }
@@ -4097,7 +4324,7 @@ class McViewModel(
                 lastJoinTime = lastJoin?.time,
                 lastLeaveTime = lastLeave?.time,
                 lastExitReason = lastLeave?.let {
-                    if (it.interrupted) "服务停止或应用重启导致中断" else "日志未提供退出原因"
+                    if (it.interrupted) str(R.string.vm_exit_interrupted) else str(R.string.vm_exit_unknown)
                 }
             )
         }.sortedByDescending { it.totalSeconds }

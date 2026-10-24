@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
@@ -56,6 +58,7 @@ import com.mineserve.mobile.data.JavaRuntime
 import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.StepStatus
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngineStore
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.HintNote
@@ -64,6 +67,7 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.StepRow
+import com.mineserve.mobile.ui.installStepLabel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.McShape
@@ -376,7 +380,7 @@ private fun DependenciesModule(vm: McViewModel, requestConfirm: (String, () -> U
                 StepStatus.Active -> stringResource(R.string.s362)
                 StepStatus.Wait -> stringResource(R.string.s363)
             }
-            StepRow(name = "${idx + 1}. ${step.step.label}", status = step.status, tag = tag)
+            StepRow(name = "${idx + 1}. ${installStepLabel(step.step)}", status = step.status, tag = tag)
         }
         if (steps.isNotEmpty() && !anyInstalled) {
             Spacer(Modifier.height(4.dp))
@@ -401,6 +405,168 @@ private fun DependenciesModule(vm: McViewModel, requestConfirm: (String, () -> U
 
         Spacer(Modifier.height(16.dp))
         FrpcEngineSection(vm = vm)
+
+        Spacer(Modifier.height(16.dp))
+        EasyTierEngineSection(vm = vm)
+    }
+}
+
+// ── EasyTier 组网引擎（联网下载）───────────────────────────────
+
+/**
+ * EasyTier 引擎的下载/导入/卸载入口，与 frpc 引擎同级 —— 它同样是
+ * 一条隧道能启动的前提，本质上是一份依赖，所以放在依赖分类下。
+ *
+ * 引擎不随 APK 内置：16MB 的原生库让所有不用组网的用户都付体积，
+ * 而且进了 APK 就会出现在「Android 应用兼容性」的 16KB 对齐清单里。
+ * 下载到数据目录后既不减重失败也不再参与那个扫描。
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EasyTierEngineSection(vm: McViewModel) {
+    val engine by vm.easyTierEngine.collectAsState()
+    val message by vm.easyTierEngineMessage.collectAsState()
+    val download by vm.easyTierDownload.collectAsState()
+    val context = LocalContext.current
+
+    LaunchedEffect(Unit) { vm.refreshEasyTierEngine() }
+
+    val importLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri -> uri?.let(vm::importEasyTierEngine) }
+
+    var confirmUninstall by remember { mutableStateOf(false) }
+
+    if (confirmUninstall) {
+        AlertDialog(
+            onDismissRequest = { confirmUninstall = false },
+            title = { Text(stringResource(R.string.easytier_engine_uninstall)) },
+            text = { Text(stringResource(R.string.easytier_engine_uninstall_confirm)) },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmUninstall = false
+                    vm.uninstallEasyTierEngine()
+                }) { Text(stringResource(R.string.env_uninstall), color = Coral) }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmUninstall = false }) {
+                    Text(stringResource(R.string.env_cancel))
+                }
+            }
+        )
+    }
+
+    McCard(title = stringResource(R.string.easytier_engine_title)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(if (engine.installed) Mint else Coral)
+            )
+            Spacer(Modifier.size(8.dp))
+            Text(
+                stringResource(
+                    if (engine.installed) R.string.easytier_engine_installed
+                    else R.string.easytier_engine_missing
+                ),
+                fontSize = 13.sp, fontWeight = FontWeight.SemiBold
+            )
+            engine.version?.let { version ->
+                Spacer(Modifier.size(6.dp))
+                Text("v$version", color = Muted, fontSize = 11.sp)
+            }
+            engine.sizeBytes.takeIf { it > 0 }?.let { size ->
+                Spacer(Modifier.size(6.dp))
+                Text("${size / 1024 / 1024}MB", color = Muted, fontSize = 11.sp)
+            }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        Text(stringResource(R.string.easytier_engine_hint), color = Muted, fontSize = 11.sp)
+
+        engine.sha256?.let { sha ->
+            Spacer(Modifier.height(4.dp))
+            Text("SHA-256: ${sha.take(16)}…", color = Muted, fontSize = 10.sp)
+        }
+
+        Spacer(Modifier.height(10.dp))
+        // FlowRow：窄屏或长语言的本地化文字下三个按钮会自动换行，不会把右边那个挤成一条竖线
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            val downloading = download is McViewModel.DownloadState.Downloading
+            Button(onClick = { vm.downloadEasyTierEngine() }, enabled = !downloading, shape = McShape.ControlCompact) {
+                if (downloading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(14.dp),
+                        strokeWidth = 2.dp,
+                        color = androidx.compose.ui.graphics.Color.White
+                    )
+                    Spacer(Modifier.size(6.dp))
+                    Text(
+                        (download as? McViewModel.DownloadState.Downloading)
+                            ?.fraction?.takeIf { it >= 0f }
+                            ?.let { "${(it * 100).toInt()}%" }
+                            ?: stringResource(R.string.easytier_engine_downloading),
+                        fontSize = 12.sp
+                    )
+                } else {
+                    Text(
+                        stringResource(
+                            if (engine.installed) R.string.easytier_engine_reinstall
+                            else R.string.easytier_engine_download
+                        ),
+                        fontSize = 12.sp
+                    )
+                }
+            }
+            // .so 没有注册的 MIME 类型，OpenDocument + */* 才选得中
+            OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }, shape = McShape.ControlCompact) {
+                Text(
+                    stringResource(
+                        if (engine.installed) R.string.easytier_engine_replace
+                        else R.string.easytier_engine_import
+                    ),
+                    fontSize = 12.sp
+                )
+            }
+            // 自动下载全被网络拦掉时的兜底：去发行页手动下载，再回来「导入引擎」
+            OutlinedButton(
+                onClick = {
+                    try {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse(EasyTierEngineStore.RELEASE_PAGE_URL))
+                        )
+                    } catch (e: Exception) {
+                        // 设备无浏览器时静默
+                    }
+                },
+                shape = McShape.ControlCompact
+            ) {
+                Text(stringResource(R.string.easytier_engine_open_release), fontSize = 12.sp)
+            }
+        }
+
+        if (engine.installed) {
+            Spacer(Modifier.height(4.dp))
+            TextButton(onClick = { confirmUninstall = true }) {
+                Text(stringResource(R.string.easytier_engine_uninstall), fontSize = 12.sp, color = Coral)
+            }
+        }
+
+        Spacer(Modifier.height(6.dp))
+        Text(stringResource(R.string.easytier_engine_where), color = Muted, fontSize = 10.sp)
+
+        message?.let { text ->
+            Spacer(Modifier.height(8.dp))
+            HintNote(text)
+            LaunchedEffect(text) {
+                delay(4000)
+                vm.clearEasyTierEngineMessage()
+            }
+        }
     }
 }
 

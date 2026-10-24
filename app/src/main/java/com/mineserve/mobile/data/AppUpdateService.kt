@@ -5,6 +5,9 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.zip.ZipFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -37,32 +40,66 @@ object AppUpdateService {
     }
 
     suspend fun latest(currentVersion: String): AppRelease? = withContext(Dispatchers.IO) {
-        var lastError: Exception? = null
-        for (api in apiUrls()) try {
-            val connection = URL(api).openConnection() as HttpURLConnection
-            try {
-                connection.requestMethod = "GET"
-                connection.connectTimeout = 12_000
-                connection.readTimeout = 12_000
-                connection.setRequestProperty("Accept", "application/vnd.github+json")
-                connection.setRequestProperty("User-Agent", "MineServeMobile")
-                if (connection.responseCode !in 200..299) {
-                    throw IllegalStateException("update check failed: HTTP ${connection.responseCode}")
-                }
-                val release = decodeRelease(connection.inputStream.bufferedReader().use { it.readText() })
-                val tag = release.tag_name.trim().removePrefix("v")
-                val apk = release.assets.firstOrNull { it.name == APK_NAME }
-                    ?: release.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
-                    ?: throw IllegalStateException("release has no ARM64 APK")
-                return@withContext if (compare(tag, currentVersion) <= 0) null
-                else AppRelease(tag, release.body?.trim().orEmpty(), downloadUrls(apk.browser_download_url), "$PROJECT_URL/releases/tag/$tag")
-            } finally {
-                connection.disconnect()
-            }
-        } catch (e: Exception) {
-            lastError = e
+        val release = fetchRelease()
+        val tag = release.tag_name.trim().removePrefix("v")
+        val apk = release.assets.firstOrNull { it.name == APK_NAME }
+            ?: release.assets.firstOrNull { it.name.endsWith(".apk", ignoreCase = true) }
+            ?: throw IllegalStateException("release has no ARM64 APK")
+        if (compare(tag, currentVersion) <= 0) null
+        else AppRelease(tag, release.body?.trim().orEmpty(), downloadUrls(apk.browser_download_url), "$PROJECT_URL/releases/tag/$tag")
+    }
+
+    /**
+     * 并发请求所有候选端点，取**第一个完整可用**的结果。
+     *
+     * 原来是串行 for：先打镜像、抛异常再打直连。镜像一旦"连得上但不响应"，
+     * 就得先等满 connectTimeout（12s）才轮到下一个，用户看到的就是转圈十几秒。
+     * 现在两个端点同时发，总耗时约等于最快的那条链路。
+     *
+     * 判定标准一条没松：HTTP 2xx + JSON 可解析 + 字段齐全才算成功（[request] 内部完成），
+     * 任一端点失败只是被记下来，不影响其它端点；全部失败时仍抛最后一次错误，
+     * 调用方的失败提示与重试路径不变。
+     */
+    private suspend fun fetchRelease(): ReleaseDto = coroutineScope {
+        val outcomes = Channel<Result<ReleaseDto>>(Channel.UNLIMITED)
+        val jobs = apiUrls().map { api ->
+            launch { outcomes.send(runCatching { request(api) }) }
         }
-        throw lastError ?: IllegalStateException("update check failed")
+        var lastError: Throwable? = null
+        try {
+            repeat(jobs.size) {
+                outcomes.receive().fold(
+                    onSuccess = { dto ->
+                        jobs.forEach { it.cancel() }
+                        return@coroutineScope dto
+                    },
+                    onFailure = { lastError = it }
+                )
+            }
+            throw lastError ?: IllegalStateException("update check failed")
+        } finally {
+            outcomes.close()
+        }
+    }
+
+    /** 单端点请求：连通性、状态码、解析都在这里判完，失败一律抛异常。 */
+    private fun request(api: String): ReleaseDto {
+        val connection = URL(api).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"
+            // 两个端点并发后单次超时不用再留那么宽：慢的那条会被快的直接取代，
+            // 而两条都慢时 6s+8s 也远好过串行的 24s。JSON 体积很小，8s 读超时足够。
+            connection.connectTimeout = 6_000
+            connection.readTimeout = 8_000
+            connection.setRequestProperty("Accept", "application/vnd.github+json")
+            connection.setRequestProperty("User-Agent", "MineServeMobile")
+            if (connection.responseCode !in 200..299) {
+                throw IllegalStateException("update check failed: HTTP ${connection.responseCode}")
+            }
+            return decodeRelease(connection.inputStream.bufferedReader().use { it.readText() })
+        } finally {
+            connection.disconnect()
+        }
     }
 
     suspend fun download(urls: List<String>, target: File, onProgress: (Float) -> Unit) = withContext(Dispatchers.IO) {

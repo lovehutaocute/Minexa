@@ -23,12 +23,25 @@ import com.mineserve.mobile.service.McForegroundService
 class MainActivity : ComponentActivity() {
 
     private companion object {
+        /** 见 onCreate 里的授权入口。 */
+        const val EXTRA_REQUEST_VPN = "request_vpn"
+
+
         const val TAG = "MainActivity"
     }
 
     // Android 13+ 通知权限运行时申请
     private val notifPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* 用户拒绝仅影响通知可见性，前台服务仍可保活 */ }
+
+    /**
+     * 语言覆盖：Activity 的 Context 必须自己套一层，否则 `stringResource` 拿到的是
+     * 系统语言而不是应用内选择的语言。切换语言时调用 `recreate()`，
+     * 会重新走这里，从而让整棵树按新语言重建。
+     */
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.mineserve.mobile.data.LocaleManager.wrap(newBase))
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -37,6 +50,14 @@ class MainActivity : ComponentActivity() {
         try {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_DISPLAY)
         } catch (_: Exception) {}
+        // EasyTier 的 VPN 授权入口：带 --ez request_vpn true 启动时弹一次系统授权框。
+        // 这条路径不只给调试用 —— 将来从桌面组件/通知跳回来补授权也走它，因为
+        // establish() 拿不到授权时只会返回 null，不给任何可诊断的错误。
+        if (intent?.getBooleanExtra(EXTRA_REQUEST_VPN, false) == true) {
+            com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
+                .prepareIntent(this)
+                ?.let { startActivity(it) }
+        }
         lifecycleScope.launch {
             val repo = McApplication.get(this@MainActivity).repository
             combine(repo.configFlow, repo.serverState) { config, server ->
@@ -67,7 +88,18 @@ class MainActivity : ComponentActivity() {
         }
         setContent {
             MineServeMobileTheme {
-                McApp()
+                // 显式给出书写方向：虽然 Compose 会从 Configuration 推断，但这里再钉一次，
+                // 保证「切到波斯语 → 整棵树（含弹窗、抽屉这类子组合）立即 RTL」不依赖平台推断。
+                androidx.compose.runtime.CompositionLocalProvider(
+                    androidx.compose.ui.platform.LocalLayoutDirection provides
+                        if (com.mineserve.mobile.data.LocaleManager.isRtl(this@MainActivity)) {
+                            androidx.compose.ui.unit.LayoutDirection.Rtl
+                        } else {
+                            androidx.compose.ui.unit.LayoutDirection.Ltr
+                        }
+                ) {
+                    McApp()
+                }
             }
         }
     }

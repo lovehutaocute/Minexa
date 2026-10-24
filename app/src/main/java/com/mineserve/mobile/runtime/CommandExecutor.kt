@@ -26,6 +26,9 @@ class CommandExecutor(
     private val extraLibraryDir: String? = null
 ) {
 
+    /** 一次带超时的执行结果：退出码 + 输出尾部。 */
+    data class ExecResult(val code: Int, val tail: String)
+
     @Volatile
     private var interactiveInput: java.io.OutputStream? = null
 
@@ -147,9 +150,28 @@ class CommandExecutor(
         timeoutMs: Long,
         vararg command: String,
         env: Map<String, String> = emptyMap()
-    ): Int {
+    ): Int = execOnceWithTimeoutCapture(timeoutMs, *command, env = env).code
+
+    /**
+     * 同 [execOnceWithTimeout]，但把输出尾部一并带回。
+     *
+     * 为什么需要：容器里跑的 proot 崩溃时**不会**改变 shell 脚本自己的退出码 ——
+     * 脚本被 SIGSEGV 打断后由 proot 的退出码顶上，脚本里精心写的「第几步失败」
+     * 就全丢了，Java 侧只看到一个 exit=1。要判断「是不是 proot 自己崩了」
+     * 只能看它吐在 stderr 里的 `proot warning: signal 11 ...`。
+     *
+     * 输出仍照常流进 [consoleFlow]；这里只是额外留一份尾部文本。
+     * 只保留尾部若干行：apt 输出可达数千行，而诊断只需要最后那一截。
+     */
+    fun execOnceWithTimeoutCapture(
+        timeoutMs: Long,
+        vararg command: String,
+        env: Map<String, String> = emptyMap(),
+        tailLines: Int = 80
+    ): ExecResult {
         val full = buildExecCommand(command.toList())
         Log.d(TAG, "execOnceWithTimeout[$timeoutMs]: ${full.joinToString(" ").take(200)}")
+        val tail = ArrayDeque<String>()
         val pb = ProcessBuilder(full).apply {
             redirectErrorStream(true)
             directory(File(installer.rootDir, "home").apply { mkdirs() })
@@ -164,6 +186,10 @@ class CommandExecutor(
                     lines.forEach { line ->
                         _consoleFlow.tryEmit(line)
                         Log.d(TAG, "  | $line")
+                        synchronized(tail) {
+                            tail.addLast(line)
+                            while (tail.size > tailLines) tail.removeFirst()
+                        }
                     }
                 }
             }
@@ -175,11 +201,18 @@ class CommandExecutor(
             process.destroy()
             if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
             reader.join(2_000)
-            return 124
+            return ExecResult(124, synchronized(tail) { tail.joinToString("\n") })
         }
         reader.join(2_000)
-        return process.exitValue()
+        val text = synchronized(tail) { tail.joinToString("\n") }
+        lastTail = text
+        return ExecResult(process.exitValue(), text)
     }
+
+    /** 最近一次 [execOnceWithTimeoutCapture] 的输出尾部，供调用方在失败后判定原因。 */
+    @Volatile
+    var lastTail: String = ""
+        private set
 
     /**
      * 执行命令并把输出逐行回调给 onLine（不进入 consoleFlow，避免与 MC 服务器日志混流）。

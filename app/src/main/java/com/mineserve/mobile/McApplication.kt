@@ -90,6 +90,18 @@ class McApplication : Application(), Configuration.Provider {
     @Volatile private var bootstrapInitializationInFlight = false
     @Volatile private var backgroundWorkRegistered = false
 
+    /**
+     * 语言覆盖的唯一入口。
+     *
+     * Application 的 base Context 一旦带上所选 Locale，之后所有拿
+     * `getApplicationContext()` / Application 实例取字符串的地方（通知、崩溃日志、
+     * 组件 RemoteViews、AppWidget）都自动是所选语言，不需要逐个传 Context。
+     * 必须在 `onCreate` 之前完成，所以放在 attachBaseContext。
+     */
+    override fun attachBaseContext(base: Context) {
+        super.attachBaseContext(com.mineserve.mobile.data.LocaleManager.wrap(base))
+    }
+
     /** 应用级协程作用域（替代 GlobalScope，随进程生命周期，可统一取消） */
     fun scope(): CoroutineScope = appScope
 
@@ -390,6 +402,20 @@ class McApplication : Application(), Configuration.Provider {
         get() = Configuration.Builder()
             .setMinimumLoggingLevel(android.util.Log.INFO)
             .build()
+
+    /**
+     * 语言切换后需要手动补刷的两处「不随 Activity 重建自动更新」的界面：
+     * 1. 常驻通知渠道名（渠道一旦创建，名字由系统记录，重建同 id 渠道才会覆盖）；
+     * 2. 桌面组件的 RemoteViews 文案（由 AppWidgetHost 缓存，需要重新推送）。
+     *
+     * 其余界面随 `Activity.recreate()` 自然更新。
+     */
+    fun refreshLocalizedSurfaces() {
+        runCatching { createNotificationChannel() }
+            .onFailure { android.util.Log.w("McApplication", "刷新通知渠道失败: ${it.message}") }
+        runCatching { com.mineserve.mobile.data.WidgetUpdater.refresh(this) }
+            .onFailure { android.util.Log.w("McApplication", "刷新桌面组件失败: ${it.message}") }
+    }
 
     companion object {
         @Volatile private var instance: McApplication? = null

@@ -39,6 +39,7 @@ import com.mineserve.mobile.ui.screens.DownloadHelpScreen
 import com.mineserve.mobile.ui.screens.DownloadScreen
 import com.mineserve.mobile.ui.screens.FileManagerScreen
 import com.mineserve.mobile.ui.screens.KeepAliveScreen
+import com.mineserve.mobile.ui.screens.EasyTierGuideScreen
 import com.mineserve.mobile.ui.screens.MtGuideScreen
 import com.mineserve.mobile.ui.screens.OpLevelGuideScreen
 import com.mineserve.mobile.ui.screens.LogsScreen
@@ -68,7 +69,7 @@ import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.Muted
 
 /** 子页面类型（从设置页进入的二级页面） */
-enum class SubPage { Properties, Network, Backup, WorldManage, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, FrpProfileEditor, More, Automation }
+enum class SubPage { Properties, Network, Backup, WorldManage, DownloadHelp, MtGuide, KeepAlive, OpLevelGuide, Diagnostics, Plugins, ServerIcon, CrashReports, WidgetSettings, Mcp, EnvManager, Ftp, FrpProfileEditor, EasyTierGuide, More, Automation }
 
 /**
  * 应用根布局：底部 6 Tab；概览页可跳转日志页；设置页可跳转子页面
@@ -156,7 +157,7 @@ fun McApp() {
                     )
                 }
                 NavigationBarItem(
-                    selected = subPage in setOf(SubPage.More, SubPage.Network, SubPage.FrpProfileEditor, SubPage.Backup, SubPage.Diagnostics, SubPage.KeepAlive, SubPage.DownloadHelp, SubPage.MtGuide, SubPage.OpLevelGuide, SubPage.WidgetSettings, SubPage.Mcp, SubPage.EnvManager, SubPage.Ftp, SubPage.Automation),
+                    selected = subPage in setOf(SubPage.More, SubPage.Network, SubPage.FrpProfileEditor, SubPage.EasyTierGuide, SubPage.Backup, SubPage.Diagnostics, SubPage.KeepAlive, SubPage.DownloadHelp, SubPage.MtGuide, SubPage.OpLevelGuide, SubPage.WidgetSettings, SubPage.Mcp, SubPage.EnvManager, SubPage.Ftp, SubPage.Automation),
                     onClick = { subPage = SubPage.More; showLogs = false },
                     icon = { Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.mcapp_more)) },
                     label = { Text(stringResource(R.string.mcapp_more), fontSize = 10.sp) },
@@ -183,7 +184,16 @@ fun McApp() {
                             onOpenFrpEditor = { id ->
                                 editFrpProfileId = id.orEmpty()
                                 subPage = SubPage.FrpProfileEditor
+                            },
+                            onOpenEasyTierGuide = { subPage = SubPage.EasyTierGuide },
+                            onOpenEasyTierEngine = {
+                                envManagerTab = 1
+                                subPage = SubPage.EnvManager
                             }
+                        )
+                        SubPage.EasyTierGuide -> EasyTierGuideScreen(
+                            vm = vm,
+                            onBack = { subPage = SubPage.Network }
                         )
                         SubPage.FrpProfileEditor -> FrpProfileEditorScreen(
                             vm = vm,

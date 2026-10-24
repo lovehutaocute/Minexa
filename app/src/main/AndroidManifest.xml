@@ -190,6 +190,22 @@
             android:name=".widget.WidgetActionReceiver"
             android:exported="false" />
 
+        <!-- EasyTier 组网：TUN 必须由 VpnService 建立，且实例与 TUN 在同一进程内交接 fd。
+             BIND_VPN_SERVICE 权限是系统调用前提；exported=false 表示只允许本应用启动。 -->
+        <service
+            android:name=".server.tunnel.easytier.EasyTierVpnService"
+            android:enabled="true"
+            android:exported="false"
+            android:permission="android.permission.BIND_VPN_SERVICE"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="easy_tier_mesh_vpn" />
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+        </service>
+
         <service
             android:name=".widget.EventLogWidgetService"
             android:exported="false"

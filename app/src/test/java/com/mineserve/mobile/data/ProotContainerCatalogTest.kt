@@ -576,4 +576,38 @@ class ProotContainerCatalogTest {
         assertEquals(2, focal8.guestJavaBinaryCandidates.size)
         assertTrue(focal8.guestJavaBinaryCandidates.any { it.endsWith("jre/bin/java") })
     }
+
+    // ── 包组：meta 包只依赖 headless，真正装文件的是 headless ──────────
+
+    @Test
+    fun relatedPackagesCoverHeadlessAndJre() {
+        // 只 purge meta 包（openjdk-21-jdk）时，jdk-headless / jre-headless 仍是
+        // installed 且共享同一个 /usr/lib/jvm 目录。此时再 rm 该目录就会留下
+        // 「dpkg 说装了、磁盘上没文件」的残状态 —— apt 之后永远报「已是最新版本」，
+        // 装不上也修不好。所以两组包必须一起处理。
+        val p21 = ProotContainerProfile(ProotDistro.Jammy, JavaVersion.Java21)
+        assertEquals(
+            listOf("openjdk-21-jdk", "openjdk-21-jdk-headless", "openjdk-21-jre-headless"),
+            p21.relatedAptPackages
+        )
+
+        val p8 = ProotContainerProfile(ProotDistro.Focal, JavaVersion.Java8)
+        assertEquals(
+            listOf("openjdk-8-jdk", "openjdk-8-jdk-headless", "openjdk-8-jre-headless"),
+            p8.relatedAptPackages
+        )
+    }
+
+    @Test
+    fun relatedPackagesAlwaysStartWithAptPackage() {
+        // 安装命令把 relatedAptPackages 直接拼进 apt 参数，第一个必须是主包，
+        // 否则 `apt-get install --reinstall <组>` 会变成只重装 headless。
+        ProotContainerProfile.all.forEach { profile ->
+            assertEquals(profile.aptPackage, profile.relatedAptPackages.first())
+            assertTrue(
+                "${profile.displayName} 的包组里必须有 headless",
+                profile.relatedAptPackages.any { it.endsWith("-jdk-headless") }
+            )
+        }
+    }
 }

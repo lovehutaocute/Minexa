@@ -40,3 +40,6 @@ crash_log.txt
 mineserve-*.txt
 perf-diagnostics/
 .gradle-user/
+
+app/.cxx*/
+
