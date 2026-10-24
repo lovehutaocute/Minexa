@@ -1,4 +1,4 @@
-# Minexa 1.4.0 更新日志
+# Minexa 1.3.2 更新日志
 
 > 给用户看的版本说明。发布时同步到 GitHub Release。
 
