@@ -59,7 +59,7 @@ jobs:
             NDK_DIR=$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/ndk/* 2>/dev/null | sort -V | tail -n1)
           fi
           if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
-            echo "::error::未找到 Android NDK"
+            echo "未找到 Android NDK（ANDROID_NDK_LATEST_HOME/HOME/ROOT 与 sdk/ndk 均无）" >&2
             exit 1
           fi
           echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
@@ -95,6 +95,15 @@ jobs:
             et/target
           key: easytier-jni-${{ inputs.version }}-${{ hashFiles('et/Cargo.lock') }}
           restore-keys: easytier-jni-${{ inputs.version }}-
+
+      - name: Install protoc
+        run: |
+          set -euo pipefail
+          # prost-wkt-types 的 build.rs 会调 protoc；GitHub runner 默认没装，
+          # 不装就得到 "Could not find `protoc`" 并以 exit 101 失败（第二次跑踩到）。
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq protobuf-compiler
+          protoc --version
 
       - name: Build
         working-directory: et
