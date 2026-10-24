@@ -1,0 +1,134 @@
+name: Build EasyTier Engine
+
+# 单独一条流水线，只干一件事：把 EasyTier 的 Android JNI 库（arm64-v8a）编出来。
+#
+# 为什么放 CI 而不是本机编：
+#  - 这是 Rust 交叉编译，host 侧要编 proc-macro / build-script，需要 MSVC 或 MinGW 链接器，
+#    而本机只有 VS 的 cl.exe、没有 Windows SDK（缺 kernel32.lib 等），链接必失败；
+#  - 引擎是 LGPL-3.0 的独立组件，构建过程需要可复现、可审计 —— CI 上从固定 tag 拉源码，
+#    任何人拿这个 workflow 都能重现同一份产物；
+#  - 以后升引擎版本只要改 version 输入，不必重装本机工具链。
+#
+# 产物：libeasytier_android_jni.so + libeasytier_ffi.so（arm64-v8a），
+# 手动下载后放进 app/src/main/jniLibs/arm64-v8a/，由 EasyTierJni 逐符号加载。
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: EasyTier 上游 tag（例如 v2.7.0）
+        required: true
+        default: v2.7.0
+      upload_release:
+        description: 是否把产物挂到本仓库 Release（填 tag 名则创建/更新该 Release）
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build JNI (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        run: |
+          set -euo pipefail
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add aarch64-linux-android
+          rustc --version
+
+      - name: Install cargo-ndk
+        run: |
+          set -euo pipefail
+          # 缓存命中时跳过编译（cargo-ndk 本身就要几分钟）
+          if ! command -v cargo-ndk >/dev/null; then
+            cargo install cargo-ndk --locked
+          fi
+          cargo ndk --version
+
+      - name: Locate NDK
+        run: |
+          set -euo pipefail
+          # GitHub 的 android runner 预装 NDK，变量名随镜像版本变化，逐个兜底
+          NDK_DIR="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}}"
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            NDK_DIR=$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}"/ndk/* 2>/dev/null | sort -V | tail -n1)
+          fi
+          if [ -z "$NDK_DIR" ] || [ ! -d "$NDK_DIR" ]; then
+            echo "::error::未找到 Android NDK"
+            exit 1
+          fi
+          echo "ANDROID_NDK_HOME=$NDK_DIR" >> "$GITHUB_ENV"
+          echo "使用 NDK: $NDK_DIR"
+
+      - name: Fetch EasyTier source
+        run: |
+          set -euo pipefail
+          VERSION="${{ inputs.version }}"
+          curl -sSL --retry 3 -o et.tar.gz "https://codeload.github.com/EasyTier/EasyTier/tar.gz/refs/tags/${VERSION}"
+          mkdir -p et
+          tar -xzf et.tar.gz -C et --strip-components=1
+          echo "上游版本：$(grep -m1 '^version' et/easytier/Cargo.toml || true)"
+          test -f et/easytier-contrib/easytier-android-jni/Cargo.toml
+
+      - name: Cargo cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            et/target
+          key: easytier-jni-${{ inputs.version }}-${{ hashFiles('et/Cargo.lock') }}
+          restore-keys: easytier-jni-${{ inputs.version }}-
+
+      - name: Build
+        working-directory: et
+        run: |
+          set -euo pipefail
+          # 只出 arm64-v8a：与 App 的 abiFilters 一致，多编无用架构只会拖长构建
+          cargo ndk -t arm64-v8a -o out build --release -p easytier-android-jni
+          echo "=== 产物 ==="
+          find out -type f -name '*.so' -exec ls -l {} \;
+
+      - name: Verify
+        run: |
+          set -euo pipefail
+          NDK_BIN="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          SO=$(find et/out -type f -name 'libeasytier_android_jni.so' | head -n1)
+          if [ -z "$SO" ]; then
+            echo "::error::没找到 libeasytier_android_jni.so"
+            find et/out -type f | head -20
+            exit 1
+          fi
+          echo "目标产物：$SO ($(stat -c%s "$SO") 字节)"
+          # 必须导出 EasyTierJNI 的 JNI 入口，否则 App 里 loadLibrary 后调用会 UnsatisfiedLinkError
+          "$NDK_BIN/llvm-nm" -D --defined-only "$SO" | grep -q 'Java_com_easytier_jni_EasyTierJNI_runNetworkInstance' \
+            || { echo "::error::缺少 Java_com_easytier_jni_EasyTierJNI_runNetworkInstance 符号"; exit 1; }
+          "$NDK_BIN/llvm-nm" -D --defined-only "$SO" | grep -q 'Java_com_easytier_jni_EasyTierJNI_setTunFd' \
+            || { echo "::error::缺少 setTunFd 符号"; exit 1; }
+          echo "JNI 符号校验通过"
+          sha256sum $(find et/out -type f -name '*.so') | tee checksums.txt
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: easytier-jni-arm64-${{ inputs.version }}
+          path: |
+            et/out/**/*.so
+            checksums.txt
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: inputs.upload_release != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.upload_release }}"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "EasyTier engine $TAG" --notes "EasyTier JNI 引擎（arm64-v8a），来源 ${{ inputs.version }}"
+          gh release upload "$TAG" $(find et/out -type f -name '*.so') checksums.txt --clobber
