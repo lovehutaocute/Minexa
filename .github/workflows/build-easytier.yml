@@ -39,7 +39,6 @@ jobs:
           set -euo pipefail
           rustup toolchain install stable --profile minimal
           rustup default stable
-          rustup target add aarch64-linux-android
           rustc --version
 
       - name: Install cargo-ndk
@@ -75,6 +74,17 @@ jobs:
           tar -xzf et.tar.gz -C et --strip-components=1
           echo "上游版本：$(grep -m1 '^version' et/easytier/Cargo.toml || true)"
           test -f et/easytier-contrib/easytier-android-jni/Cargo.toml
+
+      - name: Install target for project toolchain
+        working-directory: et
+        run: |
+          set -euo pipefail
+          # 必须在本仓库目录里加 target：上游 rust-toolchain.toml 会指定自己的 toolchain，
+          # 在别处 `rustup target add` 装到的是默认 toolchain，cargo 却用上游那个 —— 于是
+          # `can't find crate for core`（第一次跑就踩到了）。
+          rustup show
+          rustup target add aarch64-linux-android
+          rustup target list --installed
 
       - name: Cargo cache
         uses: actions/cache@v4
