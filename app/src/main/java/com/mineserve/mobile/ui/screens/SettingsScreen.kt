@@ -31,6 +31,8 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -47,11 +49,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.roundToInt
 import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.data.AppLanguage
 import com.mineserve.mobile.data.AppUpdateService
 import com.mineserve.mobile.data.AptMirror
 import com.mineserve.mobile.data.DownloadMirror
+import com.mineserve.mobile.data.DownloadPrefs
 import com.mineserve.mobile.data.LocaleManager
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McCard
@@ -59,6 +63,7 @@ import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.QqGroupCard
 import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.SubPage
+import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
@@ -186,19 +191,43 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
                 }
             )
             Spacer(Modifier.height(10.dp))
-            Text(stringResource(R.string.s1067), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.height(6.dp))
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                listOf(2, 4, 8).forEach { count ->
-                    SegPill(
-                        text = stringResource(R.string.st_threads_count, count),
-                        selected = threadState.value == count && enabledState.value,
-                        onClick = {
-                            threadState.value = count
-                            vm.setDownloadThreadCount(count)
-                        }
-                    )
-                }
+            // 线程数用滑块而不是 2/4/8 三个胶囊：可取值本来就是连续区间（1..16），
+            // 三档会把 6/12 这类中间值藏起来；滑块同时把手势面积做大，单手好调。
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(R.string.s1067),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    stringResource(R.string.st_threads_count, threadState.value),
+                    color = if (enabledState.value) Indigo else Muted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+            Slider(
+                value = threadState.value.toFloat(),
+                onValueChange = { threadState.value = it.roundToInt() },
+                // 只在抬手（拖动结束）时落盘：拖动过程每移动 1 像素就写一次
+                // SharedPreferences 没有意义，而且会让 IO 线程跟着抖。
+                onValueChangeFinished = { vm.setDownloadThreadCount(threadState.value) },
+                valueRange = DownloadPrefs.MIN_THREADS.toFloat()..DownloadPrefs.MAX_THREADS.toFloat(),
+                steps = DownloadPrefs.MAX_THREADS - DownloadPrefs.MIN_THREADS - 1,
+                enabled = enabledState.value,
+                colors = SliderDefaults.colors(
+                    thumbColor = Indigo,
+                    activeTrackColor = Indigo,
+                    inactiveTrackColor = FieldGray
+                )
+            )
+            Row {
+                Text(
+                    stringResource(R.string.st_threads_range, DownloadPrefs.MIN_THREADS, DownloadPrefs.MAX_THREADS),
+                    color = Muted,
+                    fontSize = 10.sp
+                )
             }
         }
 

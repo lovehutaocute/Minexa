@@ -58,6 +58,19 @@ class EasyTierVpnService : VpnService() {
         var lastError: String? = null
             private set
 
+        /**
+         * 清掉上一次启动的结果。
+         *
+         * [state] 是**进程级**的：一次失败会永久停在 `Failed`，下一次启动时
+         * [EasyTierBackend.awaitSettled] 第一拍就会读到那条旧原因，直接判定失败 ——
+         * 界面表现是「组网关掉/引擎都删了，再启动还是报上一次的错」，
+         * 而此时服务其实正在正常起来（稍后又会自己翻成 Running，前后矛盾）。
+         * 所以每次发起启动前必须先调这里。
+         */
+        fun resetLastResult() {
+            state = State.Stopped
+            lastError = null
+        }
     }
 
     /**
@@ -77,6 +90,10 @@ class EasyTierVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             Log.i(TAG, "收到停止指令")
+            // 停止指令可能是 `startForegroundService` 送来的（后台也能起），
+            // 那就必须在 5s 内 startForeground，否则系统判 RemoteServiceException
+            // 直接把进程崩掉 —— 崩掉时 TUN 和实例都来不及清理，正是"关不干净"。
+            runCatching { startForeground(NOTIF_ID, buildNotification()) }
             shutdown()
             stopSelf()
             return START_NOT_STICKY
@@ -101,6 +118,11 @@ class EasyTierVpnService : VpnService() {
 
         // 1) 实例先起来（不建 TUN —— no_tun，core 只把 port_forward 绑到转发端口上，
         //    该端口不等于服务端端口，所以此时不需要虚拟 IP 已经存在）
+        //
+        // 起之前先清一次残留：上一次停止若被系统拦下或进程被杀，core 里还注册着同名
+        // 实例，`runNetworkInstance` 会直接返回失败（-1，且不写原因），外观就是
+        // 「关掉组网后再启动，一直失败」。本服务始终只跑一个实例，清空是安全的。
+        runCatching { EasyTierJNI.stopAllInstances() }
         val code = runCatching { EasyTierJNI.runNetworkInstance(toml) }.getOrElse { e ->
             fail("实例启动异常：${e.message}")
             return START_NOT_STICKY

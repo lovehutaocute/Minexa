@@ -76,7 +76,7 @@ fun OpLevelGuideScreen(
             Button(
                 onClick = onNavigateProperties,
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(
@@ -100,7 +100,7 @@ fun OpLevelGuideScreen(
             Button(
                 onClick = onNavigatePlugins,
                 colors = ButtonDefaults.buttonColors(containerColor = Mint),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Text(

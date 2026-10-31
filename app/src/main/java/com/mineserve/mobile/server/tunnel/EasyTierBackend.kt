@@ -89,6 +89,11 @@ class EasyTierBackend(private val context: Context) : TunnelBackend {
 
         // 授权缺失时 establish() 只会返回 null，Service 会把它翻成一条明确原因，
         // 所以这里只要把失败原因原样带回上层即可。
+        //
+        // 但**必须先清掉上一次的结果**：Service 的 state 是进程级的，上一次失败会停在
+        // Failed 上，不清就轮到 [awaitSettled] 第一拍读到那条旧原因、直接判失败 ——
+        // 用户看到的现象是「组网关掉/引擎删了，再启动还是报上一次的错」。
+        EasyTierEngine.resetLastResult()
         EasyTierEngine.start(context, settings)
         startPolling()
 
@@ -117,7 +122,10 @@ class EasyTierBackend(private val context: Context) : TunnelBackend {
     }
 
     override suspend fun stop() {
-        EasyTierEngine.stop(context)
+        val delivered = EasyTierEngine.stop(context)
+        if (!delivered) {
+            logger?.invoke("停止指令未能送达服务，已直接清理实例")
+        }
         // 等接口真正释放：Service 里先关 TUN 再停 core，接口消失需要一拍
         repeat(STOP_POLLS) {
             delay(POLL_INTERVAL_MS)
@@ -128,8 +136,16 @@ class EasyTierBackend(private val context: Context) : TunnelBackend {
                 return
             }
         }
+        // 超时说明指令没被处理（服务被系统拦下，或 core 卡住不退）。
+        // 这里再强停一次服务和实例 —— **不能**只把界面改成"已停止"就算完，
+        // 否则 TUN/监听端口会一直留在系统里，下次启动必定撞车。
+        runCatching {
+            context.stopService(android.content.Intent(context, EasyTierVpnService::class.java))
+        }
+        runCatching { com.easytier.jni.EasyTierJNI.stopAllInstances() }
         pollJob?.cancel()
         _state.value = _state.value.copy(isRunning = false, status = TunnelStatus.Stopped)
+        logger?.invoke("EasyTier 停止超时，已强制清理实例（若仍有虚拟网卡残留，重开一次组网即可）")
     }
 
     /** 把 Service 的实时状态映射到 [state]，供界面在对端变化/失败时刷新。 */

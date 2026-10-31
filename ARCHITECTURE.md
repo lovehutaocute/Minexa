@@ -124,13 +124,74 @@ PocketMine-MP 不经过 JVM：首次使用时下载 Android aarch64 原生 PHP �
 
 ## 存储布局
 
+### 服务端目录：只有一个根，旧目录靠迁移
+
+服务端**只**存在于统一存储目录（实现见 `data/ServerStorage.kt`）：
+
+| 位置 | 路径 | 说明 |
+|---|---|---|
+| `Internal` | `/storage/emulated/0/Minexa/Minecraftserver/{dirName}/` | 唯一落点与唯一运行位置 |
+| `Legacy` | `<filesDir>/home/home/servers/{dirName}/` | 旧版目录，**只作为迁移源**存在，不参与定位 |
+
+`StorageLocation.Legacy` 只为「读得懂老配置」而保留：这种记录在列表里不显示、不可启动
+（`McServerController.start` 会明确拒绝并指向迁移入口），迁移完成后由迁移器改写为 `Internal`。
+`ServerStorage.normalizeCores()` 只做一件自动纠正：某条 Legacy 记录的目录**已经**出现在统一目录里
+且非空（用户手工搬过或迁移刚完成）→ 就地改 Internal。其余一律等用户确认。
+
+旧目录路径是 `<filesDir>/home/home/servers`，**不是** `<filesDir>/home/servers`：旧代码里
+`BootstrapInstaller.rootDir` 本身已经是 `filesDir/home`，`serversDir` 又拼了一段 `home/servers`。
+写成单层 `home` 会导致「私有目录读不到、老服务器被当成不存在、还在新目录里凭空建出空文件夹、
+启动报找不到 jar」——`ServerStorage.legacyRootCandidates()` 先试真实历史路径，再留一个单层兜底。
+
+### 容器探针与权限修复
+
+- `runUbuntu` 之前，容器自检（`test -x /bin/sh`）的时限是 60 秒，真机上太紧：
+  刚解压出来的 rootfs 有上万个小文件，proot 首次进入要逐个处理 `--link2symlink` 与 ptrace 初始化，
+  慢设备上超过一分钟很常见。超时就会把**刚装好的** rootfs 判为不可用 → 重建 → 再超时，
+  表现正是「进度条停在部署阶段不动」。现在 `ROOTFS_PROBE_TIMEOUT_MS = 180s`，且超时文案单独区分（exit=124）。
+- 已有可用 rootfs 时才做自检；rootfs 根本不存在时直接进安装流程，不再白等一个超时。
+- `repairUbuntuRootfs` 的 `chmod -R 755` 会遍历上万个文件，而它挂在「自检 / 实测 box64 / 启动服务端」
+  三条路径上。现在修完写 `rootfs/.mineserve-exec-repaired` 标记，之后直接跳过 —— 不再让每次启动多花几十秒。
+
+### 迁移（`server/LegacyServerMigration.kt`）
+
+每次冷启动扫描旧目录，**有内容就弹框询问**（不做「不再提示」的持久化标记：用户要求
+「二次启动后依旧提示」）。确认后逐个目录执行：
+
+1. 复制到同文件系统下的 `{dirName}.migrating-{ts}`；
+2. 比对文件数与总字节数，不一致立即失败并**保留源目录**；
+3. `rename` 到最终目录名（同根内 rename 原子）；目标重名时用 `{name}_migrated[_2]`，
+   若目标只是空壳（旧 bug 留下的幽灵目录）则清掉后复用原名；
+4. **最后**删源目录；全部成功且旧根为空时连根一起删。
+
+结果写回配置（`applyOutcomes`）：已登记核心更新 `dirName` + `location`，未登记的按检测结果新增；
+当前选中核心若被改名，`activeCoreName` 跟着改。
+
+### 权限
+
+`StorageAccess` 是唯一判据，且判据是**能不能写**而不是权限位：`targetSdk=28` 在 Android 11+ 仍走旧存储模型，部分设备不给「所有文件访问」也能写公共存储；只看权限位会把这些设备误判成未授权。权限位只用于决定要不要提示。
+
+- 冷启动 → `StorageAccess.consumeAutoPrompt()` 每次进程启动最多弹一次（拒绝后下次启动再弹，同一次运行不连环弹）；
+- Android 10- → 运行时 `WRITE_EXTERNAL_STORAGE`；Android 11+ → 只能跳设置页，失败退回应用详情页；
+- 未授权时下载/导入在入口处 `ServerStorage.requireInternalWritable()` 直接失败并给可照做的提示，不做半个目录。
+
+### MTDataFilesProvider
+
+`bin.mt.file.content.MTDataFilesProvider`（第三方 DocumentsProvider，随 Manifest 注册，authority `${applicationId}.MTDataFilesProvider`）把 `/data/user/0/<pkg>` 映射成 `content://`，供**外部文件管理器**浏览。
+
+关键事实：它声明了 `android:permission="android.permission.MANAGE_DOCUMENTS"`（签名级），普通应用拿不到，**包括本应用自己**。而本应用读自己的私有目录本来就不需要它（同 uid）。`LegacyPrivateStore` 因此先试 provider（真发一次 query），失败回落同 uid 直连，界面如实显示通道。
+
+`ProviderHealth` 每次回前台体检（能否解析 / enabled / exported / uid 一致），把「上次正常版本 + 当前版本」落盘；升级后突然不正常时说明是升级引起的并给恢复入口。provider 自身无跨版本缓存（`attachInfo` 现算），只要 applicationId 不变、声明不被裁掉，升级不会让它失效。
+
+### 文件系统布局
+
 实际 Android 包路径会因安装而变化；以下路径相对 app `filesDir`：
 
 ```text
 home/
   bin/, lib/, etc/                 Termux 兼容运行时
   home/
-    servers/{dirName}/             一个隔离的服务端
+    servers/{dirName}/             仅旧版本遗留（Legacy）；新服务器在公共存储
       server.jar, eula.txt, server.properties
       plugins/, mods/, worlds/, logs/latest.log
     snapshots/                     备份归档
@@ -155,7 +216,114 @@ runtime/, native/                 bootstrap/运行时工作目录
 
 `McServerController` 解析所选核心和启动参数，再调用 `TermuxRuntime.startMc`。shell 通过 `exec` 被 Java 替换，便于观察进程归属和退出。`TermuxRuntime` 保留进程 stdin，异步消费合并后的输出，写入 `logs/latest.log`，并在进程退出时调用退出处理。控制器可记录异常退出并应用配置的自动重启策略。
 
-可运行或识别的具体核心为 Paper、Purpur、Leaves、Leaf、Spigot、CraftBukkit、Fabric、Forge、NeoForge、Quilt、Vanilla、Velocity、BungeeCord、PowerNukkitX、PocketMine-MP 和 Allay。Forge、NeoForge、Quilt 使用各自的 installer 启动准备流程。PowerNukkitX、PocketMine-MP、Allay 是 Bedrock 服务端，使用 UDP 网络并以 19132 为默认端口，不是 Java Edition 服务端；其中 PowerNukkitX 与 Allay 仍由 JVM 承载，PocketMine-MP 由 PHP 承载。
+可运行或识别的具体核心为 Paper、Purpur、Leaves、Leaf、Spigot、CraftBukkit、Fabric、Forge、NeoForge、Quilt、Vanilla、Velocity、BungeeCord、PowerNukkitX、PocketMine-MP 和 Allay。Forge、NeoForge、Quilt 使用各自的 installer 启动准备流程。PowerNukkitX、PocketMine-MP、Allay、BDS 是 Bedrock 服务端，使用 UDP 网络并以 19132 为默认端口，不是 Java Edition 服务端；其中 PowerNukkitX 与 Allay 仍由 JVM 承载，PocketMine-MP 由 PHP 承载，BDS 是 Mojang 的原生可执行文件（`bedrock_server`，`LD_LIBRARY_PATH=<serverDir>`，解压 zip 而不是下载 jar，无 `eula.txt`）。
+
+**BDS 在 arm64 设备上靠 box64 转译运行**（实现：`server/BdsRuntime.kt` + `TermuxRuntime.startBdsViaBox64`）。
+
+官方只发布 Linux x86_64 + glibc 构建，本 APK 只打包 arm64-v8a、运行环境是 bionic，所以启动链是：
+
+1. **glibc 容器**：复用 `ProotContainerProfile`（默认 jammy）的 rootfs。box64 自己是 aarch64 **glibc** 程序，bionic 上跑不起来；容器同时提供 BDS 依赖的 glibc。
+2. **box64 + x86_64 运行库**：**随 APK 内置**（`app/src/main/assets/box64/`：
+   `box64` 28MB aarch64 可执行文件、`box64.box64rc`、`x86libs/` 7 个库），
+   初始化时复制到 `<prefix>/var/lib/mineserve/bds/`，无网络、无解压。
+
+   **`x86libs` 不是可选项**：官方 `bedrock_server` 是**动态链接**的 x86_64 程序，
+   `DT_NEEDED` 实测为 `libpthread.so.0 / libdl.so.2 / libm.so.6 / libgcc_s.so.1 /
+   libc.so.6 / ld-linux-x86-64.so.2 / librt.so.1`（取自 Ubuntu 22.04 amd64 的
+   libc6 + libgcc-s1）。box64 只把 x86_64 指令翻译成 arm64，**库要自己给**；
+   缺任何一个都是 `Error loading needed libs in elf .../bedrock_server` + `exit=255`。
+
+   这些库**不能**放进给 box64 进程自己的 `LD_LIBRARY_PATH`：box64 是 aarch64 glibc 程序，
+   它的 `libc.so.6` 会被 x86_64 那份顶掉，直接 `wrong ELF class` 起不来。
+   启动命令用的是 `BOX64_LD_LIBRARY_PATH`（只影响被翻译程序找库的顺序）：
+   `<guestRoot>/x86libs : /srv/mineserve : <guestRoot>/run/<dir>`。
+   网络下载路径（`rfort.net` / jsDelivr 的 apt 索引 → `.deb` → 宿主侧解包）保留为**兜底**，只在资源缺失时走到。
+
+   **为什么必须内置**：Debian 的 `.deb` 是 `data.tar.zst`，而安卓上唯一可用的纯 Java zstd 解压库
+   （aircompressor）依赖 `sun.misc.Unsafe.ARRAY_BYTE_BASE_OFFSET` —— **Android 14+ 的 ART 删掉了这个字段**，
+   构造 `ZstdInputStream` 就抛 `NoSuchFieldError`。它是 `Error` 而非 `Exception`，
+   只 `catch (Exception)` 会一路冒到线程顶层**直接杀掉进程**（用户看到闪退）。
+   同一个坑也影响「导入 `.tar.zst` 服务端」：`ServerImporter` 现在会把它转成一条可读的 `IOException`。
+3. **可执行副本**：公共存储是 FUSE 且 `noexec`，1.21+ 的 `bedrock_server` 是 **244MB 静态单文件**，既不能就地执行也不能被 mmap，必须复制到 `<prefix>/var/lib/mineserve/bds/payload/<版本>/`。副本按版本共享，判据是**大小一致**（不比对 mtime：FUSE 上 mtime 不稳会导致每次重搬 244MB）。
+4. **运行目录**：`.../bds/run/<dirName>/` 里用符号链接指向共享副本，再为 `definitions` / `resource_packs` / `behavior_packs` / `config` / `data` 铺一条指回 `/srv/mineserve/*` 的链接 —— 有些版本按工作目录找、有些按可执行文件所在目录找，两条都铺上才不会「换版本就报找不到原版资源」。
+5. **启动**：`proot --rootfs=<rootfs> --bind=<bdsRoot>:/opt/minexa-bds --bind=<serverDir>:/srv/mineserve`，命令是 `cd /srv/mineserve && exec /opt/minexa-bds/box64 /opt/minexa-bds/run/<dir>/bedrock_server`。工作目录仍是服务器目录，所以 `server.properties`、`worlds/`、`logs/` 都落在用户看得到的地方，备份 / 文件管理 / 端口同步一行都不用改。
+
+`BdsSupport.checkLaunch()` 按 ELF 头的 `e_machine` 给出三种结论：本机架构 → `Native` 直接 exec；x86_64 + arm64 设备 → `Box64`（需要 box64 环境）；其它（arm32 / x86 32 位）→ 拒绝并建议改用 PowerNukkitX / Allay。主程序与同目录 `.so` 必须同架构。判定读实际文件，所以将来出现 arm64 官方构建时会自动走原生路径，无需改代码。
+
+**代价必须如实告知用户**（`dl_bds_platform_warning` 四种语言都写了）：首次初始化只需下载 PRoot 容器约 32MB（box64 已内置），占用约 380MB 磁盘，转译启动慢、性能约为原生一半。
+
+内置 box64 让 APK 从 29MB 涨到 35MB（资源在 APK 内被 deflate，28MB 的二进制约占 6MB）。这笔账是划算的：
+它换掉的是「三方小主机可用性 + apt 索引解析 + 新系统上根本走不通的 zstd 解包」三重依赖。
+
+### BDS 运行环境是**独立的**一等公民（`server/BdsEnvironmentManager.kt`）
+
+它不是 `JavaVendor` 的一个取值，也不进 `installedJava` 列表：BDS 环境没有 JDK，
+跟「选哪个 Java」毫无关系。界面在「依赖与环境管理」里单独占一栏（`ENV_TAB_BDS`），
+概览页选中 BDS 核心时「当前运行环境」显示 `BDS 专属 · box64 转译`，
+而不是某个 Java 版本 —— 后者会让人以为换个 JDK 就能跑基岩版。
+
+| 关注点 | 规则 |
+|---|---|
+| 何时初始化 | **只能**由用户在这一栏点「初始化环境」。点启动不会临时装：首次要下 40MB、耗时几分钟，塞进启动路径只会让用户以为卡死，失败也没有地方显示原因 |
+| 就绪判据 | `<prefix>/var/lib/mineserve/bds/` 下同时有 `box64`、`runtime.ready` 与 `x86libs/` 里 7 个库（标记里写发行版 + box64 版本）。`BdsEnvironmentManager.isReady()` 是启动链路的硬闸门；缺 x86 库的老安装由 `refresh()` 在后台补齐一次 |
+| 启动时 | 未就绪 → 直接抛「请先初始化」（不做静默回退）；容器被单独删掉 → `startBdsViaBox64` 里的 `containerRootfsReady` 检查给出可照做的提示 |
+| 状态 | `BdsEnvStatus{installed, installing, stage, percent, error, detail, rawDetail, attempts}`，阶段 `Container(0–60) / Box64(60–92) / Verify(92–100)` 首尾相接，进度不是假滚动条 |
+| 失败 | 分类到 `BdsEnvError{Space, Container, Download, Corrupt, Unpack, Verify, Unknown}`，卡片同时展示分类文案、原始异常、逐个下载源的尝试结果；可原地重试（中间产物都在临时目录并在失败/取消时清掉） |
+| 移除 | 只删 box64 与就绪标记，**保留容器** —— 容器是发行版级共享资源，Java 版（PRoot 来源）也在用 |
+| 跨重建 | 管理器挂在 `McApplication` 上，ViewModel 重建（切页/旋转）不会打断进行中的初始化 |
+| 可见性 | 阶段切换、每 10% 进度、**每一次换源**都 `emitLog("[bds] …")` 到控制台。之前只有 proot 自己会写控制台，进入 box64 阶段后彻底安静 —— 用户看到的就是「卡在 `[proot] 正在部署` 那行不动」 |
+
+### BDS 核心的在线更新（`data/BdsBuildCatalog.kt` + `server/BdsUpdater.kt`）
+
+版本来自 Mojang 官方 `net-secondary.web.minecraft-services.net/api/v1.0/download/links`：
+同一份响应里 `serverBedrockLinux` 是稳定版、`serverBedrockPreviewLinux` 是 Preview，
+版本号只能从 URL 文件名（`bedrock-server-1.26.61.1.zip`）解析，官方不提供 JSON 版本字段。
+目录有 10 分钟缓存（`SharedPreferences`），请求失败时回退上次结果并标 `fromCache`。
+
+更新这条链路的核心不是「下载」，而是**不毁用户数据**。官方 1.26.61.1 安装包（93MB / 1392 条目）
+里带着 `server.properties`（16KB 默认模板）、`allowlist.json` 与 `permissions.json`（都是 3 字节的 `[]`），
+直接解压到服务器目录 = 清空端口、白名单、权限。因此流程固定为：
+
+| 步骤 | 规则 |
+|---|---|
+| 前置 | 服务器必须已停止（运行中替换核心会让进程继续用旧 inode，界面却显示已更新）、目录必须是 BDS 布局 |
+| 备份 | `BackupManager.backupBdsBeforeUpdate` 只备**用户数据面**（`worlds/`、三份配置、`behavior_packs/`、`resource_packs/`、`config/`），不含 265MB 核心；失败即中止，服务器目录一个字节不动。外部存储无权限时退化到私有目录 `home/bds-backup/` |
+| 下载 | 走 `MultiSourceDownload`（`.part` + 包级校验：zip 可读、含 `bedrock_server`、体积 ≥ 20MB） |
+| 暂存校验 | 解压到临时目录（不在服务器目录内），校验主程序 ELF 架构可运行、体积 ≥ 50MB、`server.properties` 存在 |
+| 保留旧核心 | `bedrock_server` 改名为 `bedrock_server.old-<旧版本>`；历史 `.old-*` 只留最近一份（每个 265MB） |
+| 合并安装 | 见 `server/BdsInstallRules.kt`：`server.properties` / `allowlist.json` / `permissions.json` 已存在则跳过，`worlds/` 整棵子树不碰，**只写不删**（用户自装的行为包不会因为新包里没有就被删） |
+| 落地复检 | 复用 `BdsSupport.checkLaunch` 再判一次「能不能跑」；不通过就删本次新写文件、把 `.old` 改回原名、还原 `bds-version.txt` |
+| 收尾 | 写 `bds-version.txt`、更新 `installedCores.version`、清掉旧版本的 265MB 运行副本（`BdsRuntime.payloadDir`）与运行目录里的硬链接 |
+
+界面入口在「服务器管理 → BDS 核心版本」（仅 BDS 核心显示）：当前 / 最新稳定 / Preview 三行 + 更新按钮，
+更新前弹确认框逐条列出「会备份什么、会保留什么」。
+
+### 多源下载（`data/DownloadSources.kt`）
+
+原项目有五套各自的「多源」写法，且都不校验内容。现在统一成 `MultiSourceDownload`：
+
+- **来源是数据，不是代码分支**：`BdsSources.box64Deb`（rfort.net HTTPS / rfort.net HTTP / GitHub Pages）
+  与 `UbuntuImageSources.archiveSources()`（清华、中科大、北外、南大、上交、阿里云）都是列表，
+  加镜像不用改下载逻辑；
+- **失败自动换源**：连不上、超时、非 2xx、内容校验不过（错误页/被截断）都算该源失败，
+  换下一个；全部失败才抛 `AllSourcesFailed`，异常里带每个源的原因；
+- **校验先于使用**：rootfs 按同目录 `SHA256SUMS` 比对整个文件（取不到就退回「大小 + gzip 魔数」，
+  不让次要请求判死安装）；box64 的 `.deb` 按 `Packages` 里的 `SHA256:` 比对，
+  再验 ar 魔数、解包后的 `e_machine` 必须 aarch64；
+- **box64 的源必须是不同主机**，不能只是同一域名换协议：`rfort.net`(https/http) 之外还要有
+  jsDelivr 三个边缘（`cdn` / `fastly` / `gcore`，指向 `ryanfortner/box64-debs` 同一仓库）。
+  仓库里 `.deb` 与 `Packages` 同目录，所以 `jsDelivr = https://cdn.jsdelivr.net/gh/ryanfortner/box64-debs@master/debian/`；
+- **挑包必须按 `Package` 过滤**：索引里除通用 `box64` 外还有 `box64-sd888` / `box64-rk3588` /
+  `box64-tegrax1` / `box64-rpi5arm64` 等按 SoC 调的变体，**共用同一行 Version**。
+  只比版本号会挑到列表里最后一个（给英伟达 Tegra 编的），装到普通手机上要么慢要么崩。
+- **每个源都有硬超时**（`TEXT_TIMEOUT_MS` 15s / `BINARY_TIMEOUT_MS` 180s）+ **总预算** `OVERALL_TIMEOUT_MS` 10min。
+  只靠 `HttpURLConnection` 的 connect/read timeout 不够：那是「每次系统调用」的时限，
+  一个慢滴的流、或分片线程逐个卡 60s，累加起来就是十几分钟的静默。超时通过
+  `DownloadSession.cancel()` 主动断连接实现 —— 否则阻塞中的 socket 读不会被协程取消唤醒；
+- **半截文件不会落在目标路径**：先写 `*.part<源序号>`（每源独立，避免超时任务与下一个源同时写同一文件），
+  校验通过才 rename；取消/异常也会清掉；
+- **明文 http 也能用**：单源下载交给 `MultiThreadDownloader`，它已处理裸 socket 通道
+  （`http://rfort.net` 这类源在 Android 上走 `HttpURLConnection` 会被明文策略拒绝）。
 
 ## 容器与运行环境的增删
 

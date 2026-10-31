@@ -112,6 +112,7 @@ import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.ServerCore
+import com.mineserve.mobile.data.StorageLocation
 import com.mineserve.mobile.data.ServerState
 import com.mineserve.mobile.data.isProotGuestRuntime
 import com.mineserve.mobile.ui.DebouncedTextField
@@ -368,8 +369,10 @@ private fun DashboardCoreSelectionCard(
     onShowDiagnostics: () -> Unit,
     onShowMessage: (String) -> Unit
 ) {
+    // 只在统一存储目录里的服务器才可启动：还留在旧私有目录的记录要等迁移，
+    // 列表里不显示（显示出来只会让用户点了启动再看到「找不到 jar」）。
     val installedCores by vm.config
-        .map { it.installedCores }
+        .map { cfg -> cfg.installedCores.filter { it.location == StorageLocation.Internal } }
         .distinctUntilChanged()
         .collectAsState(initial = emptyList())
     val activeCoreName by vm.config
@@ -404,6 +407,10 @@ private fun DashboardCoreSelectionCard(
     val context = androidx.compose.ui.platform.LocalContext.current
     val activeCore = installedCores.find { it.name == activeCoreName }
     val phpInstalled = selectedPhpVersion in installedPhp
+    // BDS 的运行环境与 Java 那套无关：选中官方 BDS 时必须显示 BDS 环境，
+    // 否则会显示「Pojav · Java 25」这种与基岩版毫无关系的名称。
+    val bdsEnv by vm.bdsEnvStatus.collectAsState()
+    val isBdsCore = activeCore?.core == ServerCore.Bds
 
     if (showForceStopConfirm) {
         AlertDialog(
@@ -496,7 +503,7 @@ private fun DashboardCoreSelectionCard(
                 Box(
                     modifier = Modifier
                         .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(IndigoSoft),
                     contentAlignment = Alignment.Center
                 ) {
@@ -581,11 +588,16 @@ private fun DashboardCoreSelectionCard(
             )
             Spacer(Modifier.width(6.dp))
             Text(
-                when (runtimeKind) {
-                    RuntimeKind.Java -> javaRuntimeLabel(selectedJavaRuntime)
-                    RuntimeKind.Php -> stringResource(R.string.dash_env_php) + " · " + selectedPhpVersion.displayName
+                when {
+                    // 官方 BDS 不跑 JVM：显示它自己的运行环境，而不是某个 Java 版本
+                    isBdsCore -> stringResource(
+                        if (bdsEnv.installed) R.string.dash_env_bds else R.string.dash_env_bds_missing
+                    )
+                    runtimeKind == RuntimeKind.Php ->
+                        stringResource(R.string.dash_env_php) + " · " + selectedPhpVersion.displayName
+                    else -> javaRuntimeLabel(selectedJavaRuntime)
                 },
-                color = Indigo,
+                color = if (isBdsCore && !bdsEnv.installed) Coral else Indigo,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold
             )
@@ -832,7 +844,9 @@ private fun DashboardHeroBlock(
     vm: McViewModel,
     onRefresh: () -> Unit
 ) {
-    val installedCores by vm.config.map { it.installedCores }.distinctUntilChanged().collectAsState(initial = emptyList())
+    val installedCores by vm.config
+        .map { cfg -> cfg.installedCores.filter { it.location == StorageLocation.Internal } }
+        .distinctUntilChanged().collectAsState(initial = emptyList())
     val activeCoreName by vm.config.map { it.activeCoreName }.distinctUntilChanged().collectAsState(initial = null)
     val selectedCore by vm.config.map { it.selectedCore }.distinctUntilChanged().collectAsState(initial = ServerCore.Paper)
     val mcVersion by vm.config.map { it.mcVersion }.distinctUntilChanged().collectAsState(initial = "")
@@ -896,7 +910,14 @@ private fun DashboardAddressCard(vm: McViewModel) {
     val stunState by vm.stunState.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) { vm.refreshLanIp() }
-    McCard(title = stringResource(R.string.s386), compact = true) {
+    // 本地地址 + 两条隧道公网地址：属于「需要时才看」的信息，默认收起。
+    // 展开后内容与原来完全一致，只是首屏不再被三行地址撑长。
+    McCard(
+        title = stringResource(R.string.s386),
+        compact = true,
+        collapsible = true,
+        initiallyExpanded = false
+    ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(stringResource(R.string.s387), color = Muted, fontSize = 10.sp)
@@ -974,7 +995,13 @@ private fun DashboardPluginsCard(vm: McViewModel) {
     } else {
         stringResource(R.string.s392, installedPlugins.size)
     }
-    McCard(title = stringResource(R.string.s390), compact = true) {
+    // 已安装插件清单同理：首屏只需知道「装了几个」，细节点开再看。
+    McCard(
+        title = stringResource(R.string.s390),
+        compact = true,
+        collapsible = true,
+        initiallyExpanded = false
+    ) {
         Column(
             modifier = Modifier.clearAndSetSemantics {
                 contentDescription = pluginsDescription
@@ -1031,7 +1058,7 @@ private fun DownloadHintHeader(
             Box(
                 modifier = Modifier
                     .size(14.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(Indigo.copy(alpha = 0.15f)),
                 contentAlignment = Alignment.Center
             ) {
@@ -1268,7 +1295,7 @@ private fun SheetDropdownRow(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(44.dp)
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(FieldGray)
                     .alpha(if (enabled) 1f else 0.5f)
                     .clickable(enabled = enabled) { expanded = true }

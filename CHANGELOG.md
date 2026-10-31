@@ -1,5 +1,76 @@
 # 更新日志
 
+## 1.4.1（versionCode 59）
+
+### 新增：官方基岩版服务器（BDS）
+
+- 链路：PRoot Ubuntu（jammy，box64 需要 `GLIBC_2.35`）+ box64 把 x86_64 指令转译成 arm64。
+  官方只发布 Linux x86_64 + glibc 的 `bedrock_server`，本 APK 是 arm64 + bionic，这是唯一可行路径。
+- box64 与 x86_64 运行库随 APK 内置（`assets/box64/`）。不走 `.deb` 的原因：`data.tar.zst` 在
+  Android 14+ 解不开（aircompressor 依赖 `Unsafe.ARRAY_BYTE_BASE_OFFSET`，抛 Error 而非 Exception，
+  进程直接被杀）。box64 也不在任何 Ubuntu 官方源里，加第三方源要先有 CA 证书，而初始 rootfs 没有。
+- 公共存储是 FUSE、**不可执行**，`bedrock_server`（244MB）必须先复制到私有目录才能 exec；
+  副本按版本共享，`run/<dir>/` 里的主程序用**硬链接**（不是符号链接）——BDS 1.21+ 用
+  `/proc/self/exe` 的 realpath 当资源根，软链会让它跑去共享目录读配置，表现为
+  `Contents of server.properties: {}`。
+- 环境初始化分三段（容器 0-60% / box64 60-92% / 实测 92-100%），失败按类型归因
+  （空间不足 / 容器 / 下载 / 包损坏 / 解压 / 实测），可单阶段重试。`isReady(prefix)` 作硬闸门，
+  绝不「临时装」；`ROOTFS_PROBE_TIMEOUT_MS=180s`（60s 会把刚装好的 rootfs 判死）。
+- 核心更新：备份用户数据面 → 下载到临时目录 → 包级校验 → 安全替换 → 旧核心留
+  `bedrock_server.old-<版本>`。官方包里**自带空默认值**的 `server.properties` /
+  `allowlist.json` / `permissions.json`，直接解压等于清空用户设置，因此替换规则单独抽到
+  `BdsInstallRules` 并被单测锁住。
+- 玩家管理：只认 `Player connected` / `Player disconnected`（`Player Spawned` 同一次连接也会打，
+  一起算会翻倍）。`permissions.json` 只存 xuid，名字靠日志里带出的映射落盘
+  （`.minexa-xuid-names.json`）。BDS 无封禁命令与封禁列表，界面如实说明。
+
+### 新增：属性页按真实配置文件生成
+
+- `PropertyCatalog` 提供元数据字典（中文名 / 说明 / 分组 / 控件类型 / 范围），**以文件真实内容为准**
+  渲染；字典未收录的 key 落到兜底区按原始键名展示，不再被丢弃。
+- 支持 Paper / Purpur / Fabric / 原版 / BDS / PocketMine / PowerNukkitX，删除原先 Java / PNX 两套
+  硬编码表单（约 -250 行）。保存改为只提交变动键后合并写回，避免整份覆盖冲掉并发改动。
+
+### 新增：服务器统一到公共存储 + 旧档迁移
+
+- 唯一根 `/storage/emulated/0/Minexa/Minecraftserver/<dirName>`。`StorageAccess` 是唯一权限入口：
+  Android 10 及以下走运行时权限，11+ 走 `MANAGE_EXTERNAL_STORAGE`（设置页授权，需检测返回后是否真给），
+  并在真正写盘前探测可写性 —— 没有权限时 `mkdirs()` 只静默返回 false。
+- `LegacyServerMigration` 只搬不兼容：复制 → 校验 → rename → 删源，成功后才改写配置里的
+  `location`。`StorageLocation.Legacy` 枚举保留（删掉会让老 JSON 反序列化失败，触发
+  「解析失败 → 拒绝落盘 → 用户设置清零」的保护）。
+
+### 改进
+
+- **多源下载统一到 `MultiSourceDownload`**（`data/DownloadSources.kt`）：按顺序试源、逐源硬超时
+  （TEXT 15s / BINARY 180s / 总 10min）、失败原因按主机名聚合。已接入 bootstrap、box64、BDS 核心。
+  原先项目里有五套各自为政的「多源」写法。
+- **导航改成真返回栈**（`NavStack`）：二级页逐层压栈、`rememberSaveableStateHolder` 保存每页
+  `LazyListState` / 滚动位置；「更多」按一级页处理。
+- **下载页重排为紧凑版**：核心按家族分段、只渲染当前家族磁贴；版本与命名下载合并成一步。
+- `VersionSelection` 抽出「切核心后版本是否可沿用」的纯函数（Java 系 / BungeeCord `latest` /
+  基岩各发行版编号体系互不通用），避免拼出 404 地址。
+
+### 修复
+
+- 启动后磁盘凭空多出空文件夹：`serverDirFor` 曾经带 `mkdirs()`，任何一次「读」都变成「写」。
+- 关闭 EasyTier 组网后 TUN 与实例残留：后台 `startService` 抛 `IllegalStateException` 被
+  `runCatching` 吞掉，停止指令从未送达。改用 `startForegroundService`，失败时走
+  `stopService` + 直接停实例兜底。
+- Velocity 版本列表永远为空：PaperMC v3 的 `versions` 有「两层对象」与「扁平数组」两种形态，
+  旧代码只认数组、抛异常后整条版本链断掉。
+- 导入核心后老服务器消失：dirName 去重没算「已登记但目录暂时不存在」的记录。
+- 选中 BDS 时概览页显示「Pojav · Java 25」这类无关运行环境名。
+
+### 性能与体积
+
+- **删除 `-keep class androidx.compose.** { *; }`**。这条规则让 R8 对整棵 Compose 依赖树失效，
+  seeds 里多出 3.4 万个 `material-icons-extended` 图标成员（项目只用 81 个图标），未压缩 dex
+  22.5MB。删除后 dex 7.69MB → 2.63MB（-66%），并从双 dex 回到单 dex；同口径 APK 13.59MB → 6.83MB。
+  本版 15.69MB 是因为内置了 8.8MB box64。**该规则不得恢复**，需要时只补具体类。
+- 冷启动不再在主线程做磁盘与 IPC：`bdsEnvironment.refresh()`（公共存储 FUSE 多次 stat）与
+  `UsageTracker.maybePulse()`（SharedPreferences + Binder 取 ANDROID_ID）移到 IO 协程。
+
 ## 1.3.1
 
 ### 修复：frpc 引擎在线下载（元数据格式无法识别）

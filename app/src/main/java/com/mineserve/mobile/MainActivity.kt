@@ -162,6 +162,13 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // 文件管理权限只能在设置页里给（Android 11+ 没有运行时对话框），
+        // 用户返回时这里重新判定一次：可用则全局状态流立即翻转，界面随之刷新。
+        // 判定含落盘探测，故放在 IO 线程；ProviderHealth 也属于只读的 PackageManager 查询。
+        lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            com.mineserve.mobile.data.StorageAccess.refresh(this@MainActivity)
+            com.mineserve.mobile.data.ProviderHealth.check(this@MainActivity)
+        }
         lifecycleScope.launch {
             val config = McApplication.get(this@MainActivity).repository.configFlow.first()
             if (config.keepStatusOverlay) {

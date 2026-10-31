@@ -480,7 +480,7 @@ private fun FileItemRow(
         Box(
             modifier = Modifier
                 .size(36.dp)
-                .clip(RoundedCornerShape(10.dp))
+                .clip(RoundedCornerShape(16.dp))
                 .background(if (entry.isDirectory) Mint.copy(alpha = 0.15f) else IndigoSoft),
             contentAlignment = Alignment.Center
         ) {

@@ -27,8 +27,8 @@ android {
         applicationId = "com.mineserve.mobile"
         minSdk = 26
         targetSdk = 28
-        versionCode = 58
-        versionName = "1.3.2"
+        versionCode = 59
+        versionName = "1.4.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }

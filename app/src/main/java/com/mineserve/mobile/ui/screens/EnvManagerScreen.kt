@@ -82,6 +82,8 @@ import kotlinx.coroutines.flow.map
 /** Tab 下标：崩溃页「前往安装」跳转到 Java 模块时使用 */
 const val ENV_TAB_JAVA = 0
 const val ENV_TAB_DEPS = 1
+/** BDS 专用运行环境（PRoot + box64），与 Java 那套无关。 */
+const val ENV_TAB_BDS = 4
 const val ENV_TAB_TERMUX = 2
 const val ENV_TAB_PHP = 3
 
@@ -91,7 +93,7 @@ const val ENV_TAB_PHP = 3
  */
 @Composable
 fun EnvManagerScreen(vm: McViewModel, initialTab: Int, onBack: () -> Unit) {
-    var tab by remember { mutableStateOf(initialTab.coerceIn(0, 3)) }
+    var tab by remember { mutableStateOf(initialTab.coerceIn(0, 4)) }
     var confirmText by remember { mutableStateOf<String?>(null) }
     var confirmAction by remember { mutableStateOf<(() -> Unit)?>(null) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -123,7 +125,8 @@ fun EnvManagerScreen(vm: McViewModel, initialTab: Int, onBack: () -> Unit) {
                 stringResource(R.string.env_tab_java),
                 stringResource(R.string.env_tab_deps),
                 stringResource(R.string.env_tab_termux),
-                stringResource(R.string.env_tab_php)
+                stringResource(R.string.env_tab_php),
+                stringResource(R.string.env_tab_bds)
             )
             SegmentedTabs(
                 options = envTabs,
@@ -142,6 +145,7 @@ fun EnvManagerScreen(vm: McViewModel, initialTab: Int, onBack: () -> Unit) {
                     ENV_TAB_JAVA -> JavaModule(vm, ::requestConfirm)
                     ENV_TAB_DEPS -> DependenciesModule(vm, ::requestConfirm)
                     ENV_TAB_PHP -> PhpModule(vm, ::requestConfirm)
+                    ENV_TAB_BDS -> BdsEnvironmentModule(vm, ::requestConfirm)
                     else -> TermuxModule(vm, ::requestConfirm)
                 }
             }

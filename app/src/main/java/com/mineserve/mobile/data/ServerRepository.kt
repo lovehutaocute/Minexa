@@ -54,7 +54,8 @@ private val Context.configDataStore: DataStore<Preferences> by preferencesDataSt
  *  - 日志流由 TermuxRuntime.consoleFlow 直接暴露
  */
 class ServerRepository(
-    private val context: Context,
+    /** 公开给需要做存储目录判定的调用方（下载/导入前的可写性守卫）。 */
+    val context: Context,
     val termuxRuntime: TermuxRuntime
 ) {
     /**
@@ -112,9 +113,14 @@ class ServerRepository(
      * 迁移放在这一层（而不是各自的调用点），是因为 [configFlow] 与
      * [ensureConfigLoaded] 是两条独立的读盘路径：只在其中一条迁移，
      * 会让「界面看到的配置」和「权威内存态」对不上。
+     *
+     * 存储位置也在这一层纠正（[ServerStorage.reconcile]）：它既是「磁盘 → 内存」的
+     * 唯一入口，也是刷新 [ServerStorage] 目录索引的地方，界面首次渲染服务器列表时
+     * 就已经能分辨哪个核心在统一存储、哪个还在旧私有目录。
      */
     private fun decodeConfigLenient(raw: String): McConfig? =
         decodeConfigRaw(raw)?.let { FrpProfiles.migrateLegacy(it) ?: it }
+            ?.let { ServerStorage.reconcile(context, it) }
 
     /**
      * 配置的权威内存态：所有 updateConfig 的读改写都以它为基准。
@@ -209,9 +215,12 @@ class ServerRepository(
         // 不做这一步，老用户升级后原来能用的 FRP 会变成「还没有配置」，启动键点不动。
         val migrated = FrpProfiles.migrateLegacy(initial)
         val effective = migrated ?: initial
+        // 升级用户的老服务器仍在旧私有目录：按磁盘实际情况纠正每个核心的位置字段，
+        // 不移动、不复制文件，只让列表与后续的文件操作指向正确目录。
+        val reconciled = ServerStorage.reconcile(context, effective)
         synchronized(this) {
             if (!configLoaded) {
-                _config.value = effective
+                _config.value = reconciled
                 configLoaded = true
             }
         }
@@ -219,7 +228,14 @@ class ServerRepository(
         // 用户在落盘前把配置删光，重启后旧字段又会把配置变回来。
         if (migrated != null) {
             Log.i(TAG, "已把旧版单份 FRP 配置迁移为 ${migrated.frpProfiles.size} 份配置并落盘")
-            saveChannel.trySend(effective)
+            saveChannel.trySend(reconciled)
+        }
+        // 位置纠正同理：不落盘的话每次冷启动都要重判一次磁盘，
+        // 而且「配置说 Legacy、磁盘其实已在统一目录」的错位会一直留在导出/诊断里。
+        if (reconciled != effective) {
+            val pending = reconciled.installedCores.count { it.location == StorageLocation.Legacy }
+            Log.i(TAG, "已把已存在于统一目录的核心标记为 Internal；仍待迁移 $pending 个")
+            saveChannel.trySend(reconciled)
         }
     }
 

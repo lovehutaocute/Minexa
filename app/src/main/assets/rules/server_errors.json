@@ -221,18 +221,27 @@
       "suggest": "这是运行环境兼容性提示，不等同于 Minecraft 主线程崩溃；以首个真正异常为准。"
     },
     {
+      "id": "metaspace-exhausted",
+      "level": "Identified",
+      "regex": "OutOfMemoryError:\\s*(?:Metaspace|Compressed class space)",
+      "label": "类元数据区（Metaspace）不足",
+      "detail": "报的是 Metaspace 而不是 Java 堆。Metaspace 属于 native 内存、不计入 -Xmx，所以「堆还没用完」和「Metaspace 已满」可以同时成立；大型 Forge/NeoForge 整合包里每个模组都有自己的类加载器，最容易撞这个上限。",
+      "evidence": "$0",
+      "suggest": "这不是调 -Xmx 能解决的：**调小 -Xmx 反而更糟**。正确做法是放宽 -XX:MaxMetaspaceSize（1.3.1 起已按 -Xmx 自动放宽到 max(768m, -Xmx)），旧版本可用「使用自定义启动命令」加 -XX:MaxMetaspaceSize=1024m。"
+    },
+    {
       "id": "out-of-memory",
       "level": "Identified",
       "contains": [
-        "OutOfMemoryError",
         "Java heap space",
         "GC overhead limit exceeded",
         "Cannot reserve enough space"
       ],
+      "regex": "OutOfMemoryError(?!:\\s*(?:Metaspace|Compressed class space))",
       "label": "内存不足",
       "detail": "Java 堆或系统内存不足。",
       "evidence": "检测到 OOM/heap space",
-      "suggest": "降低视距、插件/模组数量和 -Xmx；同时检查 Android 是否终止后台进程。"
+      "suggest": "堆真的吃满了才调 -Xmx：小内存设备可以适当调大，物理内存不够时再配合降低视距、减少插件/模组；同时检查 Android 是否终止后台进程。若报的是 Metaspace，见另一条诊断。"
     },
     {
       "id": "process-killed",

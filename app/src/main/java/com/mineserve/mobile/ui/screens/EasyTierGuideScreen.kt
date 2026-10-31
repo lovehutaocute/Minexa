@@ -233,7 +233,7 @@ private fun GuideValueRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(container)
             .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
         verticalAlignment = Alignment.CenterVertically,

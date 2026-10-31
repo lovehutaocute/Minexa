@@ -82,8 +82,18 @@ object EasyTierEngineStore {
         sha256Of(engineFile(context))
     }.getOrNull()
 
-    /** 卸载：删文件即可，JNI 那边已加载的实例由 EasyTierEngine.stop 负责。 */
+    /**
+     * 卸载：**先停实例，再删文件**。
+     *
+     * 顺序不能反：JNI 一旦 `System.load`，`.so` 就已经在进程内存里了，删文件不会让
+     * 正在跑的实例消失 —— 虚拟网卡还挂着、转发端口还占着，用户看到的是
+     * 「引擎都删了，组网还在跑 / 还在报错」。同理，删完文件也不能把
+     * [EasyTierJNI.loaded] 置回 false：那样再下载一次引擎会因「同一路径已加载」
+     * 而加载失败，反而必须重启进程才能用。
+     */
     fun uninstall(context: Context = McApplication.get()): Boolean {
+        runCatching { EasyTierEngine.stop(context) }
+        runCatching { com.easytier.jni.EasyTierJNI.stopAllInstances() }
         val f = engineFile(context)
         val deleted = !f.exists() || f.delete()
         versionFile(context).delete()

@@ -2,6 +2,8 @@ package com.mineserve.mobile.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -70,6 +72,12 @@ fun ServerManagementScreen(
     // 进入页面时扫描 servers 目录，自动登记 MT 管理器等外部方式直接复制进来的服务器文件夹
     LaunchedEffect(Unit) { vm.scanUnregisteredServers() }
 
+    // 官方 BDS 的版本要问 Mojang：进页面检测一次（10 分钟内有缓存，不会每次都发请求）。
+    // 切换服务器时也重新检测，否则换到另一台 BDS 会沿用上一台的版本结论。
+    LaunchedEffect(active?.dirName, active?.core) {
+        if (active?.core == com.mineserve.mobile.data.ServerCore.Bds) vm.checkBdsCoreUpdate()
+    }
+
     Column(Modifier.fillMaxSize()) {
         // 与其它一级页面统一：同一个标题栏（eyebrow + 标题）承接状态栏避让，
         // 标题字号/位置与概览、设置等页面完全一致；正文改用统一页面边距。
@@ -77,6 +85,9 @@ fun ServerManagementScreen(
         Column(
             Modifier
                 .fillMaxSize()
+                // 选中 BDS 核心时本页会多出一张版本卡片 + 基岩版提示，
+                // 内容高度会超过一屏；没有这个滚动修饰符就完全滑不动，下面的入口点不到。
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = McSpacing.Page)
                 .padding(top = McSpacing.CardGap),
             verticalArrangement = Arrangement.spacedBy(McSpacing.CardGap)
@@ -107,6 +118,10 @@ fun ServerManagementScreen(
                 )
             }
             Spacer(Modifier.height(2.dp))
+            // 官方 BDS 的核心版本与在线更新（Java 版核心没有这条通道，故只对 BDS 显示）
+            if (active?.core == com.mineserve.mobile.data.ServerCore.Bds) {
+                BdsCoreCard(vm)
+            }
             ManagementEntry(stringResource(R.string.sm_entry_plugins), stringResource(R.string.sm_entry_plugins_desc), Icons.Outlined.Extension, onPlugins)
             // 世界（存档）是服务端目录下的实体，属服务器管理；原先藏在「更多」里，路径太长
             ManagementEntry(stringResource(R.string.sm_entry_worlds), stringResource(R.string.sm_entry_worlds_desc), Icons.Outlined.Map, onWorlds)
@@ -125,6 +140,8 @@ fun ServerManagementScreen(
                     modifier = Modifier.padding(horizontal = 2.dp)
                 )
             }
+            // 底部留白：最后一张卡片贴着导航栏时滑动到底的手感很差
+            Spacer(Modifier.height(16.dp))
         }
     }
 

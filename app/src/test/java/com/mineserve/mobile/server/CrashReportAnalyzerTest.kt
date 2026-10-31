@@ -165,6 +165,37 @@ class CrashReportAnalyzerTest {
         assertTrue(analysis.findings.any { it.label == "内存不足" })
     }
 
+    /**
+     * Metaspace 不足必须走单独一条归因，且**不能**再提示「调 -Xmx」。
+     *
+     * 用户实测：293 个 mod 的 Forge 1.20.1 包，-Xmx 还有一大半没用，加载到
+     * RegisterEvent 阶段报 `OutOfMemoryError: Metaspace`。当时 App 只有一条
+     * 通用「内存不足」规则，建议是「降低 -Xmx」——对着 Metaspace 是反向操作，
+     * 越照做越崩。这条用例就是防止两条规则再被合并回去。
+     */
+    @Test
+    fun `Metaspace 不足单独归因且不建议调小堆`() {
+        val analysis = CrashReportAnalyzer.analyze(
+            "java.lang.OutOfMemoryError: Metaspace\n\tat java.lang.ClassLoader.defineClass1(Native Method)"
+        )
+        val finding = analysis.findings.firstOrNull { it.label.contains("Metaspace") }
+        assertTrue("Metaspace 未被单独识别，实际归因：${analysis.findings.map { it.label }}", finding != null)
+        assertTrue(
+            "建议里应给出放宽 Metaspace 的做法，实际：${finding!!.suggestion}",
+            finding.suggestion.contains("MaxMetaspaceSize")
+        )
+        assertFalse(
+            "不应同时给出通用的「调 -Xmx」归因，否则两条卡片互相矛盾",
+            analysis.findings.any { it.label == "内存不足" }
+        )
+    }
+
+    @Test
+    fun `Compressed class space 不足也走 Metaspace 归因`() {
+        val analysis = CrashReportAnalyzer.analyze("java.lang.OutOfMemoryError: Compressed class space")
+        assertTrue(analysis.findings.any { it.label.contains("Metaspace") })
+    }
+
     @Test
     fun `exit 137 命中进程被终止`() {
         val analysis = CrashReportAnalyzer.analyze("进程退出 exit code: 137")

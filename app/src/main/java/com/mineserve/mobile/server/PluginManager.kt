@@ -701,9 +701,9 @@ class PluginManager(
 
     // ── 模组管理（Fabric/Forge 的 mods/ 目录） ─────────────────────
 
-    /** 模组目录：home/servers/{dirName}/mods */
+    /** 模组目录：{serverDir}/mods */
     fun modsDirOf(dirName: String): File =
-        File(termux.installer.rootDir, "home/servers/$dirName/mods")
+        File(termux.serverDirFor(dirName), "mods")
 
     /** 已安装模组条目（简化，不解析 jar 内元信息） */
     data class ModEntry(

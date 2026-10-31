@@ -84,6 +84,7 @@ fun MoreScreen(onNetwork: () -> Unit, onBackup: () -> Unit, onDiagnostics: () ->
     val fontScale = LocalDensity.current.fontScale.coerceIn(0.85f, 1.6f)
     val cardHeight = (CARD_HEIGHT_BASE * fontScale).dp
     Column(Modifier.fillMaxSize()) {
+        // 「更多」和 Tab 页同级：底栏可见、没有悬浮返回键，所以这里不需要预留返回键的间距
         HeaderBlock(stringResource(R.string.more_more), stringResource(R.string.more_more))
         // 卡片统一走 McCard 同款外观（12dp 圆角 + 1dp 描边 + 极浅投影）与页面边距，
         // 避免这一页的入口卡与其它页面的卡片看起来不是一套东西。

@@ -36,13 +36,13 @@ class CrashReportManager(private val termux: TermuxRuntime) {
     private val crashLogsDir: File
         get() = File(termux.installer.rootDir, "home/crash-logs").apply { mkdirs() }
 
-    /** MC 原生崩溃报告目录（home/servers/{dirName}/crash-reports） */
+    /** MC 原生崩溃报告目录（{serverDir}/crash-reports） */
     private fun nativeCrashReportsDir(dirName: String): File =
-        File(termux.installer.rootDir, "home/servers/$dirName/crash-reports")
+        File(termux.serverDirFor(dirName), "crash-reports")
 
     /** MC latest.log 路径 */
     private fun latestLogFile(dirName: String): File =
-        File(termux.installer.rootDir, "home/servers/$dirName/logs/latest.log")
+        File(termux.serverDirFor(dirName), "logs/latest.log")
 
     /**
      * 收集崩溃日志。

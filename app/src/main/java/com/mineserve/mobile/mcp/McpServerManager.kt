@@ -690,7 +690,7 @@ class McpServerManager(
             app.termuxRuntime.serverDirFor(stagingCore.dirName), archiveRel
         )
         if (!archive.isFile) return McpToolResult("Archive not found: ${archive.name}", isError = true)
-        val dirName = McServerController.sanitizeDirName(name)
+        val dirName = McServerController.dirNameForDisplayName(name)
         val target = File(app.termuxRuntime.serversDir, dirName)
         if (target.exists()) {
             return McpToolResult("Server folder '$dirName' already exists; delete it first or pick another name.", isError = true)

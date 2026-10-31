@@ -44,30 +44,34 @@ object McSpacing {
  * 全局圆角令牌。
  *
  * 卡片、按钮、输入框、列表行的圆角是设计语言里最容易被“随手写一个数”破坏的部分，
- * 这里固定为几档：卡片 12dp、控件 12dp（行内紧凑控件 10dp）、行内小容器 10dp、
- * 弹窗 20dp。同一层级只用一档，避免相邻元素圆角不同心。
+ * 这里固定为几档：卡片 18dp、控件 16dp（行内紧凑控件 14dp）、行内小容器 14dp、
+ * 弹窗 28dp。同一层级只用一档，避免相邻元素圆角不同心。
+ *
+ * 2026-10 整体加大一档：原先是 12/12/10/10/6/12/20，视觉上偏「方」，
+ * 与圆润的磁贴、胶囊混在一起时显得两端风格不一。统一放大后，
+ * 相邻两层（卡片 18 / 内部行 14）仍保持 4dp 的差值，同心关系不变。
  */
 object McShape {
     /** 卡片（McCard）与页面级容器。 */
-    val Card = RoundedCornerShape(12.dp)
+    val Card = RoundedCornerShape(18.dp)
 
     /** 按钮、输入框、下拉框等可操作控件（卡片级 / 整行 / 弹窗操作）。 */
-    val Control = RoundedCornerShape(12.dp)
+    val Control = RoundedCornerShape(16.dp)
 
     /** 行内紧凑控件（列表行、字段行里与其它内容并排的小按钮）。 */
-    val ControlCompact = RoundedCornerShape(10.dp)
+    val ControlCompact = RoundedCornerShape(14.dp)
 
     /** 卡片内部的行级容器（列表行、地址条、分组标题）。 */
-    val Row = RoundedCornerShape(10.dp)
+    val Row = RoundedCornerShape(14.dp)
 
     /** 步骤点、标签等小圆角。 */
-    val Small = RoundedCornerShape(6.dp)
+    val Small = RoundedCornerShape(10.dp)
 
     /** 状态胶囊 / 分段控件的滑轨。 */
-    val Chip = RoundedCornerShape(12.dp)
+    val Chip = RoundedCornerShape(18.dp)
 
     /** 弹窗。 */
-    val Dialog = RoundedCornerShape(20.dp)
+    val Dialog = RoundedCornerShape(28.dp)
 
     /** 完全圆形（状态圆点、头像占位）。 */
     val Circle = RoundedCornerShape(percent = 50)

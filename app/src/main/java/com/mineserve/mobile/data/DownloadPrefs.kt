@@ -16,7 +16,21 @@ object DownloadPrefs {
 
     /** 默认：多线程下载内置并默认启用 */
     const val DEFAULT_ENABLED = true
-    const val DEFAULT_THREADS = 32
+
+    /**
+     * 默认下载线程数。
+     *
+     * 4 是实测的经验值：手机端的分片并发瓶颈在运营商对单连接的限速，
+     * 2 条往往吃不满带宽，8 条以上收益迅速衰减而 CPU/内存开销线性上升
+     * （32 条曾在低端机上把下载线程本身变成瓶颈）。需要更快时用户可在设置里往右拖。
+     */
+    const val DEFAULT_THREADS = 4
+
+    /** 滑块可取的最小值。 */
+    const val MIN_THREADS = 1
+
+    /** 滑块可取的最大值（与原 coerceIn 上限一致）。 */
+    const val MAX_THREADS = 16
 
     @Volatile
     private var appContext: Context? = null
@@ -42,7 +56,7 @@ object DownloadPrefs {
     /** 下载线程数（默认 4） */
     fun threadCount(): Int {
         val p = prefs() ?: return DEFAULT_THREADS
-        return p.getInt(KEY_THREADS, DEFAULT_THREADS).coerceIn(1, 32)
+        return p.getInt(KEY_THREADS, DEFAULT_THREADS).coerceIn(MIN_THREADS, MAX_THREADS)
     }
 
     fun setEnabled(enabled: Boolean) {
@@ -50,6 +64,6 @@ object DownloadPrefs {
     }
 
     fun setThreadCount(count: Int) {
-        prefs()?.edit()?.putInt(KEY_THREADS, count.coerceIn(1, 32))?.apply()
+        prefs()?.edit()?.putInt(KEY_THREADS, count.coerceIn(MIN_THREADS, MAX_THREADS))?.apply()
     }
 }

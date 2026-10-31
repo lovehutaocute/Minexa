@@ -287,7 +287,13 @@ fun PluginsScreen(vm: McViewModel) {
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
                 )
             }
-            HeaderBlock(eyebrow = stringResource(R.string.eyebrow_plugins), title = stringResource(R.string.s750))
+            // reserveBackSlot：本页没有 BackBar（也没有其它返回入口），
+            // 顶部让出悬浮返回键的安全间距
+            HeaderBlock(
+                eyebrow = stringResource(R.string.eyebrow_plugins),
+                title = stringResource(R.string.s750),
+                reserveBackSlot = true
+            )
 
             // ── 当前核心状态卡片 ──
             McCard(
@@ -637,9 +643,9 @@ private fun InstalledTab(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(Coral.copy(alpha = 0.12f))
-                    .border(1.dp, Coral, RoundedCornerShape(10.dp))
+                    .border(1.dp, Coral, RoundedCornerShape(16.dp))
                     .padding(10.dp)
             ) {
                 Column {
@@ -679,7 +685,7 @@ private fun InstalledTab(
                 val label = "$filter $count"
                 Box(
                     modifier = Modifier
-                        .clip(RoundedCornerShape(8.dp))
+                        .clip(RoundedCornerShape(12.dp))
                         .background(if (activeFilter == filter) Indigo else IndigoSoft)
                         .clickable { activeFilter = filter }
                         .padding(horizontal = 8.dp, vertical = 4.dp)
@@ -736,7 +742,7 @@ private fun InstalledPluginRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(if (plugin.isEnabled) IndigoSoft else CoralSoft.copy(alpha = 0.4f))
             .clickable { onShowDetail() }
             .padding(10.dp),
@@ -745,7 +751,7 @@ private fun InstalledPluginRow(
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(if (plugin.isEnabled) Indigo else Muted),
             contentAlignment = Alignment.Center
         ) {
@@ -868,7 +874,7 @@ private fun UploadTab(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(120.dp)
-                .clip(RoundedCornerShape(12.dp))
+                .clip(RoundedCornerShape(18.dp))
                 .background(IndigoSoft)
                 .border(width = 1.dp, color = Indigo, shape = McShape.Control)
                 .clickable {
@@ -1111,7 +1117,7 @@ private fun DetailRow(label: String, value: String) {
 private fun BadgeChip(text: String, color: Color, bg: Color) {
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(bg)
             .padding(horizontal = 6.dp, vertical = 2.dp)
     ) {
@@ -1174,7 +1180,7 @@ private fun ModsTab(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(IndigoSoft)
                             .padding(10.dp),
                         verticalAlignment = Alignment.CenterVertically
@@ -1182,7 +1188,7 @@ private fun ModsTab(
                         Box(
                             modifier = Modifier
                                 .size(32.dp)
-                                .clip(RoundedCornerShape(8.dp))
+                                .clip(RoundedCornerShape(12.dp))
                                 .background(Indigo),
                             contentAlignment = Alignment.Center
                         ) {
@@ -1597,7 +1603,7 @@ private fun LoaderFilterSection(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(FieldGray)
                 .clickable { expanded = !expanded }
                 .padding(horizontal = 10.dp, vertical = 6.dp),
@@ -1718,7 +1724,7 @@ private fun ModrinthIcon(url: String, size: Dp = 32.dp) {
     Box(
         modifier = Modifier
             .size(size)
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(12.dp))
             .background(IndigoSoft),
         contentAlignment = Alignment.Center
     ) {

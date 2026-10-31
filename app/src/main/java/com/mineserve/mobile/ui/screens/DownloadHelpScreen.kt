@@ -199,7 +199,7 @@ private fun HelpSolutionCard(
             // 标签
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(6.dp))
+                    .clip(RoundedCornerShape(10.dp))
                     .background(tagColor.copy(alpha = 0.15f))
                     .padding(horizontal = 8.dp, vertical = 2.dp)
             ) {

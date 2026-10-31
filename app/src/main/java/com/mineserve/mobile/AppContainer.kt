@@ -17,7 +17,8 @@ class AppContainer(private val app: McApplication) {
                 repo = app.repository,
                 controller = McServerController(app.termuxRuntime, app.repository),
                 pluginManager = PluginManager(app.termuxRuntime, app),
-                tunnelManager = TunnelManager(app, logSink = { app.termuxRuntime.emitLog(it) })
+                tunnelManager = TunnelManager(app, logSink = { app.termuxRuntime.emitLog(it) }),
+                bdsEnvironment = app.bdsEnvironment
             ) as T
         }
     }

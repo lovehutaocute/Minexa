@@ -13,6 +13,7 @@ import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.service.McForegroundService
 import android.net.Uri
 import com.mineserve.mobile.data.McConfig
+import com.mineserve.mobile.data.VersionSelection
 import com.mineserve.mobile.data.AutomationTask
 import com.mineserve.mobile.data.AutomationScheduler
 import com.mineserve.mobile.data.JavaVersion
@@ -25,8 +26,16 @@ import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.MinecraftVersionNormalizer
 import com.mineserve.mobile.data.ServerPort
+import com.mineserve.mobile.data.BdsEnvStatus
+import com.mineserve.mobile.data.BdsBuildCatalog
+import com.mineserve.mobile.data.BdsChannel
+import com.mineserve.mobile.data.BdsCoreStatus
+import com.mineserve.mobile.data.BdsUpdateProgress
+import com.mineserve.mobile.data.InstalledCore
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.ServerState
+import com.mineserve.mobile.data.StorageLocation
+import com.mineserve.mobile.data.LegacyPrivateStore
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.NativeLibraryBundler
@@ -50,6 +59,7 @@ import com.mineserve.mobile.server.CrashReportAnalyzer
 import com.mineserve.mobile.server.SafeTextFile
 import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PlayerManager
+import com.mineserve.mobile.server.BdsEnvironmentManager
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
 import com.mineserve.mobile.server.tunnel.StunDiagnostics
@@ -76,6 +86,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -119,13 +130,247 @@ class McViewModel(
     private val repo: ServerRepository,
     private val controller: McServerController,
     private val pluginManager: PluginManager,
-    private val tunnelManager: TunnelManager
+    private val tunnelManager: TunnelManager,
+    private val bdsEnvironment: BdsEnvironmentManager
 ) : ViewModel() {
     val config: StateFlow<McConfig> = repo.configFlow.stateIn(
         viewModelScope, SharingStarted.WhileSubscribed(5_000), McConfig()
     )
 
     val serverState: StateFlow<ServerState> = repo.serverState
+
+    // ── BDS 专属运行环境 ─────────────────────────────────────────
+    //
+    // 与 Java / Pojav 那套运行环境**没有任何交集**：它没有 JDK，不进
+    // `installedJava` 列表，也不参与 `selectedJavaRuntime` 的选择。
+    // 界面上单独一栏「BDS 专属」，正是为了不让用户把它误认成某个 Java 版本。
+
+    /** BDS 运行环境（容器 + box64）的状态；跨页共享，切页不丢进度 */
+    val bdsEnvStatus: StateFlow<BdsEnvStatus> = bdsEnvironment.status
+
+    /** 重新读一遍磁盘（进环境页、授权变化、安装结束后调用） */
+    fun refreshBdsEnvironment() = bdsEnvironment.refresh()
+
+    /**
+     * 用户手动触发初始化。
+     *
+     * 刻意**不**在启动服务器时自动调用：首次要下几十兆、耗时几分钟，
+     * 塞进启动路径只会让用户以为卡死。启动时若未就绪会直接报错并指到这里。
+     */
+    fun initializeBdsEnvironment() {
+        // 未授权写公共存储时初始化必然失败，先给出可照做的提示
+        if (!isBootstrapped.value) {
+            _errorFlow.tryEmit(str(R.string.bds_env_need_bootstrap))
+            return
+        }
+        bdsEnvironment.startInitialize()
+    }
+
+    fun cancelBdsEnvironment() = bdsEnvironment.cancel()
+
+    /** 只删 box64 与就绪标记，容器留给 Java 版继续用 */
+    fun removeBdsBox64() = bdsEnvironment.removeBox64()
+
+    // ── 在线模式（正版验证）出网自检 ───────────────────────────────
+
+    private val _bdsProbeRunning = MutableStateFlow(false)
+    val bdsProbeRunning: StateFlow<Boolean> = _bdsProbeRunning.asStateFlow()
+
+    /**
+     * 在容器里探一次 DNS / TCP / CA，把结论写进控制台。
+     *
+     * 用户开正版服时只会看到 BDS 那句 `Could not connect to Minecraft services`，
+     * 完全分不清是 DNS 污染、TCP 被墙、还是容器缺证书。这里替他把三段拆开测，
+     * 并给出下一步该改哪里。
+     */
+    fun probeBdsNetwork() {
+        if (_bdsProbeRunning.value) return
+        _bdsProbeRunning.value = true
+        viewModelScope.launch {
+            try {
+                repo.termuxRuntime.emitLog("[probe] 开始容器内网络自检（在线模式 / 正版验证用）")
+                val lines = repo.termuxRuntime.probeBdsNetwork(activeDirName())
+                lines.forEach { repo.termuxRuntime.emitLog("[probe] $it") }
+                if (lines.any { it.startsWith("CA 修复: 已从系统根证书补入") }) {
+                    repo.termuxRuntime.emitLog("[probe] 根证书已补好，请直接重新启动服务器验证")
+                }
+                _messageFlow.tryEmit(bdsProbeConclusion(lines))
+            } catch (e: Exception) {
+                repo.termuxRuntime.emitLog("[probe] 自检失败：${e.message}")
+                _errorFlow.tryEmit(str(R.string.bds_env_probe_failed, e.message ?: "?"))
+            } finally {
+                _bdsProbeRunning.value = false
+            }
+        }
+    }
+
+    /** 把自检输出压成一句人话（判据只有「哪一段先断」） */
+    private fun bdsProbeConclusion(lines: List<String>): String {
+        val dnsFail = lines.filter { it.startsWith("DNS 失败") }
+        val tcpFail = lines.filter { it.startsWith("TCP 失败") }
+        val tlsFail = lines.filter { it.startsWith("TLS 失败") }
+        val ok = lines.count { it.startsWith("TCP ok") }
+        return when {
+            lines.isEmpty() || lines.any { it.startsWith("容器未就绪") || it.startsWith("proot 不可用") } ->
+                str(R.string.bds_env_probe_need_env)
+            dnsFail.isNotEmpty() ->
+                str(R.string.bds_env_probe_dns_fail, dnsFail.size)
+            tcpFail.isNotEmpty() && ok > 0 ->
+                str(R.string.bds_env_probe_partial, ok, tcpFail.size)
+            tcpFail.isNotEmpty() ->
+                str(R.string.bds_env_probe_tcp_fail, tcpFail.size)
+            // TCP 通但 TLS 断：典型 SNI 拦截，必须让代理接管 TCP
+            tlsFail.isNotEmpty() ->
+                str(R.string.bds_env_probe_tls_fail, tlsFail.size)
+            lines.any { it.contains("CA 证书: 缺失") } ->
+                str(R.string.bds_env_probe_no_ca)
+            else -> str(R.string.bds_env_probe_ok)
+        }
+    }
+
+    // ── BDS 核心版本与在线更新 ───────────────────────────────────
+    //
+    // 与上面「BDS 专属运行环境」是两件独立的事：运行环境是容器 + box64
+    // （决定**能不能跑**），这里是官方核心本体（决定**跑的是哪个版本**）。
+    // 版本来自 Mojang 官方 links 接口，更新流程见 `BdsUpdater`。
+
+    private val _bdsCoreStatus = MutableStateFlow(BdsCoreStatus())
+    val bdsCoreStatus: StateFlow<BdsCoreStatus> = _bdsCoreStatus.asStateFlow()
+
+    private val _bdsUpdateState = MutableStateFlow<BdsUpdateProgress>(BdsUpdateProgress.Idle)
+    val bdsUpdateState: StateFlow<BdsUpdateProgress> = _bdsUpdateState.asStateFlow()
+
+    private var bdsCheckJob: Job? = null
+
+    /** 当前选中的服务器若为官方 BDS，返回它的登记信息 */
+    private fun activeBdsCore(): InstalledCore? {
+        val cfg = config.value
+        val core = cfg.installedCores.firstOrNull { it.name == cfg.activeCoreName } ?: return null
+        return core.takeIf { it.core == ServerCore.Bds }
+    }
+
+    /**
+     * 检测官方 BDS 版本（当前 / 稳定 / Preview）。
+     *
+     * @param force true 时绕过 10 分钟缓存（用户点「检查更新」）
+     */
+    fun checkBdsCoreUpdate(force: Boolean = false) {
+        val core = activeBdsCore()
+        if (core == null) {
+            _bdsCoreStatus.value = BdsCoreStatus()
+            return
+        }
+        if (_bdsCoreStatus.value.checking) return
+        bdsCheckJob?.cancel()
+        bdsCheckJob = viewModelScope.launch {
+            // 版本以磁盘上的 bds-version.txt 为准：用户可能手动换过核心，
+            // 而配置里的 version 是下载时写下的，两者会不一致
+            val installed = withContext(Dispatchers.IO) {
+                controller.bdsInstalledVersion(core.dirName) ?: core.version
+            }
+            _bdsCoreStatus.update {
+                it.copy(dirName = core.dirName, installedVersion = installed, checking = true, error = null)
+            }
+            val result = BdsBuildCatalog.load(app, force)
+            _bdsCoreStatus.update { previous ->
+                result.fold(
+                    onSuccess = { catalog ->
+                        previous.copy(
+                            stable = catalog.stable,
+                            preview = catalog.preview,
+                            fromCache = catalog.fromCache,
+                            checked = true,
+                            checking = false,
+                            error = null
+                        )
+                    },
+                    onFailure = { e ->
+                        previous.copy(
+                            checked = true,
+                            checking = false,
+                            error = e.message ?: str(R.string.bds_update_check_failed)
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    /**
+     * 把当前 BDS 服务器更新到 [channel] 上的官方最新构建。
+     *
+     * 服务器在运行时先优雅停服（`stop` → 等待退出）；停不下来就放弃更新，
+     * 绝不在运行中替换核心 —— 那样进程会继续用旧 inode，界面却显示已更新。
+     */
+    fun updateBdsCore(channel: BdsChannel) {
+        val core = activeBdsCore()
+        if (core == null) {
+            _errorFlow.tryEmit(str(R.string.bds_update_need_core))
+            return
+        }
+        if (_bdsUpdateState.value is BdsUpdateProgress.Running) return
+        val status = _bdsCoreStatus.value
+        val target = status.build(channel)
+        if (target == null) {
+            _errorFlow.tryEmit(str(R.string.bds_update_no_build))
+            return
+        }
+        viewModelScope.launch {
+            try {
+                if (serverState.value.isRunning) {
+                    _bdsUpdateState.value = BdsUpdateProgress.Running(
+                        channel = channel,
+                        version = target.version,
+                        phase = str(R.string.bds_update_stopping)
+                    )
+                    if (!controller.stopGracefully()) {
+                        _bdsUpdateState.value = BdsUpdateProgress.Failed(
+                            str(R.string.bds_update_stop_failed), false
+                        )
+                        return@launch
+                    }
+                }
+                val current = status.installedVersion ?: core.version
+                val result = controller.updateBdsCore(core.dirName, current, target) { event ->
+                    _bdsUpdateState.value = BdsUpdateProgress.Running(
+                        channel = channel,
+                        version = target.version,
+                        phase = event.message.ifBlank { bdsPhaseLabel(event.phase) },
+                        progress = event.progress
+                    )
+                }
+                _bdsUpdateState.value = BdsUpdateProgress.Done(
+                    version = result.version,
+                    backupName = java.io.File(result.backupPath).name,
+                    keptOldEntry = result.keptOldEntry
+                )
+                _bdsCoreStatus.update { it.copy(installedVersion = result.version, checked = true) }
+                _messageFlow.tryEmit(str(R.string.bds_update_done, result.version))
+            } catch (e: com.mineserve.mobile.server.BdsUpdater.UpdateFailed) {
+                _bdsUpdateState.value = BdsUpdateProgress.Failed(
+                    e.message ?: str(R.string.bds_update_check_failed), e.rolledBack
+                )
+                _errorFlow.tryEmit(e.message ?: str(R.string.bds_update_check_failed))
+            } catch (e: Exception) {
+                _bdsUpdateState.value = BdsUpdateProgress.Failed(
+                    e.message ?: str(R.string.bds_update_check_failed), false
+                )
+                _errorFlow.tryEmit(str(R.string.bds_update_failed, e.message ?: ""))
+            }
+        }
+    }
+
+    /** 关闭更新结果卡片（成功/失败提示） */
+    fun dismissBdsUpdateState() {
+        _bdsUpdateState.value = BdsUpdateProgress.Idle
+    }
+
+    private fun bdsPhaseLabel(phase: com.mineserve.mobile.server.BdsUpdater.Phase): String = when (phase) {
+        com.mineserve.mobile.server.BdsUpdater.Phase.BackingUp -> str(R.string.bds_update_phase_backup)
+        com.mineserve.mobile.server.BdsUpdater.Phase.Downloading -> str(R.string.bds_update_phase_download)
+        com.mineserve.mobile.server.BdsUpdater.Phase.Verifying -> str(R.string.bds_update_phase_verify)
+        com.mineserve.mobile.server.BdsUpdater.Phase.Installing -> str(R.string.bds_update_phase_install)
+    }
 
     /** Termux 环境是否初始化完成 */
     val isBootstrapped: StateFlow<Boolean> = app.isBootstrapped
@@ -301,6 +546,10 @@ class McViewModel(
 
     /** 清空 MC 控制台缓冲 */
     fun clearConsole() {
+        // 只清内存是不够的：[loadRecentTerminalLog] 每次进终端页都会从磁盘日志
+        // 补读几百行，刚清掉的内容会原样回到屏幕上 —— 用户看到的是「清除没生效」。
+        // 这里记下清除时刻的文件长度，下次只补读这之后的新增。
+        activeDirName()?.let { markConsoleCleared(it) }
         consoleBuffer.clear()
         pendingConsoleBuffer.clear()
         terminalConsoleBuffer.clear()
@@ -314,6 +563,36 @@ class McViewModel(
         _terminalConsoleLines.value = persistentListOf()
     }
 
+    /**
+     * 终端「清除」的落点：日志文件字节偏移，按服务器（dirName）记账。
+     *
+     * 内存一份给当前进程，SharedPreferences 一份给「杀进程重进」——
+     * 用户清完屏关掉 App 再打开，历史日志同样不该复活。
+     */
+    private val consoleClearMarks = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    private fun terminalPrefs() = app.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
+
+    private fun clearMarkKey(dirName: String) = "mc_console_clear_$dirName"
+
+    private fun markConsoleCleared(dirName: String) {
+        val length = runCatching {
+            repo.termuxRuntime.mcLogFileFor(dirName)?.length() ?: 0L
+        }.getOrDefault(0L)
+        consoleClearMarks[dirName] = length
+        runCatching { terminalPrefs().edit().putLong(clearMarkKey(dirName), length).apply() }
+    }
+
+    private fun consoleClearMark(dirName: String): Long =
+        consoleClearMarks[dirName] ?: runCatching {
+            terminalPrefs().getLong(clearMarkKey(dirName), 0L)
+        }.getOrDefault(0L).also { consoleClearMarks[dirName] = it }
+
+    private fun dropConsoleClearMark(dirName: String) {
+        consoleClearMarks[dirName] = 0L
+        runCatching { terminalPrefs().edit().remove(clearMarkKey(dirName)).apply() }
+    }
+
     /** 进入 MC 终端时异步补读磁盘日志，实时输出仍由 consoleFlow 持续追加。 */
     fun loadRecentTerminalLog() {
         if (terminalHistoryLoading) return
@@ -321,9 +600,20 @@ class McViewModel(
         terminalHistoryLoading = true
         viewModelScope.launch {
             try {
+                val generation = consoleGeneration
+                val mark = consoleClearMark(dirName)
                 val history = withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.readRecentMcLog(dirName)
+                    val fileLength = runCatching {
+                        repo.termuxRuntime.mcLogFileFor(dirName)?.length() ?: 0L
+                    }.getOrDefault(0L)
+                    // 文件比清除落点还短：latest.log 已被新一轮运行覆盖，旧落点失效，
+                    // 此时整份读才符合「新的一轮日志」的预期。
+                    val offset = if (fileLength < mark) 0L else mark
+                    if (offset == 0L && mark != 0L) dropConsoleClearMark(dirName)
+                    repo.termuxRuntime.readRecentMcLog(dirName, fromOffset = offset)
                 }
+                // 读盘期间用户可能点了「清除」：此时写回历史等于把清除撤销掉。
+                if (consoleGeneration != generation) return@launch
                 if (history.isNotEmpty()) {
                     val live = consoleBuffer.snapshot()
                     val overlap = (minOf(history.size, live.size) downTo 1).firstOrNull { size ->
@@ -644,6 +934,9 @@ class McViewModel(
 
     fun uninstallEasyTierEngine() {
         viewModelScope.launch(Dispatchers.IO) {
+            // 先走完整的停止流程（会把组网卡片同步成「已停止」），再删文件。
+            // 直接删文件时实例和 TUN 都还在，正是用户报的「删了还有残留」。
+            runCatching { tunnelManager.stopEasyTier() }
             val ok = EasyTierEngineStore.uninstall()
             _easyTierEngineMessage.value =
                 if (ok) str(R.string.vm_engine_uninstalled) else str(R.string.vm_uninstall_failed)
@@ -1096,7 +1389,7 @@ class McViewModel(
         try {
             val cfg = config.value
             val active = cfg.installedCores.find { it.name == cfg.activeCoreName }
-            val dir = active?.let { File(repo.termuxRuntime.installer.rootDir, "home/servers/${it.dirName}") }
+            val dir = active?.let { repo.termuxRuntime.serverDirFor(it.dirName) }
             val available = dir?.takeIf { it.exists() }?.let { android.os.StatFs(it.path).availableBytes }
             val now = System.currentTimeMillis()
             val running = repo.termuxRuntime.isMcRunning()
@@ -1312,7 +1605,7 @@ class McViewModel(
                 "port", str(R.string.diag_check_port), str(R.string.diag_check_port_none), DiagnosticStatus.NotApplicable
             )
         } else {
-            val dir = File(runtime.installer.rootDir, "home/servers/${active.dirName}")
+            val dir = runtime.serverDirFor(active.dirName)
             val entryName = active.serverFile?.trim()?.substringAfterLast('/')?.substringAfterLast('\\')?.takeIf { it.isNotBlank() }
             val jar = entryName?.let { File(dir, it) }
             val dirReady = dir.isDirectory && dir.canRead() && dir.canWrite()
@@ -1474,6 +1767,13 @@ class McViewModel(
      */
     private var lastJavaCompatibilityWarning: String? = null
 
+    /**
+     * BDS `list` 多行响应的收集状态：头行声明人数，后续每行一个玩家名。
+     * 收到头行时把期望条数写进 [bdsListExpected]，收齐后一次性替换在线名单。
+     */
+    private var bdsListExpected = 0
+    private val bdsListBuffer = mutableListOf<String>()
+
     private fun parseConsoleLine(line: String) {
         try {
             // 状态类信号统一由共享解析器提取（正则只跑一次，与前台服务共用同一份实现）。
@@ -1499,7 +1799,29 @@ class McViewModel(
             // 玩家事件与「服务端就绪」原本是互斥的 when 分支：某一行只要命中了玩家进出服，
             // 就不会再去触发就绪。下面用 handled 标记维持这一语义，避免行为漂移。
             var handled = false
+            // 官方 BDS 的进服/离服措辞与 Java 完全不同（Player connected / disconnected），
+            // 且不像 Java 那样在 "list" 响应里带名单，所以必须单独一条分支维护名单与计数。
+            val bdsEvent = playerManager.extractBedrockPlayerEvent(line)
             when {
+                bdsEvent != null -> {
+                    val name = bdsEvent.name
+                    // 只有名单状态真的变化时才动计数：重连会先 disconnected 再 connected，
+                    // 可能重复打印，用 wasOnline 去重避免计数漂移
+                    val wasOnline = _onlinePlayerNames.value.any { it.equals(name, ignoreCase = true) }
+                    if (bdsEvent.joined) addOnlinePlayer(name) else removeOnlinePlayer(name)
+                    playerManager.noteBedrockPlayer(name, bdsEvent.xuid)
+                    if (bdsEvent.joined != wasOnline) {
+                        repo.updateServerState {
+                            it.copy(
+                                onlinePlayers = (it.onlinePlayers + if (bdsEvent.joined) 1 else -1)
+                                    .coerceAtLeast(0)
+                            )
+                        }
+                    }
+                    recordPlayerEvent(name, if (bdsEvent.joined) "进服" else "离服")
+                    notifyPlayerEvent(name, bdsEvent.joined)
+                    handled = true
+                }
                 playerManager.extractPowerNukkitPlayerEvent(line) != null -> {
                     val (name, joined) = playerManager.extractPowerNukkitPlayerEvent(line)!!
                     repo.updateServerState { it.copy(onlinePlayers = (it.onlinePlayers + if (joined) 1 else -1).coerceAtLeast(0)) }
@@ -1537,9 +1859,16 @@ class McViewModel(
                 repo.updateServerState { it.copy(onlinePlayers = p.online, maxPlayers = p.max) }
                 // A valid list response proves the server is already accepting commands.
                 markServerReady()
-                // 全量校正在线玩家名单（list 命令响应）
-                playerManager.parseOnlinePlayers(line)?.let { names ->
+                // 全量校正在线玩家名单（list 命令响应）。
+                // BDS 的名单在后续行、本行为空，此时传入人数让解析器自己判断该不该清空。
+                playerManager.parseOnlinePlayers(line, p.online)?.let { names ->
                     _onlinePlayerNames.value = names
+                }
+                // BDS 用 `There are N/M players online:` 开头，名字在后续几行里。
+                // 记下期望条数，后面的行交给下面的收集逻辑。
+                if (p.online > 0 && line.contains("players online:") && !line.contains(" of a max of ")) {
+                    bdsListExpected = p.online
+                    synchronized(bdsListBuffer) { bdsListBuffer.clear() }
                 }
                 handled = true
             }
@@ -1551,6 +1880,24 @@ class McViewModel(
                         maxMemoryMb = config.value.maxHeapMb.toLong())
                 }
                 handled = true
+            }
+            // BDS 的 list 名单逐行到达：头行只声明人数，名字在随后的行里（`- Steve`）。
+            // 这里把它们收齐后再整体替换名单，这样重开 App / 前台服务重启后也能恢复在线列表。
+            if (!handled && bdsListExpected > 0) {
+                val entry = playerManager.parseBedrockListEntry(line)
+                if (entry == null) {
+                    bdsListExpected = 0
+                } else {
+                    val done = synchronized(bdsListBuffer) {
+                        bdsListBuffer.add(entry)
+                        if (bdsListBuffer.size >= bdsListExpected) bdsListBuffer.toList() else null
+                    }
+                    if (done != null) {
+                        bdsListExpected = 0
+                        _onlinePlayerNames.value = done
+                        repo.updateServerState { it.copy(onlinePlayers = done.size) }
+                    }
+                }
             }
             if (!handled && startupPhase == StartupPhase.Ready) markServerReady()
         } catch (e: Exception) {
@@ -1712,19 +2059,27 @@ class McViewModel(
         scanningServers = true
         viewModelScope.launch {
             try {
-                val dirs = withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.serversDir.listFiles { f -> f.isDirectory }
-                        ?.sortedBy { it.name.lowercase() } ?: emptyList()
+                // 先与磁盘对齐：被外部删除的核心目录在这一步从列表移除（见 syncInstalledCoresWithDisk）
+                pruneMissingCores()
+                // 只扫统一存储目录：旧私有目录已不再作为服务器存放位置，
+                // 它的内容走「迁移」流程（LegacyServerMigration），不在这里登记。
+                val scanned = withContext(Dispatchers.IO) {
+                    com.mineserve.mobile.data.ServerStorage.serversDir(app)
+                        .listFiles { f -> f.isDirectory }
+                        ?.sortedBy { it.name.lowercase() }.orEmpty()
                 }
-                if (dirs.isEmpty()) return@launch
+                if (scanned.isEmpty()) return@launch
                 val cfg = repo.currentConfig()
                 val known = cfg.installedCores.map { it.dirName }.toHashSet()
-                val fresh = dirs.filter { it.name !in known }
+                // 待迁移的旧记录不算「已知」以外的异常：它们的 dirName 可能和这里的目录名撞上，
+                // 但 location 仍为 Legacy，由迁移流程负责，不在扫描里改。
+                val fresh = scanned.filter { it.name !in known }
                 if (fresh.isEmpty()) return@launch
 
-                // 空目录：跳过登记。用递归判断，避免「只剩一层空壳子目录」也通过。
+                // 空目录：跳过登记。判据是「整棵子树里一个文件都没有」——
+                // 只要里面有 1 个文件（哪怕是不认识的 .dat），就按有效核心目录处理。
                 val (emptyDirs, realDirs) = withContext(Dispatchers.IO) {
-                    fresh.partition { dir -> dir.isEffectivelyEmpty() }
+                    fresh.partition { dir -> !com.mineserve.mobile.data.ServerStorage.containsAnyFile(dir) }
                 }
                 if (emptyDirs.isNotEmpty()) {
                     termux3Log(
@@ -1748,7 +2103,8 @@ class McViewModel(
                         core = detected.core ?: com.mineserve.mobile.data.ServerCore.Unknown,
                         version = detected.version ?: str(R.string.ver_imported),
                         dirName = dir.name,
-                        serverFile = detected.serverFile
+                        serverFile = detected.serverFile,
+                        location = StorageLocation.Internal
                     )
                 }
                 val registeredNames = registered.map { it.dirName }.toHashSet()
@@ -1768,17 +2124,155 @@ class McViewModel(
     }
 
     /**
-     * 目录是否「实质为空」：忽略 `.` 开头的隐藏条目后没有任何子项。
+     * 已安装核心与磁盘对齐：**外部删除同步**。
      *
-     * 递归深度设上限，避免异常深/循环软链接把扫描拖死。
+     * 触发点有三处，覆盖用户能遇到的全部时机：
+     *  - 回到前台（McApp 的 LifecycleResumeEffect）—— 用户刚从文件管理器删完目录回来；
+     *  - 进入下载页（DownloadScreen 的 LaunchedEffect）—— 列表就在这一页；
+     *  - 扫描未登记目录（[scanUnregisteredServers]）—— 兜底，App 内部的刷新入口都过这里。
+     *
+     * 只做「移除登记」，绝不创建或删除任何目录：目录是用户的，App 不擅自补建。
      */
-    private fun java.io.File.isEffectivelyEmpty(depth: Int = 0): Boolean {
-        if (depth > 4) return false        // 太深则按「有内容」处理，宁可登记也不错杀
-        val children = listFiles() ?: return true
-        val visible = children.filterNot { it.name.startsWith(".") }
-        if (visible.isEmpty()) return true
-        // 只有目录壳（没有文件）时也视为空
-        return visible.all { it.isDirectory && it.isEffectivelyEmpty(depth + 1) }
+    fun syncInstalledCoresWithDisk() {
+        viewModelScope.launch {
+            runCatching { pruneMissingCores() }
+        }
+    }
+
+    /**
+     * 移除「目录已不存在 / 目录里一个文件都没有」的核心登记，返回移除条数。
+     *
+     * 判据与扫描保持一致：整棵子树里没有任何文件即视为空壳目录。
+     * 运行中的核心跳过：目录被外部删掉但进程还活着时，登记是停止/崩溃处理
+     * 定位 `dirName` 的唯一依据，等它停下来再清。
+     */
+    private suspend fun pruneMissingCores(): Int {
+        val cfg = repo.currentConfig()
+        val candidates = cfg.installedCores.filter { it.location == StorageLocation.Internal }
+        if (candidates.isEmpty()) return 0
+        val missing = withContext(Dispatchers.IO) {
+            candidates.filter { core ->
+                !repo.termuxRuntime.isMcRunningIn(core.dirName) &&
+                    !com.mineserve.mobile.data.ServerStorage.dirExistsWithContent(app, core.dirName)
+            }.map { it.name }.toSet()
+        }
+        if (missing.isEmpty()) return 0
+        repo.updateAndSaveConfig { current ->
+            val updated = current.installedCores.filter { it.name !in missing }
+            val activeStillExists = current.activeCoreName?.let { it !in missing } == true
+            current.copy(
+                installedCores = updated,
+                activeCoreName = if (activeStillExists) current.activeCoreName
+                else updated.firstOrNull()?.name
+            )
+        }
+        termux3Log(
+            "外部删除同步：移除 ${missing.size} 个已不存在或为空的核心 -> " + missing.joinToString(", ")
+        )
+        _messageFlow.tryEmit(str(R.string.msg_cores_synced_external, missing.size))
+        return missing.size
+    }
+
+    // ── 旧版私有目录迁移 ────────────────────────────────────────────
+
+    /**
+     * 旧版目录迁移的界面状态。
+     *
+     * 不做「不再提示」的持久化标记：只要旧目录里还有服务器文件，每次冷启动都要问
+     * （用户明确要求「二次启动后依旧显示是否迁移」）。用户在对话框里点「以后再说」
+     * 只关闭本次，进程重启后重新扫描。
+     */
+    data class LegacyMigrationState(
+        val candidates: List<com.mineserve.mobile.server.LegacyServerMigration.Candidate> = emptyList(),
+        val running: Boolean = false,
+        val scanned: Boolean = false,
+        val progressDone: Int = 0,
+        val progressTotal: Int = 0,
+        val progressName: String = ""
+    ) {
+        val visible: Boolean get() = candidates.isNotEmpty() && !running
+    }
+
+    private val _legacyMigration = MutableStateFlow(LegacyMigrationState())
+    val legacyMigration: StateFlow<LegacyMigrationState> = _legacyMigration.asStateFlow()
+
+    /**
+     * 扫描旧版私有目录，发现可迁移的服务器就置为可见（由 McApp 在启动时调用）。
+     *
+     * 扫描本身只读不写：**绝不**因为「发现了旧文件」就自动搬，搬不搬由用户决定。
+     */
+    fun checkLegacyMigration() {
+        viewModelScope.launch {
+            // 不用 currentConfig()：它可能 runBlocking 读盘。这里等一次内存态就绪再走，
+            // 拿不到（极端情况）就放弃本轮，下次启动仍会重新扫描。
+            val cfg = repo.currentConfigOrNull()
+                ?: run {
+                    kotlinx.coroutines.delay(600)
+                    repo.currentConfigOrNull()
+                }
+                ?: return@launch
+            val list = withContext(Dispatchers.IO) {
+                com.mineserve.mobile.server.LegacyServerMigration.scan(app, cfg)
+            }
+            _legacyMigration.value = LegacyMigrationState(
+                candidates = list,
+                scanned = true
+            )
+            if (list.isNotEmpty()) {
+                termux3Log("检测到 ${list.size} 个旧版服务器待迁移：${list.joinToString(", ") { it.dirName }}")
+            }
+        }
+    }
+
+    /** 用户选择「以后再说」：只关闭本次提示，下次启动仍会扫描 */
+    fun dismissLegacyMigration() {
+        _legacyMigration.value = _legacyMigration.value.copy(candidates = emptyList())
+    }
+
+    /**
+     * 执行迁移：复制 → 校验 → 改名 → 删源，然后把结果写回配置。
+     *
+     * 失败的目录会保留在旧位置，并在提示里列出原因；下次启动仍会再问。
+     */
+    fun runLegacyMigration() {
+        val state = _legacyMigration.value
+        if (state.running || state.candidates.isEmpty()) return
+        val candidates = state.candidates
+        _legacyMigration.value = state.copy(
+            running = true,
+            progressDone = 0,
+            progressTotal = candidates.size,
+            progressName = candidates.first().dirName
+        )
+        viewModelScope.launch {
+            val outcomes = com.mineserve.mobile.server.LegacyServerMigration.migrateAll(
+                app, candidates
+            ) { done, total, name ->
+                _legacyMigration.value = _legacyMigration.value.copy(
+                    progressDone = done, progressTotal = total, progressName = name
+                )
+            }
+            val root = com.mineserve.mobile.data.ServerStorage.internalRoot(app)
+            repo.updateAndSaveConfig { current ->
+                com.mineserve.mobile.server.LegacyServerMigration.applyOutcomes(current, outcomes, root)
+            }
+            val ok = outcomes.count { it.success }
+            val failed = outcomes.filter { !it.success }
+            _legacyMigration.value = LegacyMigrationState(scanned = true)
+            if (failed.isEmpty()) {
+                _messageFlow.tryEmit(str(R.string.legacy_migrate_done, ok))
+            } else {
+                _errorFlow.tryEmit(
+                    str(
+                        R.string.legacy_migrate_partial,
+                        ok,
+                        failed.joinToString("; ") { "${it.dirName}: ${it.error ?: "未知错误"}" }
+                    )
+                )
+            }
+            // 迁移进来的目录直接登记完成，不需要再走「扫描未登记目录」
+            refreshStoragePermission()
+        }
     }
 
     fun refreshJava() {
@@ -1996,7 +2490,15 @@ class McViewModel(
     fun runtimeKindMismatchMessage(): String? {
         val cfg = config.value
         val core = cfg.installedCores.firstOrNull { it.name == cfg.activeCoreName } ?: return null
-        val required = if (core.core == ServerCore.PocketMine) RuntimeKind.Php else RuntimeKind.Java
+        val required = when (core.core) {
+            ServerCore.PocketMine -> RuntimeKind.Php
+            // 官方 BDS 既不跑 JVM 也不跑 PHP：它是原生可执行文件，
+            // arm64 设备上靠 box64 转译（容器由启动流程自行准备）。
+            // 若仍按「Java 核心」要求 runtimeKind=Java，之前开过 PocketMine 的用户
+            // 会被一条与 BDS 无关的提示挡住启动。
+            ServerCore.Bds -> cfg.runtimeKind
+            else -> RuntimeKind.Java
+        }
         if (cfg.runtimeKind == required) return null
         val requiredLabel = when (required) {
             RuntimeKind.Java -> str(R.string.dash_runtime_java)
@@ -2216,15 +2718,37 @@ class McViewModel(
         }
     }
 
-    fun selectCore(core: ServerCore) = updateConfig {
-        // 基岩版核心（PNX/PocketMine/Allay）走 UDP，默认端口 19132；Java 系 25565。
-        // 迁移规则见 [ServerPort.migrateOnCoreSwitch]：只在 Java 系 ↔ 基岩系之间
-        // 对调**默认值**，用户自定义端口（如 25562）原样保留。
-        // 旧实现是单向的 `if (localPort == 25565) 19132 else localPort`：
-        // 切到基岩后 19132 再也回不去，而当时界面上已没有端口编辑框可以改回来。
-        val port = ServerPort.migrateOnCoreSwitch(it.localPort, it.selectedCore, core)
-        if (core.isBedrock) it.copy(selectedCore = core, mcVersion = "latest", localPort = port)
-        else it.copy(selectedCore = core, localPort = port)
+    /**
+     * 选择服务端核心。
+     *
+     * **即使点的是当前已选中的同一个核心，也要把版本号清空**：
+     * 用户点磁贴的动作语义是「我要按这个核心重新配一遍」，此时沿用上一次的版本号
+     * 属于替他做决定；尤其在一个核心常有十几个版本的情况下，误带旧版本下载出来的
+     * 服务端与预期不符，排查成本很高。清空后界面上版本位显示「请选择版本」，
+     * 下载按钮随之禁用，直到用户在下拉里重新挑一个。
+     */
+    fun selectCore(core: ServerCore) {
+        val previous = config.value.selectedCore
+        val coreChanged = previous != core
+        updateConfig {
+            // 基岩版核心（PNX/PocketMine/Allay/BDS）走 UDP，默认端口 19132；Java 系 25565。
+            // 迁移规则见 [ServerPort.migrateOnCoreSwitch]：只在 Java 系 ↔ 基岩系之间
+            // 对调**默认值**，用户自定义端口（如 25562）原样保留。
+            // 同一个核心重复点击不动端口 —— 用户没换核心，端口不该被「迁移」一次。
+            val port = if (coreChanged) {
+                ServerPort.migrateOnCoreSwitch(it.localPort, it.selectedCore, core)
+            } else {
+                it.localPort
+            }
+            it.copy(selectedCore = core, mcVersion = "", localPort = port)
+        }
+        // 版本号已被清空，必须让用户重新选：给一句明确提示，而不是让他对着
+        // 「请选择版本」猜是不是加载失败。
+        // BDS 例外：它只有官方当前构建这一项，界面上没有可选版本行，
+        // 提示「请重新选择版本」等于把用户带进一个点不动的死胡同。
+        if (core != ServerCore.Bds) {
+            _messageFlow.tryEmit(str(R.string.msg_version_reselect, core.displayName))
+        }
     }
 
     fun setMcVersion(version: String) {
@@ -2454,6 +2978,9 @@ class McViewModel(
                 // 阶段推进已是"只增不减"的无状态规则，无需清理任何防抖残留；
                 // 新一次启动的阶段由 updateServerState 里显式重置为 PreparingEnvironment。
                 _lastRunLog.value = ""
+                // 从点下按钮这一刻就进入「启动在途」：下面的重读配置、端口探测也是耗时操作，
+                // 期间看门狗探不到进程，不能让它把状态改回已停止。
+                repo.termuxRuntime.markStartInFlight()
                 // 启动前重读配置文件里的端口：用户可能刚在文件管理器里改过 server-port
                 // （或 pnx.yml 的 settings.port），而 [McConfig.localPort] 还停在旧值。
                 // 不重读的话，PNX / Allay 的启动链路会拿旧值**覆写**配置文件里的新端口，
@@ -2483,6 +3010,8 @@ class McViewModel(
                     startKeepAliveService()
                 }
             } catch (e: Exception) {
+                // 启动失败：撤掉在途保护，让看门狗能如实把状态落回已停止。
+                repo.termuxRuntime.clearStartInFlight()
                 repo.updateServerState {
                     it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Failed)
                 }
@@ -3551,7 +4080,7 @@ class McViewModel(
     /** 获取当前核心的 plugins 目录路径（用于 UI 显示） */
     fun currentPluginsPath(): String? {
         val dirName = activeDirName() ?: return null
-        return java.io.File(repo.termuxRuntime.installer.rootDir, "home/servers/$dirName/plugins").absolutePath
+        return java.io.File(repo.termuxRuntime.serverDirFor(dirName), "plugins").absolutePath
     }
 
 
@@ -3796,7 +4325,8 @@ class McViewModel(
                     name = dirName,
                     core = core,
                     version = str(R.string.ver_restored),
-                    dirName = dirName
+                    dirName = dirName,
+                    location = StorageLocation.Internal
                 ),
                 activeCoreName = dirName
             )
@@ -3896,6 +4426,7 @@ class McViewModel(
 
     /** 把导入的服务器注册进已安装核心列表并设为当前选中（核心/版本为自动识别结果） */
     private fun registerImportedServer(imported: ServerImporter.ImportedServer) {
+        // 导入的服务器一律在统一存储目录（导入器保证），因此位置固定为 Internal。
         updateConfig {
             val core = imported.core ?: com.mineserve.mobile.data.ServerCore.Unknown
             it.copy(
@@ -3905,7 +4436,8 @@ class McViewModel(
                         core = core,
                         version = imported.version ?: str(R.string.ver_imported),
                         dirName = imported.dirName,
-                        serverFile = imported.serverFile
+                        serverFile = imported.serverFile,
+                        location = StorageLocation.Internal
                     ),
                 activeCoreName = imported.displayName
             )
@@ -3958,7 +4490,7 @@ class McViewModel(
         viewModelScope.launch {
             try {
                 val deleted = withContext(Dispatchers.IO) {
-                    val base = File(repo.termuxRuntime.installer.rootDir, "home/servers/$dirName")
+                    val base = repo.termuxRuntime.serverDirFor(dirName)
                     var count = 0
                     for (name in listOf("world", "world_nether", "world_the_end")) {
                         val dir = File(base, name)
@@ -4181,7 +4713,10 @@ class McViewModel(
                 }
                 if (result.first) {
                     _messageFlow.tryEmit(str(R.string.s262))
-                    _serverProperties.value = props
+                    // 合并而不是替换：属性页现在只提交「值变过的键」（无损保存），
+                    // 直接赋值会把页面上没碰过的键从内存镜像里抹掉 —— 端口真源、
+                    // 白名单提示都读这份镜像，抹掉后界面会显示回默认值。
+                    _serverProperties.value = _serverProperties.value + props
                     // 端口真源回写：「服务器配置」页是端口唯一编辑入口（网络页的输入框已在
                     // 1.2.8 移除）。不回写的话地址栏/穿透默认端口会停在旧值 ——
                     // 用户改了 25562 而界面仍显示 19132 就是这么来的。
@@ -4419,18 +4954,27 @@ class McViewModel(
     fun refreshPlayers() {
         if (!isBootstrapped.value) return
         val dirName = activeDirName() ?: return
+        // 官方 BDS 的玩家数据文件与 Java 版完全不同：
+        //  - OP → permissions.json（permission=operator，只有 xuid）
+        //  - 白名单 → allowlist.json
+        //  - 没有封禁文件
+        // 所以整条读取链都要按核心分别走，否则 BDS 下三个列表永远为空。
+        val bds = activeBdsCore() != null
         viewModelScope.launch {
             try {
                 withContext(Dispatchers.IO) {
-                    _ops.value = playerManager.readOps(dirName)
-                    _whitelist.value = playerManager.readWhitelist(dirName)
-                    _bannedPlayers.value = playerManager.readBanned(dirName)
-                    // 同步白名单开关状态（从 server.properties 读取）
+                    if (bds) playerManager.loadBedrockXuidNames(dirName)
+                    _ops.value = playerManager.readOps(dirName, bds)
+                    _whitelist.value = playerManager.readWhitelist(dirName, bds)
+                    _bannedPlayers.value = playerManager.readBanned(dirName, bds)
+                    if (bds) playerManager.saveBedrockXuidNames(dirName)
+                    // 同步白名单开关状态（从 server.properties 读取；BDS 的键名是 allow-list）
                     val props = if (isPowerNukkitXActive()) powerNukkitXConfigManager.read(dirName)
                     else propertiesManager.readProperties(dirName)
-                    _whitelistEnabled.value = props["white-list"]?.equals("true", ignoreCase = true) == true
-                    // 同步默认 OP 等级（op-permission-level）
-                    _defaultOpLevel.value = props["op-permission-level"]?.toIntOrNull()
+                    _whitelistEnabled.value =
+                        props[if (bds) "allow-list" else "white-list"]?.equals("true", ignoreCase = true) == true
+                    // 同步默认 OP 等级（op-permission-level）；BDS 没有等级概念
+                    _defaultOpLevel.value = if (bds) null else props["op-permission-level"]?.toIntOrNull()
                 }
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s265, e.message))
@@ -4459,7 +5003,7 @@ class McViewModel(
 
     fun opPlayer(name: String) {
         if (name.isBlank()) return
-        val sent = playerManager.opPlayer(name)
+        val sent = playerManager.opPlayer(name, activeBdsCore() != null)
         afterCmd(sent, str(R.string.s1055, name))
     }
 
@@ -4470,9 +5014,10 @@ class McViewModel(
             _errorFlow.tryEmit(str(R.string.s266))
             return
         }
+        val bds = activeBdsCore() != null
         viewModelScope.launch {
             val sent = withContext(Dispatchers.IO) {
-                playerManager.opPlayerWithLevel(name, level, dirName)
+                playerManager.opPlayerWithLevel(name, level, dirName, bds)
             }
             afterCmd(sent, str(R.string.s1056, name, level))
         }
@@ -4480,34 +5025,52 @@ class McViewModel(
 
     fun deopPlayer(name: String) {
         if (name.isBlank()) return
-        val sent = playerManager.deopPlayer(name)
+        val bds = activeBdsCore() != null
+        val sent = playerManager.deopPlayer(name, activeDirName(), bds)
         afterCmd(sent, str(R.string.msg_op_cancelled, name))
     }
 
     fun whitelistAdd(name: String) {
         if (name.isBlank()) return
-        val sent = playerManager.whitelistAdd(name)
+        val sent = playerManager.whitelistAdd(name, activeBdsCore() != null)
         afterCmd(sent, str(R.string.msg_whitelist_added, name))
     }
 
     fun whitelistRemove(name: String) {
         if (name.isBlank()) return
-        val sent = playerManager.whitelistRemove(name)
+        val sent = playerManager.whitelistRemove(name, activeBdsCore() != null)
         afterCmd(sent, str(R.string.msg_whitelist_removed, name))
     }
 
     /** 切换白名单开关 */
     fun toggleWhitelist(enabled: Boolean) {
-        val sent = if (enabled) playerManager.whitelistOn() else playerManager.whitelistOff()
-        if (sent) {
-            _whitelistEnabled.value = enabled
-            // 同步镜像：概览页的白名单提示读的是 [serverProperties]，只改 _whitelistEnabled
-            // 的话要等下一次读配置文件才会更新，提示会慢半拍。
-            _serverProperties.value = _serverProperties.value.toMutableMap()
-                .apply { put("white-list", enabled.toString()) }
-            _messageFlow.tryEmit(if (enabled) str(R.string.msg_whitelist_toggled_on) else str(R.string.msg_whitelist_toggled_off))
-        } else {
-            _errorFlow.tryEmit(str(R.string.s274))
+        val bds = activeBdsCore() != null
+        val dirName = activeDirName()
+        viewModelScope.launch {
+            // 官方 BDS 的硬约束：关闭正版验证（online-mode=false）时不允许开白名单，
+            // 服务端启动时会直接报错并退出。这里先读盘确认，别让用户把服务器按死。
+            if (bds && enabled) {
+                val onlineMode = withContext(Dispatchers.IO) {
+                    dirName?.let { propertiesManager.readProperties(it)["online-mode"] }?.equals("true", true)
+                } ?: (_serverProperties.value["online-mode"]?.equals("true", true) == true)
+                if (!onlineMode) {
+                    _whitelistEnabled.value = false
+                    _errorFlow.tryEmit(str(R.string.bds_players_allowlist_needs_online_mode))
+                    return@launch
+                }
+            }
+            val sent = if (enabled) playerManager.whitelistOn(bds) else playerManager.whitelistOff(bds)
+            if (sent) {
+                _whitelistEnabled.value = enabled
+                // 同步镜像：概览页的白名单提示读的是 [serverProperties]，只改 _whitelistEnabled
+                // 的话要等下一次读配置文件才会更新，提示会慢半拍。
+                val key = if (bds) "allow-list" else "white-list"
+                _serverProperties.value = _serverProperties.value.toMutableMap()
+                    .apply { put(key, enabled.toString()) }
+                _messageFlow.tryEmit(if (enabled) str(R.string.msg_whitelist_toggled_on) else str(R.string.msg_whitelist_toggled_off))
+            } else {
+                _errorFlow.tryEmit(str(R.string.s274))
+            }
         }
     }
 
@@ -4519,6 +5082,11 @@ class McViewModel(
 
     fun banPlayer(name: String, reason: String = "Banned by admin") {
         if (name.isBlank()) return
+        // 官方 BDS 没有封禁命令，也不维护封禁列表，只能靠白名单 + 踢出
+        if (activeBdsCore() != null) {
+            _errorFlow.tryEmit(str(R.string.bds_players_ban_unsupported))
+            return
+        }
         val sent = playerManager.banPlayer(name, reason)
         afterCmd(sent, str(R.string.msg_banned, name))
     }
@@ -4526,12 +5094,20 @@ class McViewModel(
     /** 限时封禁 */
     fun tempBanPlayer(name: String, duration: String, reason: String = "") {
         if (name.isBlank() || duration.isBlank()) return
+        if (activeBdsCore() != null) {
+            _errorFlow.tryEmit(str(R.string.bds_players_ban_unsupported))
+            return
+        }
         val sent = playerManager.tempBanPlayer(name, duration, reason)
         afterCmd(sent, str(R.string.msg_banned_temp, name, duration))
     }
 
     fun pardonPlayer(name: String) {
         if (name.isBlank()) return
+        if (activeBdsCore() != null) {
+            _errorFlow.tryEmit(str(R.string.bds_players_ban_unsupported))
+            return
+        }
         val sent = playerManager.pardonPlayer(name)
         afterCmd(sent, str(R.string.msg_pardoned, name))
     }
@@ -4549,6 +5125,15 @@ class McViewModel(
     /** 设置玩家游戏模式 */
     fun setGameMode(name: String, mode: Int) {
         if (name.isBlank()) return
+        // 基岩版只能给**在线**玩家改模式：BDS 没有离线玩家数据文件，
+        // 目标不在线时命令会被丢弃（控制台只回 No targets matched selector），
+        // 用户点完就是"没反应"。提前说清楚，别让人以为是按钮坏了。
+        if (activeBdsCore() != null &&
+            _onlinePlayerNames.value.none { it.equals(name, ignoreCase = true) }
+        ) {
+            _errorFlow.tryEmit(str(R.string.bds_gamemode_needs_online, name))
+            return
+        }
         val sent = playerManager.setGameMode(name, mode)
         val modeNameRes = when (mode.coerceIn(0, 3)) {
             0 -> R.string.s281; 1 -> R.string.s282; 2 -> R.string.s283; 3 -> R.string.s284; else -> R.string.s281
@@ -4559,7 +5144,13 @@ class McViewModel(
     /** 给玩家经验 */
     fun giveXp(name: String, amount: Int) {
         if (name.isBlank() || amount <= 0) return
-        val sent = playerManager.giveXp(name, amount)
+        val bds = activeBdsCore() != null
+        // 同 setGameMode：BDS 的经验命令只能作用于在线玩家
+        if (bds && _onlinePlayerNames.value.none { it.equals(name, ignoreCase = true) }) {
+            _errorFlow.tryEmit(str(R.string.bds_gamemode_needs_online, name))
+            return
+        }
+        val sent = playerManager.giveXp(name, amount, bds)
         afterCmd(sent, str(R.string.msg_xp_given, name, amount), refresh = false)
     }
 
@@ -4910,6 +5501,13 @@ class McViewModel(
     private val _availableVersions = MutableStateFlow<List<String>>(emptyList())
     val availableVersions: StateFlow<List<String>> = _availableVersions.asStateFlow()
     private var versionsLoadToken = 0L
+
+    /** 缓存判断：最近一次成功加载版本列表的核心 */
+    private var lastLoadedVersionsCore: ServerCore? = null
+
+    /** 最近一次校正时的版本编号体系，用来判断下次加载是不是「跨体系切换」 */
+    private var lastVersionFamily: String? = null
+
     private val _versionHints = MutableStateFlow<Map<String, String?>>(emptyMap())
     val versionHints: StateFlow<Map<String, String?>> = _versionHints.asStateFlow()
 
@@ -4965,8 +5563,22 @@ class McViewModel(
     private val _downloadProgress = MutableStateFlow(DownloadProgress())
     val downloadProgress: StateFlow<DownloadProgress> = _downloadProgress.asStateFlow()
 
-    /** 加载指定核心的可用版本列表 */
-    fun loadVersions(core: ServerCore) {
+    /**
+     * 加载指定核心的可用版本列表。
+     *
+     * 除了拉列表，还负责把「当前选中版本」校正到该核心真实存在的版本上 ——
+     * 切换核心后旧版本号往往不在新列表里（Paper 1.20.4 → BDS 官方 build 号），
+     * 界面上就会出现「版本号不在列表、抽屉里没有一项高亮、点下载 404」三连。
+     *
+     * @param force true 时忽略缓存强制重新拉取
+     */
+    fun loadVersions(core: ServerCore, force: Boolean = false) {
+        // 同一核心且列表已经拿到：直接复用。切 Tab 回来会重建可组合，
+        // 没有这层判断的话每次回到下载页都要重新发一遍官方 API 请求。
+        if (!force && core == lastLoadedVersionsCore && _availableVersions.value.isNotEmpty()) {
+            reconcileSelectedVersion(core, _availableVersions.value)
+            return
+        }
         val token = ++versionsLoadToken
         _availableVersions.value = emptyList()
         _versionHints.value = emptyMap()
@@ -4978,19 +5590,53 @@ class McViewModel(
                 val versions = options.map { it.version }
                 _availableVersions.value = versions
                 _versionHints.value = options.associate { it.version to it.supportedGameVersion }
-                if (core == ServerCore.PowerNukkitX && config.value.selectedCore == core &&
-                    config.value.mcVersion == "latest" && versions.isNotEmpty()) {
-                    updateConfig { it.copy(mcVersion = versions.first()) }
-                }
+                lastLoadedVersionsCore = core
+                reconcileSelectedVersion(core, versions)
             } catch (e: Exception) {
                 if (token != versionsLoadToken) return@launch
                 _errorFlow.tryEmit(str(R.string.s294, e.message))
                 _availableVersions.value = emptyList()
                 _versionHints.value = emptyMap()
+                // 记下失败的核心：否则重试会被缓存判断拦掉（列表为空时不会命中缓存，
+                // 这里显式复位是为了让 lastVersionFamily 的「首次加载」判定保持准确）
+                lastLoadedVersionsCore = null
             } finally {
                 if (token == versionsLoadToken) _isLoadingVersions.value = false
             }
         }
+    }
+
+    /**
+     * 把选中版本校正到 [versions] 里真实存在的一项。
+     *
+     * 判定规则本身在 [VersionSelection.resolve]（纯函数，有单测）；这里只负责
+     * 维护「是否跨体系切换 / 是否本次进程首次加载」两个上下文，并落配置。
+     */
+    private fun reconcileSelectedVersion(core: ServerCore, versions: List<String>) {
+        // 列表为空时什么都不记：包括 lastVersionFamily。否则「这次拿到空列表、下次才拿到
+        // 真实列表」的情形会被判成「同一体系内重新加载」，旧版本号就再也纠正不掉了。
+        if (versions.isEmpty()) return
+        if (config.value.selectedCore != core) return
+        val family = VersionSelection.familyOf(core)
+        val firstLoadInProcess = lastVersionFamily == null
+        val familyChanged = lastVersionFamily != null && lastVersionFamily != family
+        lastVersionFamily = family
+
+        // BDS 例外：官方只提供「当前最新 Linux 构建」一项，界面上没有版本抽屉，
+        // 被清空后用户没有任何地方可以选回来 —— 这里直接落到列表首项。
+        if (config.value.mcVersion.isBlank() && core == ServerCore.Bds) {
+            updateConfig { it.copy(mcVersion = versions.first()) }
+            return
+        }
+
+        val resolved = VersionSelection.resolve(
+            current = config.value.mcVersion,
+            versions = versions,
+            familyChanged = familyChanged,
+            firstLoadInProcess = firstLoadInProcess
+        ) ?: return
+        updateConfig { it.copy(mcVersion = resolved) }
+        _messageFlow.tryEmit(str(R.string.msg_version_auto_selected, core.displayName, resolved))
     }
 
     /** 下载服务端核心（使用自定义名称，保存到独立目录），成功返回 true */
@@ -5008,6 +5654,12 @@ class McViewModel(
         // 这里在下载前直接拒绝，并提示改用别的名字（目录名即便被去重，显示名仍会撞车）。
         controller.duplicateNameOf(customName, config.value)?.let { existing ->
             _errorFlow.tryEmit(str(R.string.dl_duplicate_name, existing))
+            return
+        }
+        // 版本为空 = 刚切过核心还没重新选。放行只会拼出一个 404 的下载地址，
+        // 用户看到的是「下载失败」，真正的原因却在上一屏。
+        if (config.value.mcVersion.isBlank()) {
+            _errorFlow.tryEmit(str(R.string.msg_version_required))
             return
         }
         _isDownloadingCore.value = true
@@ -5038,6 +5690,14 @@ class McViewModel(
     fun verifyOrRepairCore(dirName: String) {
         val cfg = config.value
         val core = cfg.installedCores.firstOrNull { it.dirName == dirName } ?: return
+        // BDS 的「核心」不是一个 JAR：它是官方 zip 解开的主程序 + 一批 x86_64 动态库
+        // + 默认配置，用「jar manifest 是否可读」当判据必然误判成损坏，随后的「修复」
+        // 会重下整包、把用户改过的 server.properties / 白名单覆盖掉。
+        // 因此直接拒绝，并说明该走哪条恢复路径。
+        if (core.core == com.mineserve.mobile.data.ServerCore.Bds) {
+            _errorFlow.tryEmit(str(R.string.err_core_bds_no_verify))
+            return
+        }
         if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         viewModelScope.launch {
             try {
@@ -5165,9 +5825,35 @@ class McViewModel(
     private val _currentPath = MutableStateFlow("")
     val currentPath: StateFlow<String> = _currentPath.asStateFlow()
 
-    /** 文件管理根目录（home/servers/） */
+    /**
+     * 文件管理根目录：只有统一存储目录一个根。
+     *
+     * 「内部 / 私有」切换控件已移除 —— 旧私有目录不再作为可浏览、可运行的位置，
+     * 它的内容只能通过迁移流程搬到统一目录（见 `LegacyServerMigration`）。
+     */
     val fileManagerRoot: java.io.File
-        get() = java.io.File(repo.termuxRuntime.installer.rootDir, "home/servers")
+        get() = com.mineserve.mobile.data.ServerStorage.serversDir(app)
+
+    /**
+     * 文件管理权限状态：未授权时界面必须给出「去授权」入口，并且**不执行任何文件操作**。
+     *
+     * 直接暴露 [StorageAccess.granted]（全局单例流）而不是自己再存一份：
+     * 授权是在 Activity 的 onResume 里刷新的，界面若各自缓存会造成
+     * 「从设置页返回后按钮还在、列表仍为空」的状态撕裂。
+     */
+    val storageGranted: StateFlow<Boolean>
+        get() = com.mineserve.mobile.data.StorageAccess.granted
+
+    fun refreshStoragePermission() {
+        com.mineserve.mobile.data.StorageAccess.refresh(app)
+    }
+
+    /** 授权成功后（之前因无权限列表是空的），补一次加载 */
+    fun onStoragePermissionGranted() {
+        if (_currentPath.value.isEmpty() && isBootstrapped.value) {
+            loadFilesRoot()
+        }
+    }
 
     /** 加载指定目录的文件列表 */
     fun loadFiles(path: java.io.File) {
@@ -5313,10 +5999,10 @@ class McViewModel(
         }
     }
 
-    /** 导出整个服务器核心目录（打包 zip） */
+    /** 导出整个服务器核心目录（打包 zip）；目录按当前活动核心的实际位置解析 */
     fun exportServerToUri(uri: android.net.Uri) {
         val dirName = activeDirName() ?: return
-        val dir = java.io.File(fileManagerRoot, dirName)
+        val dir = repo.termuxRuntime.serverDirFor(dirName)
         if (!dir.exists()) {
             _errorFlow.tryEmit(str(R.string.s310))
             return

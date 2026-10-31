@@ -14,6 +14,8 @@ import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.MultiThreadDownloader
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ServerCore
+import com.mineserve.mobile.data.ServerStorage
+import com.mineserve.mobile.data.StorageLocation
 import com.mineserve.mobile.data.MinecraftVersionNormalizer
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.StepStatus
@@ -29,9 +31,12 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -39,6 +44,8 @@ import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.jar.JarFile
 import java.util.Locale
 
@@ -50,6 +57,24 @@ import java.util.Locale
  * 每次比较都新建两个 Regex 的话，几百个版本就是上万次正则编译。
  */
 private val VERSION_DIGITS = Regex("\\d+")
+
+/**
+ * 把 PaperMC v3 的 `versions` 字段平铺成字符串列表。
+ *
+ * 同一个 API 在不同项目/不同时间返回过两种结构：
+ * - 两层对象：`{"4.0.0":["4.3.2-SNAPSHOT","4.3.1"], "3.0.0":[...]}`（Paper、Velocity 现状）
+ * - 扁平数组：`["1.20.4","1.20.2"]`
+ *
+ * 只认数组会让对象形态直接抛 IllegalArgumentException，整条版本链断掉
+ * （历史事故：切到 Velocity 后版本列表永远为空）。两种都兼容，非原始值跳过。
+ */
+internal fun parseVersionGroups(versionsEl: JsonElement?): List<String> = when (versionsEl) {
+    is JsonObject -> versionsEl.values.flatMap { sub ->
+        (sub as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }.orEmpty()
+    }
+    is JsonArray -> versionsEl.mapNotNull { (it as? JsonPrimitive)?.contentOrNull }
+    else -> emptyList()
+}
 
 /**
  * Maven metadata / GitHub release 里的 `<version>` 取值。
@@ -435,18 +460,33 @@ class McServerController(
         if (normalizedConfig.mcVersion != config.mcVersion) {
             termux.emitLog("[version] Minecraft target normalized from ${config.mcVersion} to ${normalizedConfig.mcVersion}")
         }
+        // 版本为空只可能来自「刚切过核心、还没重新选版本」。这里兜底拒绝：
+        // 放行的话 resolveDownloadUrls 会拼出一个 404，报错位置离真正的原因很远。
+        if (normalizedConfig.mcVersion.isBlank()) {
+            throw RuntimeException("未选择版本号，请先在下载页选择要下载的版本")
+        }
+        // BDS 是唯一「下载的是 zip 而不是单个 jar」的核心：官方包里有主程序 + 一批
+        // 动态库 + 默认配置，必须整体解压，不能塞进 server.jar 路径当 JAR 处理。
+        if (normalizedConfig.selectedCore == ServerCore.Bds) {
+            return@withContext downloadBds(customName, onProgress)
+        }
+        // 统一存储目录必须先可写：没有文件权限时 mkdirs 会静默失败，
+        // 届时错误会推迟到几十秒后以「下载完成但找不到文件」的形式出现。
+        ServerStorage.requireInternalWritable(repo.context)
         if (normalizedConfig.selectedCore.needsInstaller &&
             !termux.isJavaInstalled(normalizedConfig.selectedJavaVersion, normalizedConfig.selectedJavaVendor)
         ) {
             throw RuntimeException("${normalizedConfig.selectedJavaVersion.displayName} is not installed. Install and verify it before running ${normalizedConfig.selectedCore.displayName} installer.")
         }
-        // 目录名去重：文件夹已存在说明别的服务器已占用该目录（例如两个核心都叫「111」，
-        // 直接落盘会互相覆盖 server.jar/world）。追加 _2、_3 直到找到空目录。
-        val dirName = uniqueDirNameIn(sanitizeDirName(customName))
+        // 目录名统一自动生成（server-日期-核心-随机串），[customName] 只做显示名。
+        // 去重仍然必要：随机串撞车或同一秒内并发创建时，追加 _2、_3 直到找到空目录。
+        val dirName = uniqueDirNameIn(autoDirName(normalizedConfig.selectedCore))
+        termux.emitLog("[install] 目录名：$dirName（显示名：$customName）")
         val jarPath = termux.serverJarFileFor(dirName).absolutePath
         downloadCoreTo(jarPath, normalizedConfig, dirName, onProgress)
-        // 在新核心目录下创建 eula.txt 和 plugins/ 目录
-        val serverDir = termux.serverDirFor(dirName)
+        // 新核心目录下创建 eula.txt 和 plugins/ 目录。
+        // 这里显式建目录（serverDirFor 已改成纯解析，不再顺手 mkdirs）。
+        val serverDir = termux.ensureServerDir(dirName)
         if (normalizedConfig.selectedCore == ServerCore.PowerNukkitX) {
             val properties = File(serverDir, "server.properties")
             val current = if (properties.exists()) properties.readText() else ""
@@ -526,12 +566,36 @@ class McServerController(
         // 期间用户完全可能删除/新增别的核心。若以那份陈旧快照为基准写回，
         // 会把用户在下载期间做的其他改动整体覆盖（症状：刚下的核心不在列表里、
         // 已删的核心又出现）。改为在仓库的权威内存态上原子读改写。
-        val newCore = InstalledCore(
-            name = customName,
+        registerDownloadedCore(
+            customName = customName,
             core = normalizedConfig.selectedCore,
             version = normalizedConfig.mcVersion,
             dirName = dirName,
             serverFile = serverFileName
+        )
+        dirName
+    }
+
+    /**
+     * 把一个新下载的核心登记进配置（原子读改写，绝不用调用方快照覆盖）。
+     *
+     * 抽出成函数是因为 BDS 走另一条下载/解压链路，登记语义必须完全一致：
+     * 新核心一律落在 [StorageLocation.Internal]（统一存储目录）。
+     */
+    private fun registerDownloadedCore(
+        customName: String,
+        core: ServerCore,
+        version: String,
+        dirName: String,
+        serverFile: String?
+    ) {
+        val newCore = InstalledCore(
+            name = customName,
+            core = core,
+            version = version,
+            dirName = dirName,
+            serverFile = serverFile,
+            location = StorageLocation.Internal
         )
         repo.updateAndSaveConfig { current ->
             current.copy(
@@ -539,8 +603,88 @@ class McServerController(
                 activeCoreName = customName
             )
         }
-        dirName
     }
+
+    /**
+     * 下载并安装官方 BDS。
+     *
+     * 与其它核心的差别（都是官方包的客观事实，不是实现选择）：
+     *  - 下载物是 zip（含 bedrock_server + 动态库 + 默认配置），解压而不是改名；
+     *  - 版本号由官方 links 接口给出，无法由用户选择（官方只提供最新版直链）；
+     *  - 解压后立刻做一次架构检查并写进日志，让用户在**下载完成时**就知道能不能跑，
+     *    而不是点了启动才被告知。
+     */
+    private suspend fun downloadBds(
+        customName: String,
+        onProgress: (Long, Long, Long) -> Unit
+    ): String {
+        ServerStorage.requireInternalWritable(repo.context)
+        termux.emitLog("[bds] 正在获取官方 BDS 下载地址…")
+        val build = runCatching { BdsSupport.parseLatestLinux(fetchText(BdsSupport.DOWNLOAD_LINKS_API)) }
+            .getOrNull()
+            ?: throw RuntimeException("无法从官方接口解析 BDS 下载地址，请检查网络后重试")
+        termux.emitLog("[bds] 官方最新版本：${build.version}")
+        // 与 Java 核心同一套命名规则，核心类型位固定为 bds。
+        val dirName = uniqueDirNameIn(autoDirName(ServerCore.Bds))
+        termux.emitLog("[bds] 目录名：$dirName（显示名：$customName）")
+        val serverDir = termux.serverDirFor(dirName)
+        val zip = File(termux.installer.tmpDir, "bds-${build.version}.zip")
+        try {
+            MultiThreadDownloader.download(
+                url = build.url,
+                target = zip,
+                onProgress = { downloaded, total, speed -> onProgress(downloaded, total, speed) },
+                onLog = { message -> termux.emitLog("[bds] $message") }
+            )
+            if (zip.length() < 1024) throw RuntimeException("BDS 安装包过小（${zip.length()} 字节），下载可能失败")
+            val entries = BdsSupport.extractZip(zip, serverDir)
+            File(serverDir, "bds-version.txt").writeText(build.version + "\n")
+            termux.emitLog("[bds] 已解压 $entries 个文件到 ${serverDir.absolutePath}")
+            val check = BdsSupport.checkLaunch(serverDir, android.os.Build.SUPPORTED_ABIS.toList())
+            termux.emitLog(
+                when {
+                    !check.ok -> "[bds] 平台限制：${check.reason}"
+                    check.needsBox64 -> "[bds] 官方发行版为 x86_64，首次启动时会自动安装 box64 转译环境"
+                    else -> "[bds] 平台检查通过（原生执行）"
+                }
+            )
+        } finally {
+            zip.delete()
+        }
+        registerDownloadedCore(
+            customName = customName,
+            core = ServerCore.Bds,
+            version = build.version,
+            dirName = dirName,
+            serverFile = BdsSupport.ENTRY_NAME
+        )
+        return dirName
+    }
+
+    // ── BDS 在线更新 ────────────────────────────────────────────────
+    //
+    // 更新逻辑单独放在 BdsUpdater 里（备份 → 下载 → 暂存校验 → 安全替换 → 回滚），
+    // 这里只做「当前活跃服务器」相关的入口与版本读取，避免把 700 行的安装细节
+    // 塞进本来就巨大的 Controller。
+
+    private val bdsUpdater by lazy { BdsUpdater(termux, repo) }
+
+    /** 服务器目录里实际记录的 BDS 版本（`bds-version.txt`），用户自查的包可能为 null */
+    fun bdsInstalledVersion(dirName: String): String? =
+        bdsUpdater.installedVersion(termux.serverDirFor(dirName))
+
+    /**
+     * 把指定服务器的 BDS 核心更新到 [target]。
+     *
+     * 前置条件（由 [BdsUpdater] 校验并抛 [BdsUpdater.UpdateFailed]）：
+     * 服务器已停止、目录是 BDS 布局、备份成功。
+     */
+    suspend fun updateBdsCore(
+        dirName: String,
+        currentVersion: String?,
+        target: com.mineserve.mobile.data.BdsBuild,
+        onEvent: (BdsUpdater.Event) -> Unit = {}
+    ): BdsUpdater.Result = bdsUpdater.update(dirName, currentVersion, target, onEvent)
 
     /**
      * 在 servers 目录下为 [base] 找一个未被占用的目录名。
@@ -554,6 +698,9 @@ class McServerController(
     suspend fun uniqueDirNameIn(base: String): String {
         val taken = runCatching { repo.configFlow.first() }.getOrNull()
             ?.installedCores?.map { it.dirName }?.toHashSet() ?: hashSetOf()
+        // 判重必须跨两个根目录：`dirName` 是全应用定位服务器的键，
+        // 若新旧目录各有一个同名目录，列表/备份/文件管理会指向模糊对象。
+        taken += ServerStorage.takenDirNames(repo.context, taken)
         return uniqueDirName(base, taken, termux.serversDir)
     }
 
@@ -595,8 +742,17 @@ class McServerController(
             ServerCore.PowerNukkitX -> resolvePowerNukkitXUrl(version)
             ServerCore.PocketMine -> resolvePocketMineUrl(version)
             ServerCore.Allay -> resolveAllayUrl(version)
+            // BDS 版本由官方链接接口决定，不参与 Java 版本的解析
+            ServerCore.Bds -> resolveBdsUrl()
             ServerCore.Unknown -> throw IllegalArgumentException("未知核心类型，无法解析下载地址")
         }
+    }
+
+    /** 官方 BDS 当前 Linux 构建的直链（版本无法指定，官方只给最新版） */
+    private fun resolveBdsUrl(): String {
+        val build = BdsSupport.parseLatestLinux(fetchText(BdsSupport.DOWNLOAD_LINKS_API))
+            ?: throw IllegalStateException("无法解析官方 BDS 下载索引")
+        return build.url
     }
 
     private fun resolveDownloadUrls(core: ServerCore, version: String): List<String> {
@@ -873,13 +1029,14 @@ class McServerController(
     /**
      * 读取 NeoForge 的 maven-metadata.xml。
      *
-     * 官方 `maven.neoforged.net` 在部分国内网络下会被 DNS 污染而完全不可达（实测连接超时），
-     * 此时退到 BMCLAPI 的 maven 镜像——它是同一份元数据的镜像，路径前缀只多 `/maven`。
+     * 官方 `maven.neoforged.net` 在部分国内网络下会被 DNS 污染而完全不可达（实测三次连接
+     * 全部 20s 超时、零字节），所以 **BMCLAPI 镜像优先**，官方源退成兜底 ——
+     * 反过来（官方优先）会让每次加载版本列表都先白等一个 15s 连接超时。
      */
     private fun fetchNeoForgeMavenMetadata(): String {
         val candidates = listOf(
-            "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml",
-            "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/maven-metadata.xml"
+            "https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/maven-metadata.xml",
+            "https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml"
         )
         var last: Exception? = null
         for (url in candidates) {
@@ -985,6 +1142,15 @@ class McServerController(
             ServerCore.PowerNukkitX -> fetchPowerNukkitXVersionOptions()
             ServerCore.PocketMine -> fetchPocketMineVersions()
             ServerCore.Allay -> fetchAllayVersionOptions()
+            // BDS 只有「官方当前版本」一个可选值：版本由官方接口给出，不能自选。
+            // 这里仍然返回一项（而不是空列表），版本下拉才不会显示成「无可用版本」。
+            ServerCore.Bds -> listOfNotNull(
+                runCatching { BdsSupport.parseLatestLinux(fetchText(BdsSupport.DOWNLOAD_LINKS_API)) }
+                    .getOrNull()
+                    ?.let { build ->
+                        CoreVersionOption(build.version, build.url)
+                    }
+            )
             ServerCore.Unknown -> emptyList()
         }
     }
@@ -1014,12 +1180,20 @@ class McServerController(
             ?.takeIf { it.isNotEmpty() }
     }.getOrNull() ?: DEFAULT_MC_VERSIONS
 
+    /**
+     * Velocity：PaperMC v3 的 `versions` 结构与 Paper 相同，是**两层对象**
+     * `{"4.0.0":["4.3.2-SNAPSHOT","4.3.1"], "3.0.0":[...]}`，不是扁平数组。
+     *
+     * 旧实现直接 `resp["versions"]?.jsonArray`，对 JsonObject 取 jsonArray 会抛
+     * IllegalArgumentException，整条版本链断掉 —— 表现为切到 Velocity 后版本列表
+     * 一直是空的并弹「版本获取失败」。这里按类型分支，两种结构都能读。
+     */
     private fun fetchVelocityVersions(): List<String> {
-        // PaperMC v3：velocity versions 数组
         val resp = fetchJson("https://fill.papermc.io/v3/projects/velocity")
-        return resp["versions"]?.jsonArray
-            ?.map { it.jsonPrimitive.content }
-            ?.sortedWith(mcVersionComparator) ?: DEFAULT_MC_VERSIONS
+        val all = parseVersionGroups(resp["versions"])
+        // 快照版本（4.3.2-SNAPSHOT）不是可下载的发布版，留在列表里只会选到 404
+        val stable = all.filter { it.isNotBlank() && !it.contains("SNAPSHOT", ignoreCase = true) }
+        return stable.sortedWith(mcVersionComparator).ifEmpty { DEFAULT_MC_VERSIONS }
     }
 
     private fun fetchBungeeVersions(): List<String> = listOf("latest")
@@ -1305,21 +1479,14 @@ class McServerController(
     }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MC_VERSIONS
 
     private fun fetchPaperVersions(): List<String> {
-        // PaperMC v3 API：返回 {versions: {major: [subversions]}}，需平铺
+        // PaperMC v3 API：返回 {versions: {major: [subversions]}}，需平铺。
+        // 结构若改回扁平数组，parseVersionGroups 同样能读，不至于整条版本链断掉。
         val resp = fetchJson("https://fill.papermc.io/v3/projects/paper")
-        val versionsObj = resp["versions"]?.jsonObject
-            ?: return DEFAULT_MC_VERSIONS
-        val allVersions = mutableListOf<String>()
-        versionsObj.forEach { (_, subVersions) ->
-            subVersions.jsonArray.forEach { v ->
-                val verStr = v.jsonPrimitive.content
-                // 过滤掉 rc/pre 等非正式版
-                if (verStr.isNotEmpty() && !verStr.contains("rc") && !verStr.contains("pre")) {
-                    allVersions.add(verStr)
-                }
-            }
-        }
-        return allVersions.sortedWith(mcVersionComparator)
+        return parseVersionGroups(resp["versions"])
+            // 过滤掉 rc/pre 等非正式版
+            .filter { it.isNotBlank() && !it.contains("rc") && !it.contains("pre") }
+            .sortedWith(mcVersionComparator)
+            .ifEmpty { DEFAULT_MC_VERSIONS }
     }
 
     private fun fetchVanillaVersions(): List<String> {
@@ -1328,8 +1495,16 @@ class McServerController(
             ?: return DEFAULT_MC_VERSIONS
         // manifest 本身按新→旧排列，但过滤掉快照/pre/rc 后必须重新语义排序再截断，
         // 否则「只取前 30 个」会把 1.21.x 系列里的新版本切掉。
+        // snapshot 也要过滤：26.x 起快照版本号是 `26.4-snapshot-6`，不带 pre/rc 字样，
+        // 漏掉会让列表顶部出现快照版，选中后下载地址是 404。
         return versions.map { it.jsonObject["id"]?.jsonPrimitive?.content ?: "" }
-            .filter { it.isNotEmpty() && !it.contains("experimental") && !it.contains("pre") && !it.contains("rc") }
+            .filter {
+                it.isNotEmpty() &&
+                    !it.contains("experimental") &&
+                    !it.contains("snapshot", ignoreCase = true) &&
+                    !it.contains("pre") &&
+                    !it.contains("rc")
+            }
             .filter { it.count { c -> c == '.' } >= 1 }
             .sortedWith(mcVersionComparator)
             .take(60)
@@ -1496,6 +1671,33 @@ class McServerController(
         // 记录本次启动的代际：准备阶段（可能数分钟）里用户若点了停止，
         // 代际会失效，launchMc 在真正 spawn 之前就会放弃，而不是照旧把服务端拉起来。
         val startGeneration = if (userInitiated) termux.beginStartRequest() else 0L
+        // 圈出「启动在途」窗口：这段里进程根本还不存在，看门狗不能据此判定已停止。
+        // 无论本次启动成功、抛异常还是被取消，都在 finally 里撤掉（附带 6s 缓冲期）。
+        termux.markStartInFlight()
+        try {
+            startInternal(config, startGeneration)
+        } finally {
+            termux.clearStartInFlight()
+        }
+    }
+
+    /** [start] 的实际流程；由外层负责本轮的代际号与「启动在途」标记。 */
+    private suspend fun startInternal(config: McConfig, startGeneration: Long) {
+        // BDS 抢在依赖安装之前判定：它不跑 JVM/PHP，与 Termux rootfs 无关。
+        // 平台不支持时必须**立刻**给出原因（而不是先装十分钟依赖再报错）。
+        val bdsCore = config.installedCores.find { it.name == config.activeCoreName }
+        // 还留在旧版私有目录的核心**不可启动**：新版只认统一存储目录。
+        // 这里给的是动作指引，而不是让用户对着「找不到 jar」自己猜。
+        if (bdsCore?.location == StorageLocation.Legacy) {
+            throw RuntimeException(
+                "「${bdsCore.name}」仍在旧版私有目录里，新版不会从那里启动。" +
+                    "请在下一次启动时弹出的「迁移旧版服务器」提示中把它搬到统一存储目录后再启动"
+            )
+        }
+        if (bdsCore?.core == ServerCore.Bds) {
+            startBds(config, bdsCore, startGeneration)
+            return
+        }
         // 先确保 Termux 环境已初始化
         if (!termux.isReady()) {
             throw RuntimeException("Termux 环境未初始化，请等待初始化完成")
@@ -1510,9 +1712,10 @@ class McServerController(
             termux.fixRootfsPermissions()
         }
         // 依赖安装/修复可能耗时很久：进入下一步前先确认用户没有取消这次启动。
-        if (userInitiated && termux.isStartCancelled(startGeneration)) {
+        // 代际号为 0 表示非用户发起（崩溃自动重启等），不做取消检查。
+        if (startGeneration != 0L && termux.isStartCancelled(startGeneration)) {
             termux.emitLog("[startMc] 准备阶段已收到停止请求，本次启动已取消")
-            return@withContext
+            return
         }
         // 找到当前选用的核心
         val activeCore = config.installedCores.find { it.name == config.activeCoreName }
@@ -1529,7 +1732,8 @@ class McServerController(
         // 所以**每次启动**都重读一次；否则 PNX / Allay 的启动链会用 McConfig 里的旧值
         // 把配置文件里的新端口覆盖掉（改了等于没改），地址与穿透也会指向没监听的端口。
         val launchConfig = adoptConfigPort(baseConfig, launchCore)
-        val serverDir = File(termux.serversDir, launchCore.dirName)
+        // 目录按核心实际位置解析：老服务器仍在旧私有目录里，不能按新根目录拼
+        val serverDir = termux.serverDirFor(launchCore.dirName)
         val configuredEntry = launchCore.serverFile
             ?.trim()
             ?.substringAfterLast('/')
@@ -1549,6 +1753,186 @@ class McServerController(
         restartAttempts = 0
         launchMc(launchConfig, launchCore.dirName, jarFile?.absolutePath, startGeneration)
     }
+
+    /**
+     * 启动官方 BDS。
+     *
+     * 与 Java / PHP 链路的差异，都是 BDS 自身的事实：
+     *  1. **不需要 JVM**。目录里的可执行文件是本机架构时直接 exec；
+     *  2. 官方发行版是 Linux x86_64 + glibc，arm64 设备上必须走
+     *     「PRoot 容器（glibc）+ box64 转译」，所以这里要先确保运行环境就绪；
+     *  3. 真跑不了的组合（arm32 / x86 32 位）**直接拒绝启动**并说明替代方案，
+     *     绝不拉起一个必然失败的进程再让用户看退出码。
+     */
+    private suspend fun startBds(config: McConfig, core: InstalledCore, startGeneration: Long) {
+        val serverDir = termux.serverDirFor(core.dirName)
+        val check = BdsSupport.checkLaunch(serverDir, android.os.Build.SUPPORTED_ABIS.toList())
+        if (!check.ok) {
+            termux.emitLog("[bds] 拒绝启动：${check.reason}")
+            throw RuntimeException(check.reason)
+        }
+        if (check.needsBox64) {
+            // 转译环境**只能**在「依赖与环境管理 → BDS」里由用户手动初始化：
+            // 首次要下容器 + box64（几十兆、几分钟），放在启动路径里会让用户
+            // 以为服务端卡死，失败时也没有地方显示原因。
+            if (!BdsEnvironmentManager.isReady(termux.installer.rootDir)) {
+                termux.emitLog("[bds] BDS 运行环境未初始化，拒绝启动")
+                throw RuntimeException(
+                    "BDS 专属运行环境尚未初始化。官方 BDS 是 x86_64 构建，" +
+                        "需要先在「依赖与环境管理 → BDS」里点「初始化环境」（只需一次），" +
+                        "完成后回到概览页启动即可"
+                )
+            }
+        }
+        syncBdsProperties(serverDir, config.localPort)
+        restartAttempts = 0
+        if (abortIfStartCancelled(startGeneration)) return
+        termux.emitLog(
+            if (check.needsBox64) {
+                "[startMc] 启动官方 BDS ${core.version}（box64 转译，无 JVM）"
+            } else {
+                "[startMc] 启动官方 BDS ${core.version}（原生进程，无 JVM）"
+            }
+        )
+        // 转译启动慢得多：244MB 主程序要经 box64 加载，冷启动常见几十秒到几分钟。
+        // 只影响「多久没就绪算启动失败」，不影响已经跑起来的服务端。
+        startupDeadlineMs = System.currentTimeMillis() + if (check.needsBox64) 300_000L else 60_000L
+        processStartedAtMs = System.currentTimeMillis()
+        termux.startBds(
+            core.dirName,
+            core.version,
+            createExitHandler(config, core.dirName, BdsSupport.entryFile(serverDir).absolutePath)
+        )
+        repo.updateServerState { markRunningIfAlive(it) }
+    }
+
+    /**
+     * 启动前确保 BDS 的 `server.properties` 存在且可跑。
+     *
+     * 三件事，缺一不可：
+     *
+     * 1. **文件必须存在**。BDS 1.21+ 按「可执行文件所在目录」找配置，而运行目录
+     *    （`run/<服务器目录>`）里指向它的链接只有在服务器目录里已有该文件时才会建。
+     *    所以必须先把它写到用户看得见的服务器目录里，运行目录那一层才链得上；
+     *    否则 BDS 会在私有目录里自己生成一份，用户在文件管理里永远找不到。
+     * 2. **`server-port` 跟 App 侧的端口同步**。BDS 运行期不重读该文件，写晚了等于没写。
+     * 3. **`online-mode` 是用户的选择，不替用户改写**。只在「文件里没有这一项」时按
+     *    离线补一个 false（首次生成配置的默认值）；已经是 true 就原样保留，仅打印警告。
+     *
+     *    警告的理由：正版验证要连微软的 Minecraft 服务，国内网络经常连不上 —— 那时
+     *    BDS 会在启动约 75 秒后打印 `Could not connect to Minecraft services. This is
+     *    required to accept connections in online mode.` 然后自己 `Server stop requested`，
+     *    用户看到的就是「刚开就停」。这个判断交给用户，App 不再静默覆盖他的设置。
+     */
+    private fun syncBdsProperties(serverDir: File, port: Int) {
+        try {
+            val file = File(serverDir, BdsSupport.PROPERTIES_NAME)
+            val before = if (file.isFile) runCatching { file.readText() }.getOrDefault("") else ""
+            var after = before
+            if (after.isBlank()) {
+                after = DEFAULT_BDS_PROPERTIES.replace("{{port}}", port.toString())
+                termux.emitLog("[bds] 已生成 server.properties（离线模式 online-mode=false）")
+            } else {
+                after = setProperty(after, "server-port", port.toString())
+                when (readProperty(after, "online-mode")) {
+                    null -> {
+                        after = setProperty(after, "online-mode", "false")
+                        termux.emitLog("[bds] server.properties 缺少 online-mode，已补为 false（离线模式）")
+                    }
+                    "true" -> {
+                        /*
+                         * 不覆盖用户的设置。在线模式连不上微软服务时 BDS 会自停，
+                         * 但那是用户在网络可用时的正常选择（正版服），App 无权替他决定。
+                         * 这里只把后果写在控制台，让他看到现象时能立刻对应上原因。
+                         */
+                        termux.emitLog(
+                            "[bds] 警告：online-mode=true（正版验证）。若启动约 75 秒后出现 " +
+                                "\"Could not connect to Minecraft services\" 并自行停止，" +
+                                "说明当前网络到不了微软认证服务（国内常见），" +
+                                "请到属性页把「在线模式」关掉改用离线模式"
+                        )
+                    }
+                }
+            }
+            /*
+             * 离线模式 + 白名单是 BDS 明确**禁止**的组合：
+             * ```
+             * ERROR] Using an allowlist without online authentication can be
+             *        dangerous and is not allowed.
+             * ```
+             * 1.26 的内置默认 `allow-list` 是 true，只要 properties 没被读到就会踩这条
+             * （现象：加载完世界立刻 `Quit correctly`，UI 一直停在"启动中"）。
+             * 所以离线模式下必须显式写 false —— 用户想要白名单只能开在线模式。
+             */
+            if (readProperty(after, "online-mode") == "false" &&
+                readProperty(after, "allow-list") != "false"
+            ) {
+                after = setProperty(after, "allow-list", "false")
+                termux.emitLog("[bds] 已关闭 allow-list：离线模式不允许启用白名单（BDS 会拒绝启动）")
+            }
+            if (after != before) file.writeText(after)
+            // 这一行是排障用的锚点：能确认文件真的落在公共存储、以及 BDS 拿到的键值
+            termux.emitLog(
+                "[bds] server.properties ${file.length()} 字节：" +
+                    "online-mode=${readProperty(after, "online-mode") ?: "-"}, " +
+                    "allow-list=${readProperty(after, "allow-list") ?: "-"}, " +
+                    "server-port=${readProperty(after, "server-port") ?: "-"}"
+            )
+        } catch (e: Exception) {
+            termux.emitLog("[bds] 写入 server.properties 失败（沿用配置文件既有值）：${e.message}")
+        }
+    }
+
+    /** 读 `key=value` 形态的 BDS 属性（缺失返回 null） */
+    private fun readProperty(text: String, key: String): String? =
+        Regex("(?m)^\\s*${Regex.escape(key)}\\s*=\\s*(.*)$")
+            .find(text)
+            ?.groupValues
+            ?.get(1)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+
+    /** 写入/替换一条 `key=value`，其余行原样保留 */
+    private fun setProperty(text: String, key: String, value: String): String {
+        val pattern = Regex("(?m)^\\s*${Regex.escape(key)}\\s*=.*$")
+        return when {
+            pattern.containsMatchIn(text) -> text.replace(pattern, "$key=$value")
+            text.isBlank() -> "$key=$value\n"
+            else -> text.trimEnd() + "\n$key=$value\n"
+        }
+    }
+
+    /** BDS 首次启动的默认配置（官方默认值，仅 online-mode 改为离线、端口由调用方填充） */
+    private val DEFAULT_BDS_PROPERTIES = """
+        server-name=Dedicated Server
+        gamemode=survival
+        force-gamemode=false
+        difficulty=easy
+        allow-cheats=false
+        max-players=10
+        online-mode=false
+        allow-list=false
+        server-port={{port}}
+        server-portv6=19133
+        enable-lan-visibility=true
+        view-distance=32
+        tick-distance=4
+        player-idle-timeout=30
+        max-threads=8
+        level-name=Bedrock level
+        level-seed=
+        default-player-permission-level=member
+        texturepack-required=false
+        content-log-file-enabled=false
+        compression-threshold=1
+        compression-algorithm=zlib
+        server-authoritative-movement=server-auth
+        player-movement-score-threshold=20
+        player-movement-distance-threshold=0.3
+        player-movement-duration-threshold-in-ms=500
+        correct-player-movement=false
+        server-authoritative-block-breaking=false
+    """.trimIndent() + "\n"
 
     /**
      * 真正 spawn 进程之前统一检查「本次启动是否已被用户取消」。
@@ -1578,12 +1962,20 @@ class McServerController(
         config: McConfig,
         activeCore: InstalledCore
     ): Pair<McConfig, InstalledCore> {
-        val migratedDirName = sanitizeDirName(activeCore.dirName)
-        if (migratedDirName == activeCore.dirName) return config to activeCore
+        // 判据仍是 sanitize 幂等：合规的 ASCII 目录名一个字符都不会变，
+        // 因此已经迁移过的服务器不会在每次启动时又被改名。
+        if (sanitizeDirName(activeCore.dirName) == activeCore.dirName) return config to activeCore
 
-        val source = File(termux.serversDir, activeCore.dirName)
-        val target = File(termux.serversDir, migratedDirName)
+        val source = termux.serverDirFor(activeCore.dirName)
         if (!source.isDirectory) throw RuntimeException("核心目录不存在：${source.absolutePath}")
+        // 老的中文目录名：按统一规则重新生成（server-日期-核心-随机串），
+        // 而不是清洗成 server-<sha256前12位> 这种无信息量的名字。
+        // 去重必须看**同一父目录**：历史核心可能还在旧的私有目录下，
+        // 拿统一存储根去判重会漏掉同目录里的同名目标。
+        val migratedDirName = uniqueDirName(autoDirName(activeCore.core), emptySet(), source.parentFile!!)
+        // 迁移必须留在**同一个根目录**内：跨根改名等于把老服务器的文件搬进新目录，
+        // 违反「旧服务器原地保留」的约定，且外部存储与私有目录之间不是同一文件系统。
+        val target = File(source.parentFile, migratedDirName)
         if (target.exists()) throw RuntimeException("无法迁移核心目录，目标目录已存在：${target.name}")
         if (!source.renameTo(target)) throw RuntimeException("无法迁移核心目录，请检查存储空间后重试")
 
@@ -1947,6 +2339,8 @@ class McServerController(
 
     /** 提取 onExit 处理器，供 launchMc 和 startMcCustom 共用。 */
     private fun createExitHandler(config: McConfig, dirName: String, jarPath: String?): (Int) -> Unit = { code ->
+        // 进程已经确定退出：撤掉「启动在途」保护，让看门狗/UI 能立刻反映真实状态。
+        termux.clearStartInFlight()
         val uptimeMs = System.currentTimeMillis() - processStartedAtMs
         val failedDuringStartup = System.currentTimeMillis() <= startupDeadlineMs
         // 稳定运行过就先清零退避计数，让"偶发崩溃"和"持续崩溃"区别对待
@@ -2321,6 +2715,9 @@ class McServerController(
          * 新增正式版时同步维护这里。
          */
         private val DEFAULT_MC_VERSIONS = listOf(
+            // 26.x 是 2026 年起的年份式版本号（Paper / Mojang manifest 都已切到这套），
+            // 兜底列表必须跟着走，否则 API 一挂用户就只能选到 1.21.x。
+            "26.3", "26.2", "26.1",
             "1.21.11", "1.21.10", "1.21.9", "1.21.8", "1.21.7", "1.21.6",
             "1.21.5", "1.21.4", "1.21.3", "1.21.2", "1.21.1", "1.21",
             "1.20.6", "1.20.5", "1.20.4", "1.20.3", "1.20.2", "1.20.1", "1.20",
@@ -2329,6 +2726,60 @@ class McServerController(
             "1.17.1", "1.17",
             "1.16.5", "1.16.4", "1.16.3", "1.16.2", "1.16.1", "1.16"
         )
+
+        private const val DIR_NAME_RANDOM_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+        /**
+         * 自动生成的服务器目录名：`server-<yyyyMMdd>-<核心类型>-<4位随机串>`。
+         *
+         * 例：`server-20261031-paper-k3f9`。
+         *
+         * 为什么不再拿用户的显示名去清洗：显示名常常是中文，[sanitizeDirName] 会把它
+         * 整串抹成下划线、再兜底成 `server` + 12 位 sha256，得到 `server-e73e38c1f65d`
+         * 这种看不出任何信息、也无从排序的名字。自动命名一开始就用 ASCII 结构，
+         * 日期 + 核心类型一眼可读，随机串只负责同一天建多个服时的区分。
+         *
+         * 显示名仍然是用户的原文（[InstalledCore.name]），只有磁盘目录走这套规则。
+         */
+        fun autoDirName(core: ServerCore, dateMs: Long = System.currentTimeMillis()): String =
+            autoDirNameByKind(coreSlug(core), dateMs)
+
+        /** 只给类型位、不给 [ServerCore] 的场景（如导入：核心类型此时还未知）。 */
+        fun autoDirNameByKind(kind: String, dateMs: Long = System.currentTimeMillis()): String {
+            val date = SimpleDateFormat("yyyyMMdd", Locale.US).format(Date(dateMs))
+            return "server-$date-$kind-${randomSuffix()}"
+        }
+
+        /** 核心类型在目录名里的短标识（全小写 ASCII），如 `Paper` → `paper`。 */
+        fun coreSlug(core: ServerCore): String =
+            core.name.lowercase(Locale.US).replace(Regex("[^a-z0-9]"), "")
+
+        /**
+         * 用户给的名字 → 目录名（导入、MCP 建服等「名字由外部提供」的场景）。
+         *
+         *  - 纯 ASCII 且清洗后仍有内容：保留原样。这类名字有信息量（`paper-1.21.4`），
+         *    属于用户输入而不是自动生成。
+         *  - 其余（中文 / emoji / 只有符号）：按 [autoDirName] 生成可读结构。
+         *    [kind] 用于覆盖类型位，例如导入时核心类型还未确定，传 `"imported"`。
+         */
+        fun dirNameForDisplayName(
+            displayName: String,
+            core: ServerCore = ServerCore.Unknown,
+            kind: String? = null
+        ): String {
+            val usable = displayName.isNotBlank() &&
+                displayName.all { it.code in 32..126 } &&
+                displayName.none { it == '/' || it == '\\' }
+            val sanitized = sanitizeDirName(displayName)
+            return when {
+                usable && sanitized != "server" -> sanitized
+                kind != null -> autoDirNameByKind(kind)
+                else -> autoDirName(core)
+            }
+        }
+
+        private fun randomSuffix(length: Int = 4): String =
+            (1..length).map { DIR_NAME_RANDOM_CHARS.random() }.joinToString("")
 
         /** 服务端工作目录必须是 ASCII，避免 Forge/Java 25 解析 file URI 时出现 Bad escape。 */
         fun sanitizeDirName(name: String): String {

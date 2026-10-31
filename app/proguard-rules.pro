@@ -32,7 +32,14 @@
 -keepclassmembers enum * { *; }
 
 # ---------- Compose ----------
--keep class androidx.compose.** { *; }
+# 【勿恢复】这里原本是 `-keep class androidx.compose.** { *; }`。
+# 它让 R8 的裁剪对整棵 Compose 依赖树失效：seeds.txt 里因此多出 3.4 万个
+# material-icons-extended 图标成员（每个图标 = 一个 ImageVector getter + 缓存字段），
+# 未压缩 dex 被撑到 22.5 MB。项目实际只用到 81 个图标。
+# Compose 各 AAR 自带 consumer-rules.pro（见 mapping/configuration.txt 里
+# "LocalLifecycleOwner"、"ViewLayerContainer" 那批），业务侧不需要任何额外 keep。
+# 若日后出现 Compose 相关的 NoSuchMethodError / 反射失败，请针对具体类补最小规则，
+# 绝不要恢复包级 `{ *; }`。
 
 # Keep native entry points, dispatcher discovery, and manifest components.
 -keepclasseswithmembernames class * {

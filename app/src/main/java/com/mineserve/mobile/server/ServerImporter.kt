@@ -6,6 +6,7 @@ import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.util.Log
 import com.mineserve.mobile.data.ServerCore
+import com.mineserve.mobile.data.ServerStorage
 import com.mineserve.mobile.runtime.TermuxRuntime
 import io.airlift.compress.zstd.ZstdInputStream
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +70,8 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
         requestedName: String? = null,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): ImportedServer = withContext(Dispatchers.IO) {
+        // 导入一律落到统一存储目录：先确认真的可写，避免复制到一半才失败。
+        ServerStorage.requireInternalWritable(context)
         // OpenDocumentTree returns a /tree/... URI; getDocumentId only accepts
         // /document/... URIs and throws "Invalid URI" on some providers.
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
@@ -77,7 +80,7 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
 
         val (rootDocId, rootName) = resolveServerRoot(treeUri, rootId, children)
         val displayName = requestedName?.takeIf { it.isNotBlank() } ?: rootName ?: "imported_server"
-        val dirName = uniqueDirName(McServerController.sanitizeDirName(displayName))
+        val dirName = uniqueDirName(importDirName(displayName))
         val target = File(termux.serversDir, dirName)
         val totalFiles = countTreeFiles(treeUri, rootDocId)
         importInto(target) {
@@ -236,6 +239,7 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
         requestedName: String? = null,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): ImportedServer = withContext(Dispatchers.IO) {
+        ServerStorage.requireInternalWritable(context)
         val fileName = queryDisplayName(uri) ?: ("server_import_" + System.currentTimeMillis() + ".zip")
         val temp = File(
             termux.installer.tmpDir,
@@ -248,7 +252,7 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
             val stripPrefix = ServerImportLayout.computeStripPrefix(entryNames)
             val autoName = stripPrefix ?: archiveBaseName(fileName)
             val displayName = requestedName?.takeIf { it.isNotBlank() } ?: autoName
-            val dirName = uniqueDirName(McServerController.sanitizeDirName(displayName))
+            val dirName = uniqueDirName(importDirName(displayName))
             val target = File(termux.serversDir, dirName)
             importInto(target) {
                 extractArchive(temp, format, target, stripPrefix, onProgress, entryNames.size.toLong())
@@ -277,11 +281,12 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
         requestedName: String? = null,
         onProgress: (Long, Long) -> Unit = { _, _ -> }
     ): ImportedServer = withContext(Dispatchers.IO) {
+        ServerStorage.requireInternalWritable(context)
         val fileName = queryDisplayName(uri) ?: "server.jar"
         if (!fileName.endsWith(".jar", ignoreCase = true)) throw IOException("请选择 JAR 核心文件")
         val displayName = requestedName?.takeIf { it.isNotBlank() }
             ?: fileName.removeSuffix(".jar").ifBlank { "imported_server" }
-        val dirName = uniqueDirName(McServerController.sanitizeDirName(displayName))
+        val dirName = uniqueDirName(importDirName(displayName))
         val target = File(termux.serversDir, dirName)
         val targetJar = File(target, ServerImportLayout.importedJarFileName(fileName))
         importInto(target) {
@@ -330,6 +335,9 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
 
     /** 与下载核心流程一致：缺少 eula.txt 时自动写入，保证导入后可直接启动 */
     private fun ensureEula(serverDir: File) {
+        // BDS 没有 EULA 文件（下载官方包即视为接受），凭空写一个只会在目录里多出
+        // 一个 BDS 从不读取的文件，反而让人以为配置生效了。
+        if (BdsSupport.isBdsDir(serverDir)) return
         try {
             val eula = File(serverDir, "eula.txt")
             if (!eula.exists()) eula.writeText("eula=true\n")
@@ -552,11 +560,29 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
             .let { if (it.endsWith(".tar", ignoreCase = true)) it.removeSuffix(".tar") else it }
             .ifBlank { "imported_server" }
 
-    /** 目标目录名去重：同名时追加 _2 / _3 … */
+    /**
+     * 导入目标的目录名。
+     *
+     * 压缩包名 / 文件夹名本身可读（纯 ASCII，如 `paper-1.21.4`）时原样保留 —— 那是
+     * 有信息量的用户输入，不属于「自动生成」。纯中文名清洗后什么都不剩，才走统一
+     * 自动命名（`server-日期-imported-随机串`），避免出现 `server-<sha256前12位>`
+     * 这种既看不出内容、也没法按名字排序的目录。
+     */
+    private fun importDirName(displayName: String): String =
+        McServerController.dirNameForDisplayName(displayName, kind = "imported")
+
+    /** 目标目录名去重：同名时追加 _2 / _3 …（判重范围跨「统一存储 + 旧私有目录」） */
     private fun uniqueDirName(base: String): String {
+        // 已登记但目录暂时不存在的核心也要算占用：否则新导入会拿到同一个 dirName，
+        // 登记时按 dirName 去重会把老记录挤掉（表现为「导入之后老服务器消失了」）。
+        val configured = runCatching {
+            com.mineserve.mobile.McApplication.get(context).repository
+                .currentConfigOrNull()?.installedCores?.map { it.dirName }
+        }.getOrNull().orEmpty()
+        val taken = ServerStorage.takenDirNames(context, configured)
         var candidate = base
         var i = 2
-        while (File(termux.serversDir, candidate).exists()) {
+        while (candidate in taken) {
             candidate = base + "_" + i
             i++
         }
@@ -628,8 +654,22 @@ class ServerImporter(private val context: Context, private val termux: TermuxRun
             // ZstdCompressorInputStream —— 后者需要 com.github.luben:zstd-jni 的原生库，
             // 而 zstd-jni 的 aarch64 .so 是 glibc 构建（NEEDED 含 libc.so.6），jar 里也没有
             // android/ 目录，在 Android 的 bionic 上必然 dlopen 失败。
-            // 也就是说：本 App 的「导入 .tar.zst」在真机上从来没成功过。
-            ArchiveFormat.TAR_ZST -> TarArchiveInputStream(ZstdInputStream(buffered))
+            //
+            // 但它在 **Android 14+ 也走不通**：aircompressor 的 zstd 实现依赖
+            // `sun.misc.Unsafe.ARRAY_BYTE_BASE_OFFSET`，新版 ART 删掉了这些字段，
+            // 构造时抛 NoSuchFieldError。它是 Error，不接住会直接杀掉进程，
+            // 用户看到的是「导入时闪退」而不是报错。
+            ArchiveFormat.TAR_ZST -> TarArchiveInputStream(
+                try {
+                    ZstdInputStream(buffered)
+                } catch (e: Throwable) {
+                    throw IOException(
+                        "当前系统（Android 14+）无法解压 .tar.zst 安装包，" +
+                            "请改用 .zip / .tar.gz 格式导入",
+                        e
+                    )
+                }
+            )
             ArchiveFormat.TAR_LZ4 -> TarArchiveInputStream(FramedLZ4CompressorInputStream(buffered))
             else -> throw IOException("不是 tar 格式")
         }

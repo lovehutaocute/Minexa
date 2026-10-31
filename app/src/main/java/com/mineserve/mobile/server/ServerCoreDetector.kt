@@ -30,6 +30,13 @@ object ServerCoreDetector {
             f.isFile && f.name.endsWith(".jar", ignoreCase = true)
         }?.toList() ?: emptyList()
 
+        // ── 0. 官方基岩版 BDS（原生可执行文件，无 jar） ──────────────
+        // 必须放在最前：BDS 目录里也可能有用户自己塞的 jar（插件/工具），
+        // 但只要有 bedrock_server 就确定是 BDS 布局。
+        if (BdsSupport.isBdsDir(serverDir)) {
+            return Detection(ServerCore.Bds, bdsVersion(serverDir), BdsSupport.ENTRY_NAME)
+        }
+
         // ── 1. PowerNukkitX（基岩版） ────────────────────────────────
         if (rootJars.any { it.name.equals("powernukkitx.jar", ignoreCase = true) } ||
             hasClassEntry(rootJars, "cn/nukkit/Server.class") ||
@@ -143,8 +150,21 @@ object ServerCoreDetector {
         return Detection(null, rootVersion ?: jarVersionJson(rootJars), entryJar(rootJars)?.name)
     }
 
-    /** 只返回唯一的根目录入口 JAR，绝不把 installer/client/library 当成启动文件。 */
-    private fun entryJar(jars: List<File>, vararg preferredNames: String): File? {
+    /**
+     * BDS 版本：官方包里**没有**版本文件，因此下载时由我们写一份 `bds-version.txt`；
+     * 用户自行解压的包通常没有，就返回 null（界面上显示「未知」而不是猜一个版本号）。
+     */
+    private fun bdsVersion(serverDir: File): String? {
+        listOf("bds-version.txt", "version.txt").forEach { name ->
+            val file = File(serverDir, name)
+            if (!file.isFile) return@forEach
+            val text = runCatching { file.readText().trim() }.getOrNull()
+            if (!text.isNullOrBlank()) return text.lineSequence().first().trim().take(32)
+        }
+        return null
+    }
+
+    /** 只返回唯一的根目录入口 JAR，绝不把 installer/client/library 当成启动文件。 */    private fun entryJar(jars: List<File>, vararg preferredNames: String): File? {
         preferredNames.firstNotNullOfOrNull { name -> jars.firstOrNull { it.name.equals(name, true) } }?.let { return it }
         return jars.filter { jar ->
             val name = jar.name.lowercase()

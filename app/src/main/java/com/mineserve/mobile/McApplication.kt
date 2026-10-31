@@ -13,6 +13,7 @@ import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.UsageTracker
 import com.mineserve.mobile.mcp.McpServerManager
 import com.mineserve.mobile.runtime.TermuxRuntime
+import com.mineserve.mobile.server.BdsEnvironmentManager
 import com.mineserve.mobile.server.CrashReportAnalyzer
 import com.mineserve.mobile.service.McForegroundService
 import kotlinx.coroutines.CoroutineScope
@@ -43,6 +44,15 @@ class McApplication : Application(), Configuration.Provider {
 
     /** 内嵌 MCP 服务器管理器（局域网 AI 助手接入） */
     lateinit var mcpServerManager: McpServerManager
+        private set
+
+    /**
+     * 官方 BDS 的专属运行环境（glibc 容器 + box64 转译器）。
+     *
+     * 放在 Application 而不是 ViewModel：初始化要下载几十兆、跑几分钟，
+     * 用户切页/旋转屏幕导致 ViewModel 重建时任务不能跟着死掉。
+     */
+    lateinit var bdsEnvironment: BdsEnvironmentManager
         private set
 
     /** Termux 环境初始化完成标志，UI 层可观察 */
@@ -181,6 +191,13 @@ class McApplication : Application(), Configuration.Provider {
             }
         }
         repository = ServerRepository(this, termuxRuntime)
+        bdsEnvironment = BdsEnvironmentManager(this, termuxRuntime)
+        // 冷启动读一次磁盘，界面第一帧就能显示「已就绪 / 未初始化」。
+        // 必须放 IO 协程：isReady() / installedBox64Version() 会对存储目录做多次 stat，
+        // 而 BDS 前缀位于公共存储（FUSE），主线程上一次 stat 就可能几十毫秒，
+        // 直接写在 onCreate 里等于把这段时间加进冷启动第一帧。UI 侧观察的是
+        // StateFlow，状态刷新完成后自动重组，无需同步等待。
+        scope().launch { runCatching { bdsEnvironment.refresh() } }
         container = AppContainer(this)
         mcpServerManager = McpServerManager(this, repository)
         mcpServerManager.start()
@@ -203,8 +220,11 @@ class McApplication : Application(), Configuration.Provider {
             }
         }
 
-        // 累计使用人数统计：设备标识上报（每天一次，失败静默）
-        UsageTracker.maybePulse(this)
+        // 累计使用人数统计：设备标识上报（每天一次，失败静默）。
+        // 内部要读 SharedPreferences、经 Binder 取 ANDROID_ID、查连通性，
+        // 都是一次性几十毫秒的主线程 IPC/IO；而且绝大多数启动都因为「当天已上报」
+        // 直接返回，没有任何理由让冷启动为它买单，故整体挪到 IO 线程。
+        scope().launch { runCatching { UsageTracker.maybePulse(this@McApplication) } }
 
         // 设置 bootstrap 日志回调，推送到 consoleFlow
         termuxRuntime.setBootstrapLogCallback { msg ->

@@ -51,7 +51,7 @@ class BackupManager(private val termux: TermuxRuntime) {
     private val TAG = "BackupManager"
 
     private fun worldDir(dirName: String): File =
-        File(termux.installer.rootDir, "home/servers/$dirName/world")
+        File(termux.serverDirFor(dirName), "world")
 
     /** 列出所有快照，按时间倒序（最新在前） */
     fun listSnapshots(): List<SnapshotInfo> {
@@ -96,7 +96,7 @@ class BackupManager(private val termux: TermuxRuntime) {
     // ── 外部备份（/storage/emulated/0/世界与服务器的备份/） ─────────────
 
     private fun serverDir(dirName: String): File =
-        File(termux.installer.rootDir, "home/servers/$dirName")
+        termux.serverDirFor(dirName)
 
     private fun ts(): String = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date())
 
@@ -200,6 +200,86 @@ class BackupManager(private val termux: TermuxRuntime) {
             cleanupAutomaticBackups(dirName, BackupKind.Server, maxAutomaticBackups, origin)
             out.absolutePath
         } else null
+    }
+
+    /**
+     * BDS 更新前的专用备份：只打包**用户数据面**，不含 265MB 的 `bedrock_server`。
+     *
+     * 为什么不复用 [backupServerToExternal]：那个会把整个服务器目录（含核心本体）
+     * 压进 zip，BDS 的核心是 265MB 单文件，压完仍有近百兆 —— 每次升级都多一份，
+     * 而升级流程本身已经把旧核心保留成 `bedrock_server.old-<版本>`，核心不需要再备份一份。
+     *
+     * 备份范围（更新会碰到的都在内）：
+     *  - `worlds/`：基岩版世界存档（官方安装包里**没有**这一项，但必须备份，
+     *    否则将来官方一旦带上就会出事）；
+     *  - `server.properties` / `allowlist.json` / `permissions.json`：
+     *    玩家设置、白名单、权限；
+     *  - `behavior_packs/` / `resource_packs/` / `config/`：用户装的行为包、
+     *    资源包与改过的引擎配置（官方包里也有同名项，更新会覆盖）。
+     *
+     * 条目名一律写成**相对服务器目录的路径**（`worlds/xxx`、`server.properties`），
+     * 这样还原时直接按同名路径解压回去即可，不需要额外映射。
+     *
+     * @return 备份 zip 的绝对路径；目录不存在或打包失败返回 null（调用方必须中止更新）
+     */
+    fun backupBdsBeforeUpdate(dirName: String, fromVersion: String?): String? {
+        val dir = serverDir(dirName)
+        if (!dir.isDirectory) return null
+        // coreTag 里带 bds-update 前缀：备份列表里一眼能看出这份是升级前自动生成的，
+        // 也让它与「整服备份」共用同一套文件名解析（parseServerZipInfo 按 __ 分段）。
+        val tag = "bds-update-" + (fromVersion?.takeIf { it.isNotBlank() } ?: "unknown")
+        val name = backupName(BackupKind.Server, dirName, tag, BackupOrigin.Automatic)
+        // 没有「所有文件访问」权限时外部备份目录不可写：退回应用私有目录，
+        // 而不是让「更新核心」这个功能直接不可用（备份存在私有目录同样能救回数据，
+        // 完整路径会写进日志）。
+        val out = if (ExternalBackupStore.ensure()) {
+            File(ExternalBackupStore.rootDir, name)
+        } else {
+            File(termux.installer.rootDir, "bds-backup").apply { mkdirs() }.let { File(it, name) }
+        }
+        return if (zipBdsUserData(dir, out)) out.absolutePath else null
+    }
+
+    /** 更新前备份的内容清单：目录按整棵子树打包，文件按单文件打包 */
+    private val BDS_UPDATE_BACKUP_DIRS = listOf("worlds", "behavior_packs", "resource_packs", "config")
+
+    private val BDS_UPDATE_BACKUP_FILES = listOf(
+        "server.properties",
+        "allowlist.json",
+        "permissions.json",
+        "valid_known_packs.json"
+    )
+
+    private fun zipBdsUserData(dir: File, out: File): Boolean = try {
+        java.util.zip.ZipOutputStream(FileOutputStream(out)).use { zos ->
+            BDS_UPDATE_BACKUP_DIRS.forEach { name ->
+                val root = File(dir, name)
+                if (!root.isDirectory) return@forEach
+                root.walkTopDown().forEach { f ->
+                    val rel = f.relativeTo(dir).path.replace(File.separatorChar, '/')
+                    if (f.isDirectory) {
+                        zos.putNextEntry(java.util.zip.ZipEntry("$rel/"))
+                        zos.closeEntry()
+                    } else {
+                        zos.putNextEntry(java.util.zip.ZipEntry(rel))
+                        FileInputStream(f).use { it.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
+            }
+            BDS_UPDATE_BACKUP_FILES.forEach { name ->
+                val f = File(dir, name)
+                if (!f.isFile) return@forEach
+                zos.putNextEntry(java.util.zip.ZipEntry(name))
+                FileInputStream(f).use { it.copyTo(zos) }
+                zos.closeEntry()
+            }
+        }
+        out.exists() && out.length() > 0
+    } catch (e: Exception) {
+        Log.w(TAG, "BDS 更新前备份失败: ${e.message}")
+        out.delete()
+        false
     }
 
     /** 停止当前运行中的服务器（若在运行） */

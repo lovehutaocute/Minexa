@@ -94,7 +94,7 @@ fun QrCodeImage(
     // 白色底板 + 圆角：深色主题下二维码仍然可扫
     Box(
         modifier = modifier
-            .clip(RoundedCornerShape(12.dp))
+            .clip(RoundedCornerShape(18.dp))
             .background(Color.White)
             .size(size)
             .then(Modifier),

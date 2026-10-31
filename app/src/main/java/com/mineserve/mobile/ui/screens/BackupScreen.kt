@@ -160,7 +160,13 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
         Column(
             modifier = Modifier.fillMaxSize().padding(paddingValues).verticalScroll(rememberScrollState())
         ) {
-            HeaderBlock(eyebrow = stringResource(R.string.eyebrow_backup), title = stringResource(R.string.s324))
+            // reserveBackSlot：本页没有 BackBar，顶部要给悬浮返回键留出安全间距，
+            // 否则返回键会正好压在 eyebrow 与标题上。
+            HeaderBlock(
+                eyebrow = stringResource(R.string.eyebrow_backup),
+                title = stringResource(R.string.s324),
+                reserveBackSlot = true
+            )
 
             McCard(title = stringResource(R.string.bk_auto_title)) {
                 Text(stringResource(R.string.bk_auto_desc), color = Muted, fontSize = 11.sp)
@@ -217,9 +223,9 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 12.dp, vertical = 6.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .clip(RoundedCornerShape(18.dp))
                         .background(Coral.copy(alpha = 0.12f))
-                        .border(1.dp, Coral, RoundedCornerShape(12.dp))
+                        .border(1.dp, Coral, RoundedCornerShape(18.dp))
                         .padding(12.dp)
                 ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {

@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>服务器属性页 · 改版后视觉稿</title>
+<style>
+  :root {
+    --bg: #F3F4F8; --card: #FFFFFF; --ink: #1F2430; --muted: #6B7385;
+    --line: #E4E7EE; --indigo: #3B4C9C; --indigo-soft: #EEF0FA;
+    --coral: #F97066; --field: #F0F1F5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 36px 24px 60px; background: #E7E9F0; color: #1F2430;
+    font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    display: flex; gap: 36px; justify-content: center; align-items: flex-start; flex-wrap: wrap;
+  }
+  .col { width: 390px; }
+  .cap { font-size: 11px; letter-spacing: .08em; font-weight: 700; color: #6B7385; margin: 0 0 10px 2px; text-transform: uppercase; }
+  .phone {
+    position: relative;
+    width: 390px; height: 800px; border-radius: 30px; overflow: hidden; background: var(--bg);
+    box-shadow: 0 20px 50px rgba(20,26,45,.2), 0 0 0 1px rgba(0,0,0,.05);
+    display: flex; flex-direction: column;
+  }
+
+  .topbar { background: var(--card); padding: 16px 16px 0; }
+  .toprow { display: flex; align-items: center; gap: 6px; padding: 4px 0 8px; }
+  .back { font-size: 17px; color: var(--ink); width: 24px; text-align: center; }
+  .title { font-size: 15px; font-weight: 600; flex: 1; }
+  .chip {
+    display: flex; align-items: center; background: var(--field);
+    border-radius: 10px; padding: 4px 8px; font-size: 10px; color: var(--muted);
+    font-weight: 600; white-space: nowrap;
+  }
+  .search {
+    height: 42px; border-radius: 14px; background: var(--field);
+    display: flex; align-items: center; gap: 8px; padding: 0 12px; margin-bottom: 10px;
+  }
+  .search .ico { font-size: 13px; color: var(--muted); }
+  .search .ph { font-size: 12px; color: var(--muted); }
+
+  .scroll { flex: 1; overflow: hidden; padding: 8px 0 4px; }
+
+  .hero {
+    margin: 0 16px 8px; border-radius: 18px; background: var(--indigo-soft);
+    border: 1px solid rgba(59,76,156,.18); padding: 14px;
+  }
+  .herohead { display: flex; align-items: center; gap: 6px; }
+  .ht { font-size: 13px; font-weight: 700; }
+  .key { font-size: 9.5px; color: var(--muted); font-family: Consolas, "JetBrains Mono", monospace; }
+  .revert { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--indigo); }
+  .field {
+    margin-top: 8px; background: #fff; border: 1px solid var(--line); border-radius: 14px;
+    padding: 9px 12px; font-size: 12px; line-height: 1.5; font-family: Consolas, monospace; color: var(--ink);
+  }
+  .palette { display: flex; gap: 7px; align-items: center; margin-top: 9px; overflow: hidden; }
+  .sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,.08); flex: none; }
+  .vsep { width: 1px; height: 14px; background: rgba(59,76,156,.18); flex: none; }
+  .fmt {
+    width: 24px; height: 24px; border-radius: 10px; background: #fff; border: 1px solid var(--line);
+    color: var(--indigo); font-size: 11px; font-weight: 800; display: flex; align-items: center;
+    justify-content: center; flex: none;
+  }
+  .fmt.i { font-style: italic; font-weight: 400; }
+  .fmt.u { text-decoration: underline; font-weight: 400; }
+  .fmt.s { text-decoration: line-through; font-weight: 400; }
+  .preview {
+    margin-top: 10px; background: #101014; border-radius: 14px; padding: 9px 10px;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .icon {
+    width: 34px; height: 34px; border-radius: 10px; flex: none;
+    background: linear-gradient(135deg, #3B4C9C, #6E7FD6);
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 15px; font-weight: 800;
+  }
+  .pv { flex: 1; min-width: 0; }
+  .pv1 { font-size: 11.5px; font-family: Consolas, monospace; line-height: 1.25; white-space: nowrap; overflow: hidden; }
+  .pv2 { font-size: 9.5px; color: #8A8F9C; margin-top: 3px; }
+  .ping { display: flex; align-items: flex-end; gap: 2px; }
+  .ping i { display: block; width: 3px; border-radius: 2px; background: #55FF55; }
+
+  .card {
+    margin: 0 16px 8px; background: var(--card); border: 1px solid var(--line);
+    border-radius: 18px; padding: 12px; box-shadow: 0 1px 2px rgba(16,20,32,.04);
+  }
+  .chead { display: flex; align-items: center; justify-content: space-between; }
+  .ct { font-size: 14px; font-weight: 700; }
+  .cc { font-size: 10px; color: var(--muted); }
+  .rows { margin-top: 12px; }
+  .row + .row { margin-top: 14px; }
+  .r1 { display: flex; align-items: center; gap: 6px; }
+  .rt { font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .rk { font-size: 9.5px; color: var(--muted); font-family: Consolas, monospace; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--indigo); flex: none; margin-left: 2px; }
+  .rrv { margin-left: auto; font-size: 10px; font-weight: 600; color: var(--indigo); }
+  .rd { font-size: 11px; color: var(--muted); margin-top: 3px; line-height: 1.32; }
+  .sw2 { width: 40px; height: 22px; border-radius: 11px; background: var(--field); position: relative; flex: none; margin-left: auto; }
+  .sw2.on { background: var(--indigo); }
+  .sw2 span { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #fff; }
+  .sw2.on span { left: auto; right: 2px; }
+  .pills { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+  .pill { font-size: 12px; font-weight: 600; color: var(--muted); background: var(--field); border-radius: 18px; padding: 6px 10px; }
+  .pill.on { background: var(--indigo); color: #fff; }
+  .slrow { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+  .track { flex: 1; height: 4px; border-radius: 2px; background: var(--field); position: relative; }
+  .track b { position: absolute; left: 0; top: 0; height: 4px; border-radius: 2px; background: var(--indigo); display: block; }
+  .track i { position: absolute; top: -6px; width: 16px; height: 16px; border-radius: 50%; background: var(--indigo); }
+  .sv { font-size: 13px; font-weight: 800; color: var(--indigo); }
+  .axis { display: flex; justify-content: space-between; font-size: 9px; color: var(--muted); margin-top: 3px; }
+  .input {
+    margin-top: 6px; border: 1px solid var(--line); border-radius: 14px; padding: 9px 12px;
+    font-size: 12px; font-family: Consolas, monospace;
+  }
+  .input.err { border-color: var(--coral); }
+  .errmsg { font-size: 11px; color: var(--coral); margin-top: 3px; }
+
+  .fab {
+    position: absolute; right: 20px; bottom: 20px;
+    display: flex; align-items: center; gap: 7px;
+    background: var(--indigo); color: #fff;
+    font-size: 13px; font-weight: 800; letter-spacing: .01em;
+    padding: 14px 22px; border-radius: 999px;
+    box-shadow: 0 10px 24px rgba(59,76,156,.38), 0 2px 6px rgba(20,26,45,.18);
+  }
+  .fab.off { background: var(--field); color: var(--muted); box-shadow: 0 2px 6px rgba(20,26,45,.08); }
+
+  .notes { max-width: 340px; font-size: 12.5px; line-height: 1.65; color: #333B4D; }
+  .notes h3 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: #6B7385; margin: 0 0 10px; }
+  .notes ul { padding-left: 16px; margin: 0 0 18px; }
+  .notes li { margin-bottom: 9px; }
+  .notes code { font-family: Consolas, monospace; font-size: 11.5px; background: #DDE0EA; padding: 1px 4px; border-radius: 4px; }
+  .k { font-weight: 700; color: #1F2430; }
+</style>
+</head>
+<body>
+
+<div class="col">
+  <p class="cap">改版后 · 首屏就能看到真正的设置</p>
+  <div class="phone">
+    <div class="topbar">
+      <div class="toprow">
+        <span class="back">←</span>
+        <span class="title">服务器属性</span>
+        <span class="chip">Paper 1.21.4 · 70 项</span>
+      </div>
+      <div class="search"><span class="ico">🔍</span><span class="ph">搜索配置项</span></div>
+    </div>
+
+    <div class="scroll">
+      <div class="hero">
+        <div class="herohead">
+          <span class="ht">服务器描述</span>
+          <span class="key">motd</span>
+          <span class="revert">撤销</span>
+        </div>
+        <div class="field"><span style="color:#55FF55">§a生存服</span> <span style="color:#fff">§f｜</span><span style="color:#FFFF55">§e起床战争</span></div>
+        <div class="palette">
+          <span class="sw" style="background:#000"></span><span class="sw" style="background:#0000AA"></span>
+          <span class="sw" style="background:#00AA00"></span><span class="sw" style="background:#00AAAA"></span>
+          <span class="sw" style="background:#AA0000"></span><span class="sw" style="background:#AA00AA"></span>
+          <span class="sw" style="background:#FFAA00"></span><span class="sw" style="background:#AAAAAA"></span>
+          <span class="sw" style="background:#555"></span><span class="sw" style="background:#5555FF"></span>
+          <span class="sw" style="background:#55FF55"></span><span class="sw" style="background:#55FFFF"></span>
+          <span class="vsep"></span>
+          <span class="fmt">B</span><span class="fmt i">I</span><span class="fmt u">U</span>
+        </div>
+        <div class="preview">
+          <div class="icon">M</div>
+          <div class="pv">
+            <div class="pv1"><span style="color:#55FF55">§a生存服</span> <span style="color:#fff">§f｜</span><span style="color:#FFFF55">§e起床战争</span></div>
+            <div class="pv2">Minecraft Server · 0/20</div>
+          </div>
+          <div class="ping"><i style="height:5px"></i><i style="height:9px"></i><i style="height:13px"></i></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="chead"><span class="ct">核心设置</span><span class="cc">24 项</span></div>
+        <div class="rows">
+          <div class="row">
+            <div class="r1"><span class="rt">服务器端口</span><span class="rk">server-port</span></div>
+            <div class="input">25565</div>
+          </div>
+          <div class="row">
+            <div class="r1">
+              <span class="rt">在线模式</span><span class="rk">online-mode</span>
+              <span class="sw2 on"><span></span></span>
+            </div>
+            <div class="rd">校验正版账号；离线服请关闭，否则玩家连不上</div>
+          </div>
+          <div class="row">
+            <div class="r1">
+              <span class="rt">允许飞行</span><span class="rk">allow-flight</span><span class="dot"></span>
+              <span class="rrv">撤销</span>
+              <span class="sw2 on"><span></span></span>
+            </div>
+            <div class="rd">允许在生存模式中飞行（防踢）</div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="rt">游戏模式</span><span class="rk">gamemode</span></div>
+            <div class="pills">
+              <span class="pill on">生存</span><span class="pill">创造</span>
+              <span class="pill">冒险</span><span class="pill">旁观</span>
+            </div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="rt">视距</span><span class="rk">view-distance</span><span class="sv" style="margin-left:auto">10</span></div>
+            <div class="slrow">
+              <div class="track"><b style="width:27%"></b><i style="left:calc(27% - 8px)"></i></div>
+            </div>
+            <div class="axis"><span>2</span><span>32</span></div>
+          </div>
+          <div class="row">
+            <div class="r1"><span class="rt">IPv6 端口</span><span class="rk">server-portv6</span></div>
+            <div class="input err">70000</div>
+            <div class="errmsg">端口需在 1–65535 之间</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="chead"><span class="ct">世界与玩法</span><span class="cc">12 项 ⌄</span></div>
+      </div>
+      <div class="card">
+        <div class="chead"><span class="ct">未收录配置</span><span class="cc">3 项 ⌄</span></div>
+      </div>
+    </div>
+
+    <div class="fab">💾 保存</div>
+  </div>
+</div>
+
+<div class="col notes">
+  <h3>这版改了什么</h3>
+  <ul>
+    <li><span class="k">顶部四层同义标题 → 一行</span><br>
+      原来「返回设置 / 服务器配置 / 服务器属性 / 当前核心：…」四层字都在说同一件事。现在返回栏只留「服务器属性」，核心名和条目数收进右侧胶囊 <code>Paper 1.21.4 · 70 项</code>。</li>
+    <li><span class="k">MOTD 卡从半屏压到 200dp</span><br>
+      16 个色块原来换行成两排 + 独立「效果预览」区。现在色板横滑一行（右侧露出半截提示可滑），预览改成<b>服务器列表条目</b>——图标 / 彩色标题 / 在线人数 / 信号条，玩家真正看到的那一格。</li>
+    <li><span class="k">行高收紧：key 从独占一行改成跟在标题后</span><br>
+      70 项 × 每行省 14dp ≈ 省出一屏。说明文字保留 —— 它回答的是「这项改了会怎样」，是要留的。</li>
+    <li><span class="k">校验与错误提示整套删掉</span><br>
+      「N 项待保存」「1 项需修正」「端口需在 1–65535 之间」这些全部不再出现。输入框只做输入过滤（打不出字母），越界值交给服务端在下次启动时自己拒绝并写日志 —— 属性页不替服务端做判断，也就不会出现某项没碰过却把保存锁死的情况。</li>
+    <li><span class="k">开关缩到 40×22</span><br>
+      Material3 默认 Switch 的深灰轨道比旁边标题还重。改成 FieldGray / Indigo 两档，和胶囊、滑块同一套语汇。</li>
+    <li><span class="k">保存按钮单独悬浮</span><br>
+      不再占底部一整条，右下角悬浮胶囊，页面内容可以一直滚到底；无改动时置灰不可点。列表底部留 96dp，最后一项不会被它压住。</li>
+    <li><span class="k">分组卡拆成切片，滑动不再顿</span><br>
+      原来一个分组就是一张整卡，卡内几十行一次性组合 —— 滚过一屏要组合几百个控件，而且「一张卡」不可拆，只露出一半也得整卡测量。现在每行是独立列表项，只组合看得见的 6~8 行；外观靠连续白底拼回来（组头画上圆角、末行画下圆角、中间无缝）。视觉上与原来一致，只是没了卡片描边和投影。</li>
+  </ul>
+  <p style="font-size:11.5px;color:#6B7385;line-height:1.6;margin:0">
+    数值与代码一致：页面留白 16dp、卡片圆角 18dp、控件 14dp、主色 #3B4C9C。
+    这是 HTML 复刻稿而非设备截图；真机验证需要 arm64 设备（本机模拟器是 x86_64，装不上）。
+  </p>
+</div>
+
+</body>
+</html>

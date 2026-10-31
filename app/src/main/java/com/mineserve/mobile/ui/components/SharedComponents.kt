@@ -67,11 +67,13 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -80,6 +82,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.AnnotatedString
@@ -118,6 +121,9 @@ import com.mineserve.mobile.ui.theme.Muted
  * 顶部 Header：参考界面 eyebrow + h1。
  * 默认以白色背景覆盖状态栏区域（配合全屏），内容避开状态栏文字；
  * 若该页面顶部已有返回栏承接状态栏避让，可传 statusBarPadding = false。
+ *
+ * [reserveBackSlot] 给「没有 BackBar、只有 HeaderBlock」的二级页面用（备份 / 插件 / 更多）：
+ * 在标题上方让出一段高度，让 McApp 的悬浮返回键有地方待，不会压住 eyebrow 与标题。
  */
 @Composable
 fun HeaderBlock(
@@ -125,6 +131,7 @@ fun HeaderBlock(
     title: String,
     modifier: Modifier = Modifier,
     statusBarPadding: Boolean = true,
+    reserveBackSlot: Boolean = false,
     trailing: (@Composable () -> Unit)? = null
 ) {
     Column(
@@ -138,6 +145,7 @@ fun HeaderBlock(
                 .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
                 .padding(horizontal = McSpacing.Page, vertical = 10.dp)
         ) {
+            if (reserveBackSlot) Spacer(Modifier.height(ReserveBackSlotHeight))
             Text(
                 text = eyebrow,
                 color = Muted,
@@ -162,9 +170,22 @@ fun HeaderBlock(
     }
 }
 
-/** 子页面统一返回栏：白底延伸到状态栏后面（状态栏透明）+ 返回按钮 + 标题 */
+/**
+ * 子页面统一返回栏：白底延伸到状态栏后面（状态栏透明）+ 返回按钮 + 标题。
+ *
+ * [trailing] 挂在标题右侧（标题因此会占满剩余宽度并省略）—— 用于放「当前作用域」
+ * 这类一眼需要看到、但不该单独占一行的信息（如属性页的核心名与条目数）。
+ *
+ * 返回按钮本身不在这里画：二级页面的返回键由 McApp 的 [FloatingBackButton] 统一渲染
+ * （悬浮、压在所有内容之上、位置固定）。这里只留一块同尺寸的占位，
+ * 保证标题的左边缘与改造前完全一致，也让悬浮键正好落在这个空位上。
+ */
 @Composable
-fun BackBar(title: String, onBack: () -> Unit) {
+fun BackBar(
+    title: String,
+    @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
+    trailing: (@Composable () -> Unit)? = null
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -177,14 +198,7 @@ fun BackBar(title: String, onBack: () -> Unit) {
                 .padding(start = 8.dp, end = McSpacing.Page, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(McIcon.Touch)) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.ArrowBack,
-                    contentDescription = stringResource(R.string.s404),
-                    tint = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.size(McIcon.Item)
-                )
-            }
+            Spacer(Modifier.size(McIcon.Touch))
             Text(
                 title,
                 fontSize = 15.sp,
@@ -192,7 +206,62 @@ fun BackBar(title: String, onBack: () -> Unit) {
                 color = MaterialTheme.colorScheme.onBackground,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.padding(start = 2.dp)
+                modifier = Modifier
+                    .padding(start = 2.dp)
+                    .weight(1f, fill = trailing != null)
+            )
+            trailing?.invoke()
+        }
+    }
+}
+
+// ── 悬浮返回键的度量 ────────────────────────────────────────────────
+// 三个尺寸只在这里定义一次：BackBar 的占位、HeaderBlock 让出的高度、悬浮键本身
+// 都引用它，任何一处改了另外两处自动跟随，不会出现「按钮和空位错开半格」。
+
+/** 命中区 / 视觉直径（40dp，平台最小触摸区的下限）。 */
+private val BackChipSize = McIcon.Touch
+
+/** 距左边缘与状态栏下的偏移：与 BackBar 行内的 start=8dp / top=6dp 对齐。 */
+private val BackChipStart = 8.dp
+private val BackChipTop = 6.dp
+
+/** HeaderBlock 为悬浮键让出的垂直空间：按钮高度 + 一点余量，标题不会被压住。 */
+private val ReserveBackSlotHeight = 40.dp
+
+/**
+ * 二级页面的悬浮返回键：固定在状态栏左下方，压在所有滚动内容之上。
+ *
+ * 存在的理由：二级页面的内容各自滚动，返回入口如果跟着内容滚走，用户就得先滚回顶部；
+ * 而且若干页面（备份 / 插件 / 更多）原本根本没有返回入口。
+ * 视觉上用「半透明白 + 描边 + 投影」的圆片，无论底下是白卡片还是彩底都能看清。
+ *
+ * 位置与 [BackBar] 里的占位、[HeaderBlock] 的 reserveBackSlot 严格对齐 —— 三者共用
+ * [BackChipSize] / [BackChipStart] / [BackChipTop]。
+ */
+@Composable
+fun FloatingBackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val label = stringResource(R.string.s404)
+    Box(
+        modifier = modifier
+            .statusBarsPadding()
+            .padding(start = BackChipStart, top = BackChipTop)
+    ) {
+        Box(
+            modifier = Modifier
+                .size(BackChipSize)
+                .shadow(elevation = 6.dp, shape = CircleShape, clip = false)
+                .clip(CircleShape)
+                .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
+                .border(1.dp, Line.copy(alpha = 0.9f), CircleShape)
+                .clickable(role = Role.Button, onClickLabel = label, onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.AutoMirrored.Outlined.ArrowBack,
+                contentDescription = label,
+                tint = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.size(McIcon.Item)
             )
         }
     }
@@ -463,14 +532,14 @@ private fun HeroMeterBar(label: String, ratio: Float, valueText: String) {
                 modifier = Modifier
                     .weight(1f)
                     .height(7.dp)
-                    .clip(RoundedCornerShape(4.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(Color.White.copy(alpha = 0.22f))
             ) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth(ratio.coerceIn(0f, 1f))
                         .height(7.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(
                             Brush.linearGradient(listOf(MintBright, Mint))
                         )
@@ -580,8 +649,13 @@ fun McCard(
     modifier: Modifier = Modifier,
     trailing: (@Composable () -> Unit)? = null,
     compact: Boolean = false,
+    collapsible: Boolean = false,
+    initiallyExpanded: Boolean = true,
     content: @Composable () -> Unit
 ) {
+    // 折叠状态由卡片自己持有：标题行整体可点，右侧箭头只做视觉指示。
+    // key 用 title，避免同一页面多张卡共用同一个 rememberSaveable 槽位。
+    var expanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -600,7 +674,11 @@ fun McCard(
             )
         ) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (collapsible) Modifier.clickable { expanded = !expanded } else Modifier
+                    ),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -610,14 +688,35 @@ fun McCard(
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
-                trailing?.invoke()
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    trailing?.invoke()
+                    if (collapsible) {
+                        Spacer(Modifier.width(2.dp))
+                        Icon(
+                            if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                            contentDescription = stringResource(
+                                if (expanded) R.string.diag_crash_collapse else R.string.s623
+                            ),
+                            tint = Muted,
+                            modifier = Modifier.size(McIcon.Item)
+                        )
+                    }
+                }
             }
-            Spacer(
-                Modifier.height(
-                    if (compact) McSpacing.CardHeaderCompact else McSpacing.CardHeader
-                )
-            )
-            content()
+            AnimatedVisibility(
+                visible = !collapsible || expanded,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column {
+                    Spacer(
+                        Modifier.height(
+                            if (compact) McSpacing.CardHeaderCompact else McSpacing.CardHeader
+                        )
+                    )
+                    content()
+                }
+            }
         }
     }
 }
@@ -674,14 +773,14 @@ fun ProgressTrack(percent: Int) {
         modifier = Modifier
             .fillMaxWidth()
             .height(8.dp)
-            .clip(RoundedCornerShape(4.dp))
+            .clip(RoundedCornerShape(8.dp))
             .background(FieldGray)
     ) {
         Box(
             modifier = Modifier
                 .fillMaxWidth(percent / 100f)
                 .height(8.dp)
-                .clip(RoundedCornerShape(4.dp))
+                .clip(RoundedCornerShape(8.dp))
                 .background(
                     Brush.linearGradient(
                         colors = listOf(Indigo, Color(0xFF6E7FD6))
@@ -997,7 +1096,7 @@ fun QqGroupCard() {
         Button(
             onClick = { openQqGroup(context) },
             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
@@ -1051,7 +1150,7 @@ fun QqGroupDialog(onDismiss: () -> Unit) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clip(RoundedCornerShape(10.dp))
+                        .clip(RoundedCornerShape(16.dp))
                         .background(FieldGray)
                         .padding(horizontal = 12.dp, vertical = 10.dp),
                     verticalAlignment = Alignment.CenterVertically
@@ -1087,7 +1186,7 @@ fun QqGroupDialog(onDismiss: () -> Unit) {
             Button(
                 onClick = { openQqGroup(context) },
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(16.dp)
             ) {
                 Text(
                     stringResource(R.string.s1054),
@@ -1204,7 +1303,7 @@ fun SegmentedTabs(
                 .width(segmentWidth)
                 .fillMaxHeight()
                 .padding(3.dp)
-                .clip(RoundedCornerShape(9.dp))
+                .clip(RoundedCornerShape(14.dp))
                 .background(Indigo)
         )
         Row(Modifier.fillMaxSize()) {

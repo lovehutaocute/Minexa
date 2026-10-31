@@ -387,13 +387,17 @@ class McForegroundService : Service() {
     /** 立即同步一次服务端状态：更新存活状态，并向运行中的服务端发起 list/tps 查询。 */
     private suspend fun refreshServerStatusNow() {
         val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
-        syncLocks(alive)
+        // 启动尚未落地（还在装依赖/修环境/下载核心，或刚 spawn 的几百毫秒里）时，
+        // 「进程不在」不能作为「已停止」的依据 —— 否则 UI 会在启动中/已停止之间闪跳。
+        val startupPending = termux.isStartupPending()
+        syncLocks(alive || startupPending)
         val app = McApplication.get(this@McForegroundService)
         app.repository.updateServerState {
-            if (!alive) {
-                it.copy(isRunning = false, runningSinceMs = 0L, tps = 0.0, cpuPercent = null, usedMemoryMb = 0L)
-            } else {
-                it.copy(isRunning = true)
+            when {
+                alive -> it.copy(isRunning = true)
+                // 启动在途：保持现状，既不改成已停止，也不无中生有地设成运行中。
+                startupPending -> it
+                else -> it.copy(isRunning = false, runningSinceMs = 0L, tps = 0.0, cpuPercent = null, usedMemoryMb = 0L)
             }
         }
         if (alive) {
@@ -437,15 +441,20 @@ class McForegroundService : Service() {
                 val shouldProbe = app.repository.serverState.value.isRunning || mcAlive || tick % 2 == 0
                 if (shouldProbe) {
                     val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
-                    // 锁跟随 MC 实际存活状态：没在跑就释放，跑起来再拿。
-                    syncLocks(alive)
+                    // 「启动在途」期间（装依赖 / 修 rootfs / 下载核心 / 刚 spawn 的缓冲期）
+                    // 进程本来就不在，不能据此判停止，也不该释放唤醒锁。
+                    val startupPending = termux.isStartupPending()
+                    // 锁跟随 MC 实际存活状态：没在跑就释放，跑起来（或正在启动）再拿。
+                    syncLocks(alive || startupPending)
                     app.repository.updateServerState {
-                        if (!alive) {
-                            it.copy(isRunning = false, runningSinceMs = 0L)
-                        } else {
-                            // A live Java process is not proof that the server has finished loading.
-                            // The console's ready signal sets runningSinceMs once the core is usable.
-                            it.copy(isRunning = true)
+                        when {
+                            alive -> {
+                                // A live Java process is not proof that the server has finished loading.
+                                // The console's ready signal sets runningSinceMs once the core is usable.
+                                it.copy(isRunning = true)
+                            }
+                            startupPending -> it
+                            else -> it.copy(isRunning = false, runningSinceMs = 0L)
                         }
                     }
                     // 服务器运行时，每 60 秒（2 个 tick）发送一次查询命令获取真实数据
@@ -625,8 +634,11 @@ class McForegroundService : Service() {
         // 划掉任务时进程即将终止：按 MC 实际存活状态落一次组件终态，
         // 避免组件在进程死后长期显示“运行中”。
         val alive = runCatching { termux.isMcRunning() }.getOrDefault(false)
+        // 启动在途时进程本来就不在：此刻划掉任务不代表服务端没起来，
+        // 保持现状交给下次进程启动时的 detectSurvivingProcess 重新判定。
+        val startupPending = termux.isStartupPending()
         McApplication.get(this).repository.updateServerState { st ->
-            if (alive) st else st.copy(isRunning = false, runningSinceMs = 0L)
+            if (alive || startupPending) st else st.copy(isRunning = false, runningSinceMs = 0L)
         }
         com.mineserve.mobile.data.WidgetUpdater.refresh(this)
         Log.i(TAG, "onTaskRemoved: mcAlive=$alive, scheduling restart via inexact alarm")

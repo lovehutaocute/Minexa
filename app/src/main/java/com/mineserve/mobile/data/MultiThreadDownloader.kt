@@ -595,6 +595,16 @@ object MultiThreadDownloader {
             connectTimeout = CONNECT_TIMEOUT_MS
             readTimeout = READ_TIMEOUT_MS
             setRequestProperty("User-Agent", USER_AGENT)
+            // 必须显式关掉压缩协商。
+            //
+            // Android 的 HttpURLConnection（OkHttp）默认自动带上 `Accept-Encoding: gzip`
+            // 并**透明解压**响应体，但响应头里的长度是**压缩后**的：实测同一个
+            // `Packages` 文件，`Content-Range` 不带 gzip 是 `bytes 0-0/22530`，
+            // 带 gzip 变成 `bytes 0-0/3206`。于是「探到的总长 3206、实际读出 22530」
+            // 会被完整性校验判成「下载不完整」，每个源都白下 10MB 再丢弃重试 ——
+            // 现象就是「一直换源、进度来回跳、永远装不完」。
+            // 关掉协商后长度与实际字节数一致，校验才有意义。
+            setRequestProperty("Accept-Encoding", "identity")
         }
     }
 

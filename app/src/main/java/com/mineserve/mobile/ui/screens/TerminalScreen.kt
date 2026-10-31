@@ -191,7 +191,7 @@ fun TerminalScreen(vm: McViewModel) {
                     enabled = input.isNotBlank(),
                     modifier = Modifier
                         .size(48.dp)
-                        .background(Color(0xFF3996FF), RoundedCornerShape(8.dp))
+                        .background(Color(0xFF3996FF), RoundedCornerShape(12.dp))
                 ) {
                     Icon(Icons.AutoMirrored.Outlined.Send, stringResource(R.string.tm_send), tint = Color.White)
                 }
@@ -230,7 +230,7 @@ fun TerminalScreen(vm: McViewModel) {
         }
         Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             sessions.forEach { session ->
-                Row(Modifier.background(if (session.id == activeId) Color(0xFF2B313C) else Color(0xFF20242C), RoundedCornerShape(8.dp)).padding(start = 12.dp), horizontalArrangement = Arrangement.Center) {
+                Row(Modifier.background(if (session.id == activeId) Color(0xFF2B313C) else Color(0xFF20242C), RoundedCornerShape(12.dp)).padding(start = 12.dp), horizontalArrangement = Arrangement.Center) {
                     Text(session.name, color = Color(0xFFE8E8E8), fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp).clickable { vm.selectTerminalSession(session.id) })
                     if (session.type == TerminalSessionType.Termux) IconButton(onClick = { vm.closeTerminalSession(session.id) }) { Icon(Icons.Outlined.Close, stringResource(R.string.tm_close), tint = Color(0xFF999999)) } else Spacer(Modifier.width(8.dp))
                 }

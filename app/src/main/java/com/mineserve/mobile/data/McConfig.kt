@@ -4,6 +4,7 @@ import kotlinx.serialization.Serializable
 
 /**
  * 服务端核心类型：Paper / Purpur / Leaves / Leaf / Spigot / CraftBukkit / Fabric / Forge / NeoForge / Quilt / Vanilla / Velocity / BungeeCord
+ * 基岩版：PowerNukkitX / PocketMine-MP / Allay / BDS（官方基岩版专用服务器）
  */
 enum class PropertiesMode { JavaProperties, PowerNukkitXYaml, Unsupported }
 
@@ -25,10 +26,23 @@ enum class ServerCore(val displayName: String) {
     PowerNukkitX("PowerNukkitX"),
     PocketMine("PocketMine-MP"),
     Allay("Allay"),
+
+    /**
+     * 官方 Minecraft 基岩版专用服务器（Bedrock Dedicated Server）。
+     *
+     * 它和另外三个基岩核心的根本差别是**运行方式**：BDS 是 Mojang 直接发布的
+     * 原生可执行文件（`bedrock_server`），不跑 JVM 也不跑 PHP，因此
+     * 启动参数、文件布局、日志与停机语义全部独立处理（见 `BdsSupport`）。
+     *
+     * 平台限制如实标注：官方只发布 Linux x86_64 构建，本 APK 只打包 arm64-v8a，
+     * 因此可以下载、导入、浏览与改配置，但**不能在本机启动** —— 启动时会给出
+     * 明确原因与替代方案，而不是伪装成可用。
+     */
+    Bds("BDS"),
     Unknown("未知");
 
     /** 是否为基岩版（UDP 网络、Bedrock 客户端连接） */
-    val isBedrock: Boolean get() = this == PowerNukkitX || this == PocketMine || this == Allay
+    val isBedrock: Boolean get() = this == PowerNukkitX || this == PocketMine || this == Allay || this == Bds
 
     /** 控制台保存世界的命令：基岩版（PowerNukkitX）不支持 save-all，用 save hold */
     val consoleSaveCommand: String get() = if (isBedrock) "save hold" else "save-all"
@@ -210,18 +224,31 @@ enum class ProotDistro(
     /** 来宾代号，用于拼 apt 源（`deb <mirror> <codename> main ...`）。 */
     val codename: String,
     /** rootfs 落点目录名（相对 `$PREFIX/var/lib/mineserve/`）。 */
-    val dirName: String
+    val dirName: String,
+    /**
+     * 来宾自带的 glibc 版本。
+     *
+     * 存在的唯一理由是 BDS：内置的 box64 是**预编译的 aarch64 ELF**，它的
+     * `NEEDED` 符号版本写死在构建环境里（当前构建要求 `GLIBC_2.32`–`GLIBC_2.35`）。
+     * 装进 glibc 比它旧的容器里，`/lib/aarch64-linux-gnu/libm.so.6` 找不到对应
+     * 版本符号，进程连 main 都进不去，只会吐一串
+     * `version GLIBC_2.3x not found (required by .../box64)`。
+     * 因此「能不能跑 box64」是发行版的属性，不是启动参数。
+     */
+    val glibc: String
 ) {
     Focal(
         displayName = "Ubuntu 20.04 (focal)",
         codename = "focal",
-        dirName = "focal-rootfs"
+        dirName = "focal-rootfs",
+        glibc = "2.31"
     ),
 
     Jammy(
         displayName = "Ubuntu 22.04 (jammy)",
         codename = "jammy",
-        dirName = "jammy-rootfs"
+        dirName = "jammy-rootfs",
+        glibc = "2.35"
     );
 
     /**
@@ -263,6 +290,20 @@ enum class ProotDistro(
     fun profileFor(version: JavaVersion): ProotContainerProfile? =
         availableJavaVersions.firstOrNull { it == version }
             ?.let { ProotContainerProfile(this, it) }
+
+    /**
+     * 本发行版自带的 glibc 是否不低于 [min]（形如 `2.35`）。
+     *
+     * 按数字比较而不是字符串：`"2.9" > "2.35"` 在字符串下成立、在语义下不成立，
+     * 将来加 2.9 / 3.0 的发行版时字符串比较会静默放行。
+     */
+    fun glibcAtLeast(min: String): Boolean {
+        fun minor(v: String): Int = v.substringAfter('.', "0").toIntOrNull() ?: 0
+        val major = glibc.substringBefore('.').toIntOrNull() ?: 0
+        val minMajor = min.substringBefore('.').toIntOrNull() ?: 0
+        if (major != minMajor) return major > minMajor
+        return minor(glibc) >= minor(min)
+    }
 
     /**
      * 胶囊切换控件里用的短名（「Ubuntu 20.04」）。
@@ -511,7 +552,7 @@ data class StepState(val step: InstallStep, val status: StepStatus)
 
 /**
  * 一个已安装到本地的服务端核心实例。
- * 每个核心有独立的文件夹（home/servers/{dirName}/），互不干扰。
+ * 每个核心有独立的文件夹（统一存储目录 / 旧私有目录 下的 {dirName}/），互不干扰。
  */
 @Serializable
 data class InstalledCore(
@@ -521,10 +562,27 @@ data class InstalledCore(
     val core: ServerCore,
     /** MC 版本 */
     val version: String,
-    /** 文件夹名（从 name 自动生成，sanitized），例如 "sheng-cun-fu-1-20-4" */
+    /**
+     * 文件夹名，自动生成：`server-<yyyyMMdd>-<核心类型>-<4位随机串>`，例如
+     * `server-20261031-paper-k3f9`。
+     *
+     * 与 [name] 解耦：改名只动显示名，磁盘目录不变（避免用户改一次名就搬一次
+     * 几个 GB 的世界）。目录名必须纯 ASCII —— 中文目录会让 Forge 在 Java 25 下
+     * 报 `Bad escape`，见 `McServerController.sanitizeDirName`。
+     */
     val dirName: String,
     /** 实际启动入口文件名；旧配置缺省为 server.jar，导入的完整目录可暂未指定。 */
-    val serverFile: String? = "server.jar"
+    val serverFile: String? = "server.jar",
+    /**
+     * 该核心实际所在的存储位置。
+     *
+     * 默认 [StorageLocation.Internal]（新版统一目录）。升级用户的老服务器在
+     * `ServerStorage.reconcile` 里按磁盘实际情况纠正为 [StorageLocation.Legacy]，
+     * 只改这一个字段，不移动任何文件。
+     *
+     * `coerceInputValues` 对未知枚举值回落默认，因此老配置（没有该字段）能安全读出。
+     */
+    val location: StorageLocation = StorageLocation.Internal
 )
 
 /**
@@ -939,6 +997,10 @@ fun startupPhaseForLog(line: String): StartupPhase? {
             // 注意必须是**全角左括号**紧跟"完成"，不能只写"完成"
             text.contains("完成（") ||
             text.contains("enabled bungeecord") || text.contains("velocity has started") ||
+            // 官方 BDS：端口就绪后打印 "Accepting clients on [::]:19132"。
+            // 部分版本（1.26 实测）不打印 "Server started."，只靠这句 —— 少了它
+            // 服务端其实已经在收包，UI 却一直停在"启动中"等 300s 超时。
+            text.contains("accepting clients on") ||
             // Allay：网络接口启动完成即为就绪（空闲期不再输出日志）
             text.contains("network interface started at") ||
             text.contains("网络接口已启动于") -> StartupPhase.Ready

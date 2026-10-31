@@ -178,6 +178,39 @@ fun isProotGuestRuntime(vendor: JavaVendor, version: JavaVersion): Boolean =
 val LegacyJava8Distro: ProotDistro = ProotDistro.Focal
 
 /**
+ * 内置 box64 要求的最低 glibc。
+ *
+ * 这个数字来自 `assets/box64/box64` 自身：`readelf -V` 里最高的 `GLIBC_` 版本
+ * 就是它构建环境的下限（当前构建覆盖到 2.35）。容器 glibc 低于它时，
+ * 加载器在 `dl_main` 阶段就报 `version GLIBC_2.3x not found` 并退出 ——
+ * 用户看到的是「初始化环境」能过、一点启动就不动，因为失败发生在 box64 自己身上。
+ *
+ * 升级 [com.mineserve.mobile.server.BdsRuntime.BUNDLED_VERSION] 时**必须**重新核对
+ * 这个值（新 box64 若基于更新的发行版构建，下限会往上走）。
+ */
+const val BdsBox64MinGlibc: String = "2.35"
+
+/**
+ * BDS 运行环境实际使用的发行版。
+ *
+ * 不能跟随用户「给 Java 选的发行版」：focal 的 glibc 是 2.31，装不下当前内置的
+ * box64。以前这里跟随用户选择共用 rootfs 省 150MB，代价是选 focal 的用户
+ * 一启动就撞 `GLIBC_2.32/2.33/2.34/2.35 not found`，且报错出现在 proot 的输出里，
+ * 看上去像 box64 装坏了，实际是容器太旧。
+ *
+ * Jammy（2.35）是当前唯一同时满足「glibc ≥ 2.35」与「有 ubuntu-base arm64 归档」的发行版。
+ */
+val BdsContainerDistro: ProotDistro = ProotDistro.Jammy
+
+/**
+ * BDS 容器的容器画像（固定为 [BdsContainerDistro]）。
+ *
+ * Java 17 只用来推导演示名 —— BDS 不跑 JVM，只需要 glibc；两个发行版都提供 17。
+ */
+val BdsContainerProfile: ProotContainerProfile
+    get() = BdsContainerDistro.profileFor(JavaVersion.Java17)!!
+
+/**
  * 把历史配置归一到当前模型。
  *
  * 只处理一种历史形态：`Termux + Java 8`。Java 8 现在只出现在 Proot 分组

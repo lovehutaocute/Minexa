@@ -131,7 +131,7 @@ object WidgetUpdater {
             bindActionButton(context, this, state, actionsEnabled)
             // 服务器运行中禁止切换核心/Java；设置关闭时禁用全部写操作。
             viewsList().forEach {
-                setTextColor(it, if (!actionsEnabled || running) 0xFF9AA0A6.toInt() else 0xFF3B4C9C.toInt())
+                setTextColor(it, if (!actionsEnabled || running) 0xFF90A4AE.toInt() else 0xFF37474F.toInt())
             }
             bindConsolePendingIntents(context, this, actionsEnabled)
         }

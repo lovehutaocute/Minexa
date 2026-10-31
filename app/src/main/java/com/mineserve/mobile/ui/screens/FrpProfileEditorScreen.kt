@@ -294,7 +294,7 @@ fun FrpProfileEditorScreen(
                     }
                 },
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 14.dp)
@@ -306,7 +306,7 @@ fun FrpProfileEditorScreen(
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { confirmDelete = true },
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(18.dp),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 14.dp)
@@ -415,7 +415,7 @@ private fun SakuraTunnelSection(
                 onClick = { refresh(withNodes = false) },
                 enabled = token.isNotBlank() && !loading,
                 colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.weight(1f)
             ) {
                 if (loading) {
@@ -430,7 +430,7 @@ private fun SakuraTunnelSection(
                     showCreate = true
                 },
                 enabled = token.isNotBlank() && !loading,
-                shape = RoundedCornerShape(10.dp)
+                shape = RoundedCornerShape(16.dp)
             ) { Text(stringResource(R.string.net_frp_edit_create_tunnel), fontSize = 12.sp) }
         }
 
@@ -543,7 +543,7 @@ private fun MeFrpTunnelSection(
             onClick = { refresh() },
             enabled = token.isNotBlank() && !loading,
             colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-            shape = RoundedCornerShape(10.dp),
+            shape = RoundedCornerShape(16.dp),
             modifier = Modifier.fillMaxWidth()
         ) {
             if (loading) {
@@ -606,7 +606,7 @@ private fun TunnelRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(if (selected) IndigoSoft else Color.Transparent)
             .clickable { onClick() }
             .padding(horizontal = 10.dp, vertical = 8.dp),

@@ -124,7 +124,7 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                         },
                         enabled = !serviceBusy,
                         colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.weight(1f)
                     ) { Text(stringResource(R.string.s546), color = Color.White, fontSize = 12.sp) }
                     OutlinedButton(
@@ -134,7 +134,7 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                             vm.stopKeepAliveService()
                         },
                         enabled = !serviceBusy,
-                        shape = RoundedCornerShape(10.dp),
+                        shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.weight(1f)
                     ) { Text(stringResource(R.string.s547), color = Coral, fontSize = 12.sp) }
                 }
@@ -194,7 +194,7 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                         requestIgnoreBatteryOptimizations(context)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(stringResource(R.string.ui_battery_btn), color = Color.White, fontSize = 12.sp) }
             }
@@ -207,7 +207,7 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                         openManufacturerAutostart(context)
                     },
                     colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) { Text(stringResource(R.string.ui_autostart_btn), color = Color.White, fontSize = 12.sp) }
             }

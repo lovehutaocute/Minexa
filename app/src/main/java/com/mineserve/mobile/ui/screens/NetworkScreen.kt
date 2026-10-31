@@ -318,7 +318,7 @@ private fun TunnelActionRow(
                 containerColor = Indigo,
                 disabledContainerColor = TrackBg
             ),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(18.dp),
             modifier = Modifier.weight(1f)
         ) {
             Icon(Icons.Outlined.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
@@ -332,7 +332,7 @@ private fun TunnelActionRow(
                 containerColor = Muted,
                 disabledContainerColor = TrackBg
             ),
-            shape = RoundedCornerShape(12.dp),
+            shape = RoundedCornerShape(18.dp),
             modifier = Modifier.weight(1f)
         ) {
             Icon(Icons.Outlined.Stop, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
@@ -493,7 +493,7 @@ private fun FrpCard(
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
                 onClick = { onOpenEditor(null) },
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Outlined.Edit, contentDescription = null, tint = Indigo, modifier = Modifier.size(16.dp))
@@ -505,7 +505,7 @@ private fun FrpCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
+                    .clip(RoundedCornerShape(18.dp))
                     .background(FieldBg)
                     .clickable { showPicker = true }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
@@ -617,7 +617,7 @@ private fun FrpProfilePickerDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(10.dp))
+                            .clip(RoundedCornerShape(16.dp))
                             .background(if (selected) IndigoSoft else Color.Transparent)
                             .clickable {
                                 vm.setActiveFrpProfile(p.id)
@@ -661,7 +661,7 @@ private fun FrpProfilePickerDialog(
                 Spacer(Modifier.height(8.dp))
                 OutlinedButton(
                     onClick = { onOpenEditor(null) },
-                    shape = RoundedCornerShape(10.dp),
+                    shape = RoundedCornerShape(16.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Outlined.Edit, contentDescription = null, tint = Indigo, modifier = Modifier.size(16.dp))
@@ -994,9 +994,9 @@ private fun EasyTierCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(Coral.copy(alpha = 0.12f))
-                    .border(1.dp, Coral, RoundedCornerShape(10.dp))
+                    .border(1.dp, Coral, RoundedCornerShape(16.dp))
                     .padding(start = 12.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -1119,7 +1119,7 @@ private fun EasyTierCard(
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
                 onClick = onOpenGuide,
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(Icons.Outlined.Share, contentDescription = null, tint = Indigo, modifier = Modifier.size(16.dp))
@@ -1172,7 +1172,7 @@ private fun TunnelLogPreview(
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
                 onClick = { showFullLog = true },
-                shape = RoundedCornerShape(10.dp),
+                shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
                 Icon(
@@ -1270,7 +1270,7 @@ private fun FreeFrpPlatformsCard(context: Context) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .clip(RoundedCornerShape(10.dp))
+                    .clip(RoundedCornerShape(16.dp))
                     .background(IndigoSoft)
                     .clickable {
                         try {

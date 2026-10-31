@@ -2,6 +2,7 @@ package com.mineserve.mobile.ui.screens
 
 import androidx.compose.ui.res.stringResource
 import com.mineserve.mobile.R
+import com.mineserve.mobile.data.ServerCore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 
@@ -174,6 +175,14 @@ fun PlayersScreen(
 
     val isRunning = serverState.isRunning
     val activeCore = config.installedCores.find { it.name == config.activeCoreName }
+    // 官方 BDS 既没有封禁命令也没有封禁文件，封禁页对它永远只能是空的 —— 直接不展示
+    val isBds = activeCore?.core == ServerCore.Bds
+    val playerTabs = remember(isBds) {
+        PlayerListTab.values().filterNot { isBds && it == PlayerListTab.Banned }
+    }
+    LaunchedEffect(playerTabs) {
+        if (activeTab !in playerTabs) activeTab = PlayerListTab.Online
+    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -224,7 +233,6 @@ fun PlayersScreen(
             )
 
             // ── 标签切换 ──
-            val playerTabs = PlayerListTab.values()
             SegmentedTabs(
                 options = playerTabs.map { tab ->
                     val count = when (tab) {
@@ -259,6 +267,7 @@ fun PlayersScreen(
                     ops = ops,
                     isRunning = isRunning,
                     defaultOpLevel = defaultOpLevel,
+                    supportsOpLevel = !isBds,
                     onOpAddDefault = { vm.opPlayer(it) },
                     onOpAdd = { name, level -> vm.opPlayerWithLevel(name, level) },
                     onNavigateProperties = onNavigateProperties,
@@ -369,7 +378,7 @@ private fun PlayerHistoryDialog(
                             val isJoin = h.event == stringResource(R.string.s189)
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(4.dp))
+                                    .clip(RoundedCornerShape(8.dp))
                                     .background(if (isJoin) MintSoft else CoralSoft)
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
@@ -449,7 +458,7 @@ private fun ServerStatusBanner(
                 Box(
                     modifier = Modifier
                         .size(8.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                        .clip(RoundedCornerShape(8.dp))
                         .background(Mint)
                 )
                 Spacer(Modifier.size(6.dp))
@@ -467,7 +476,7 @@ private fun ServerStatusBanner(
 @Composable
 private fun StatusRow(color: Color, text: String) {
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(color))
+        Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(8.dp)).background(color))
         Spacer(Modifier.size(6.dp))
         Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
@@ -541,7 +550,7 @@ private fun OnlinePlayerRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(IndigoSoft)
             .clickable(onClick = onShowDetail)
             .padding(10.dp),
@@ -550,7 +559,7 @@ private fun OnlinePlayerRow(
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(Mint),
             contentAlignment = Alignment.Center
         ) {
@@ -593,6 +602,7 @@ private fun OpsTab(
     ops: List<PlayerManager.OpEntry>,
     isRunning: Boolean,
     defaultOpLevel: Int?,
+    supportsOpLevel: Boolean = true,
     onOpAddDefault: (String) -> Unit,
     onOpAdd: (String, Int) -> Unit,
     onNavigateProperties: () -> Unit,
@@ -661,39 +671,42 @@ private fun OpsTab(
         Spacer(Modifier.height(8.dp))
 
         // ── 勾选框：使用配置文件默认 OP 等级（无需重启） ──
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Checkbox(
-                checked = useDefaultLevel,
-                onCheckedChange = { useDefaultLevel = it },
-                colors = CheckboxDefaults.colors(checkedColor = Indigo)
-            )
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    stringResource(R.string.s1031),
-                    fontSize = 11.sp
+        // BDS 只有 operator / member 两档权限，没有等级，这套选择器对它没有意义
+        if (supportsOpLevel) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Checkbox(
+                    checked = useDefaultLevel,
+                    onCheckedChange = { useDefaultLevel = it },
+                    colors = CheckboxDefaults.colors(checkedColor = Indigo)
                 )
-                // 显示当前配置的默认 OP 等级
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.s1031),
+                        fontSize = 11.sp
+                    )
+                    // 显示当前配置的默认 OP 等级
+                    Text(
+                        if (defaultOpLevel != null) stringResource(R.string.s1059, defaultOpLevel)
+                        else stringResource(R.string.s1060),
+                        color = Muted,
+                        fontSize = 10.sp
+                    )
+                }
                 Text(
-                    if (defaultOpLevel != null) stringResource(R.string.s1059, defaultOpLevel)
-                    else stringResource(R.string.s1060),
-                    color = Muted,
-                    fontSize = 10.sp
+                    stringResource(R.string.s1032),
+                    color = Indigo,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.clickable { onNavigateProperties() }
                 )
             }
-            Text(
-                stringResource(R.string.s1032),
-                color = Indigo,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.clickable { onNavigateProperties() }
-            )
         }
 
         // ── 手动指定等级模式 ──
-        if (!useDefaultLevel) {
+        if (!useDefaultLevel && supportsOpLevel) {
             Spacer(Modifier.height(6.dp))
             // 等级选择
             Box {
@@ -745,7 +758,7 @@ private fun OpsTab(
         Button(
             onClick = {
                 if (opName.isNotBlank()) {
-                    if (useDefaultLevel) {
+                    if (useDefaultLevel || !supportsOpLevel) {
                         onOpAddDefault(opName.trim())
                     } else {
                         onOpAdd(opName.trim(), selectedLevel.value)
@@ -759,7 +772,7 @@ private fun OpsTab(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                if (useDefaultLevel) stringResource(R.string.s1035)
+                if (useDefaultLevel || !supportsOpLevel) stringResource(R.string.s1035)
                 else stringResource(R.string.s700, selectedLevel.value),
                 color = Color.White,
                 fontSize = 11.sp
@@ -1146,7 +1159,7 @@ private fun PlayerListRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
+            .clip(RoundedCornerShape(16.dp))
             .background(IndigoSoft)
             .clickable { onClick() }
             .padding(10.dp),
@@ -1155,7 +1168,7 @@ private fun PlayerListRow(
         Box(
             modifier = Modifier
                 .size(32.dp)
-                .clip(RoundedCornerShape(8.dp))
+                .clip(RoundedCornerShape(12.dp))
                 .background(Indigo),
             contentAlignment = Alignment.Center
         ) {
@@ -1169,7 +1182,7 @@ private fun PlayerListRow(
         if (badgeText != null) {
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
+                    .clip(RoundedCornerShape(8.dp))
                     .background(badgeColor.copy(alpha = 0.15f))
                     .padding(horizontal = 6.dp, vertical = 2.dp)
             ) {

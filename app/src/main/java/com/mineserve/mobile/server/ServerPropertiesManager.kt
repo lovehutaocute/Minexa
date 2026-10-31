@@ -14,9 +14,9 @@ import java.io.File
  */
 class ServerPropertiesManager(private val termux: TermuxRuntime) {
 
-    /** server.properties 文件路径：home/servers/{dirName}/server.properties */
+    /** server.properties 文件路径：{serverDir}/server.properties */
     private fun propertiesFile(dirName: String): File =
-        File(termux.installer.rootDir, "home/servers/$dirName/server.properties")
+        File(termux.serverDirFor(dirName), "server.properties")
 
     /**
      * 配置文件是否已由服务端生成。

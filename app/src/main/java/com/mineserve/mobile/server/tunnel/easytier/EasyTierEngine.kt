@@ -41,8 +41,29 @@ object EasyTierEngine {
         ContextCompat.startForegroundService(context, EasyTierVpnIntents.start(context, settings))
     }
 
-    /** 停止组网。 */
-    fun stop(context: Context) {
-        runCatching { context.startService(EasyTierVpnIntents.stop(context)) }
+    /**
+     * 停止组网。
+     *
+     * 用 `startForegroundService` 而不是 `startService`：Android 8+ 在后台调
+     * `startService` 直接抛 `IllegalStateException`，旧实现用 `runCatching` 把这条
+     * 异常吞掉了 —— 停止指令根本没送达，TUN 和实例全留着，界面却显示「已停止」。
+     * 这就是「关掉组网还有残留」的来源。
+     *
+     * @return 停止指令是否送达。false 表示已经走了直接清理，调用方据此决定要不要再兜底。
+     */
+    fun stop(context: Context): Boolean {
+        val delivered = runCatching {
+            ContextCompat.startForegroundService(context, EasyTierVpnIntents.stop(context))
+        }.isSuccess
+        if (delivered) return true
+
+        // 送达失败（后台限制、服务被判不可用）：先用 stopService 触发 onDestroy → shutdown()，
+        // 它才会关 TUN；再直接停 core 兜底。stopService 不受后台启动限制。
+        runCatching { context.stopService(Intent(context, EasyTierVpnService::class.java)) }
+        runCatching { com.easytier.jni.EasyTierJNI.stopAllInstances() }
+        return false
     }
+
+    /** 清掉上一次的结果，必须在每次 [start] 之前调用（见 [EasyTierVpnService.resetLastResult]）。 */
+    fun resetLastResult() = EasyTierVpnService.resetLastResult()
 }

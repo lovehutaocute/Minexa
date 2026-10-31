@@ -5,6 +5,8 @@ import android.util.Log
 import android.system.Os
 import com.mineserve.mobile.runtime.NativeLibraryBundler.PACKAGED_LIBRARIES
 import com.mineserve.mobile.data.InstallStep
+import com.mineserve.mobile.data.MultiSourceDownload
+import com.mineserve.mobile.data.UbuntuImageSources
 import com.mineserve.mobile.data.JavaRuntime
 import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.JavaVersion
@@ -13,10 +15,13 @@ import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.AptMirror
 import com.mineserve.mobile.data.DownloadMirror
 import com.mineserve.mobile.data.LegacyJava8Distro
+import com.mineserve.mobile.data.BdsContainerProfile
+import com.mineserve.mobile.data.BdsContainerDistro
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ProotContainerProfile
 import com.mineserve.mobile.data.isProotGuestRuntime
 import com.mineserve.mobile.data.ServerCore
+import com.mineserve.mobile.data.ServerStorage
 import com.mineserve.mobile.data.StepState
 import com.mineserve.mobile.data.StepStatus
 import kotlinx.coroutines.Dispatchers
@@ -366,22 +371,71 @@ class TermuxRuntime(context: Context) {
         installer.deleteBootstrap(force)
     }
 
-    /** 多核心支持：按文件夹名获取对应核心的 jar 路径（home/servers/{dirName}/server.jar） */
+    /**
+     * 多核心支持：按文件夹名获取对应核心的 jar 路径。
+     *
+     * 路径不再固定为 `<home>/servers/{dirName}/`：服务器可能位于新版统一存储目录
+     * 或旧版私有目录，定位统一交给 [ServerStorage]（见其文档）。
+     */
     fun serverJarFileFor(dirName: String): File =
-        File(installer.rootDir, "home/servers/$dirName/server.jar").apply { parentFile?.mkdirs() }
+        File(serverDirFor(dirName), "server.jar").apply { parentFile?.mkdirs() }
 
-    /** 多核心支持：按文件夹名获取对应核心的工作目录（home/servers/{dirName}/） */
+    /**
+     * 多核心支持：按文件夹名获取对应核心的工作目录。
+     *
+     * `dirName` 不含位置信息，这里根据 [ServerStorage] 的解析结果落到正确根目录。
+     *
+     * **纯解析，绝不创建目录**。历史实现带着 `.apply { mkdirs() }`，于是任何一次
+     * 「读」都变成了「写」：读日志、读 properties、刷新桌面组件、解析当前核心……
+     * 只要某处传进一个已不存在的 dirName，磁盘上就会凭空多出一个空文件夹。
+     * 这正是「有时启动应用会多出一个空文件夹」的来源：启动链路里到处都在解析目录名。
+     *
+     * 需要创建目录的地方（下载 / 导入 / 还原 / 首次启动）显式调用 [ensureServerDir]。
+     */
     fun serverDirFor(dirName: String): File =
-        File(installer.rootDir, "home/servers/$dirName").apply { mkdirs() }
+        ServerStorage.dirFor(appContext, dirName)
 
-    /** 读取当前服务端日志文件的最近内容，供终端页快速恢复历史输出。 */
-    suspend fun readRecentMcLog(dirName: String, maxLines: Int = 300): List<String> = withContext(Dispatchers.IO) {
-        val serverDir = serverDirFor(dirName)
+    /** 显式创建并返回服务器目录（下载 / 导入 / 还原等「要往里写文件」的路径专用）。 */
+    fun ensureServerDir(dirName: String): File =
+        ServerStorage.dirFor(appContext, dirName).apply { if (!isDirectory) mkdirs() }
+
+    /**
+     * 读取当前服务端日志文件的最近内容，供终端页快速恢复历史输出。
+     *
+     * @param fromOffset 只返回该字节位置**之后**的内容。终端页「清除」之后用它，
+     *   否则清空的行会在下次进页面时被磁盘日志原样补回来 —— 用户会认为清除没生效。
+     *   `0` 表示从头读（默认，保持既有语义）。
+     */
+    suspend fun readRecentMcLog(
+        dirName: String,
+        maxLines: Int = 300,
+        fromOffset: Long = 0L
+    ): List<String> = withContext(Dispatchers.IO) {
         // 优先读服务端自己维护的 latest.log（Paper/Spigot/Forge 由 log4j 写，内容是权威的）；
         // 只有它不存在或为空时才回退到应用侧捕获的控制台输出——
         // 例如 PocketMine、或核心在写出第一行日志前就崩了的情况。
         val source = mcLogFileFor(dirName) ?: return@withContext emptyList()
-        source.useLines(Charsets.UTF_8) { lines -> lines.toList().takeLast(maxLines) }
+        if (fromOffset <= 0L) {
+            return@withContext source.useLines(Charsets.UTF_8) { lines ->
+                lines.toList().takeLast(maxLines)
+            }
+        }
+        val length = source.length()
+        // 文件比 offset 短：说明 latest.log 已被新一轮运行覆盖（或用户清过目录）。
+        // 此时 offset 毫无意义，按「从头读」处理，否则会得到一整页空白。
+        if (length <= fromOffset) return@withContext emptyList()
+        // 只回读尾部窗口：增量可能积累到几十 MB，而界面只要最后 maxLines 行。
+        val start = maxOf(fromOffset, length - LOG_TAIL_WINDOW_BYTES)
+        val bytes = java.io.RandomAccessFile(source, "r").use { raf ->
+            raf.seek(start)
+            val size = (length - start).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+            ByteArray(size).also { raf.readFully(it) }
+        }
+        val lines = String(bytes, Charsets.UTF_8).split('\n')
+        // start > fromOffset 说明起点被尾部窗口截断，落在某一行中间 ——
+        // 首行是残行，必须丢掉，否则终端会冒出一行半截日志。
+        val body = if (start > fromOffset) lines.drop(1) else lines
+        body.takeLast(maxLines).filter { it.isNotEmpty() }
     }
 
     /**
@@ -436,8 +490,13 @@ class TermuxRuntime(context: Context) {
         return file
     }
 
-    /** 多核心基础目录（home/servers/） */
-    val serversDir: File get() = File(installer.rootDir, "home/servers").apply { mkdirs() }
+    /**
+     * 多核心基础目录 —— **新版统一存储目录**（`/storage/emulated/0/Minexa/Minecraftserver/`）。
+     *
+     * 新下载/导入的服务器一律落在这里；旧版私有目录只通过
+     * [ServerStorage.legacyRoot] 读取，不再作为写入目标。
+     */
+    val serversDir: File get() = ServerStorage.serversDir(appContext)
 
     /**
      * 确保 java 命令可用（wrapper 脚本方案）。
@@ -1429,7 +1488,7 @@ class TermuxRuntime(context: Context) {
      *
      * @param profile 目标画像；仅用于日志措辞与 rootfs 落点。
      */
-    private fun prepareUbuntuRuntime(
+    private suspend fun prepareUbuntuRuntime(
         profile: ProotContainerProfile = legacyJava8Profile,
         onRootfsProgress: ((Int) -> Unit)? = null
     ): Boolean {
@@ -1437,6 +1496,7 @@ class TermuxRuntime(context: Context) {
             emitLog("[proot] ${profile.displayName} 前置依赖 proot 无法从 Termux 软件源获取")
             return false
         }
+        emitLog("[proot] 正在安装 proot 与容器胶水文件")
         var code = execOnce(
             "apt-get", "-o", "DPkg::Lock::Timeout=60", "install",
             "--allow-unauthenticated", "-y", "proot"
@@ -1449,27 +1509,56 @@ class TermuxRuntime(context: Context) {
         installProotLauncher()
         ensureRootfsExecutable()
         if (!verifyProot()) return false
+        emitLog("[proot] proot 已就位")
 
-        if (runUbuntu("test -x /bin/sh && exit 0", 60_000, profile = profile) == 0) {
-            onRootfsProgress?.invoke(100)
-            return true
+        // 已有可用 rootfs 时才值得花钱自检：rootfs 根本不存在时这一步必然失败，
+        // 白白等一个超时、还会在控制台刷一堆 proot 报错，让人以为出了大问题。
+        val existingRootfs = containerRootfs(profile)
+        if (hasUsableUbuntuShell(existingRootfs)) {
+            emitLog("[proot] 正在自检已有的 ${profile.distro.displayName} 容器")
+            val existingProbe = runUbuntu(SHELL_PROBE, ROOTFS_PROBE_TIMEOUT_MS, profile = profile)
+            if (existingProbe == 0) {
+                emitLog("[proot] ${profile.distro.displayName} 容器可用")
+                onRootfsProgress?.invoke(100)
+                return true
+            }
+            emitLog("[proot] 已有容器自检未通过（exit=$existingProbe），准备重建 rootfs")
+        } else {
+            emitLog("[proot] 尚未安装 ${profile.distro.displayName} 容器")
         }
         if (!installUbuntuBaseRootfs(profile, onRootfsProgress)) {
             emitLog("[proot] ${profile.distro.displayName} rootfs 无法重建；旧的容器和服务器数据未被修改")
             return false
         }
-        emitLog("[proot] 正在部署 ${profile.distro.displayName} ARM64 rootfs，首次安装需要较长时间")
-        return runUbuntu("test -x /bin/sh && exit 0", 60_000, profile = profile) == 0
+        emitLog("[proot] 正在启动新容器做首次自检（首次进入可能要一两分钟）")
+        val probe = runUbuntu(SHELL_PROBE, ROOTFS_PROBE_TIMEOUT_MS, profile = profile)
+        if (probe != 0) {
+            emitLog(
+                "[proot] 容器首次自检失败 exit=$probe" +
+                    if (probe == 124) "（超时：容器启动过慢，请重试一次）" else ""
+            )
+            return false
+        }
+        emitLog("[proot] ${profile.distro.displayName} 容器已就绪")
+        return true
     }
 
     /**
-     * Uses the Ubuntu Base image instead of proot-distro's Docker Hub image.
-     * Docker Hub commonly returns HTTP 429 on mobile networks; the URLs
-     * below are ordinary Ubuntu archive endpoints and do not require an account.
+     * 下载并安装容器 rootfs。
      *
-     * 按画像取归档名与下载源：每个发行版有自己的 base image。
+     * 不用 proot-distro 的 Docker Hub 镜像：移动网络下 Docker Hub 经常 429，
+     * 而 Ubuntu 归档站是普通 HTTPS 端点，不需要账号、不限速。
+     *
+     * 三条约束：
+     *  1. **多源**：镜像列表来自 [UbuntuImageSources]（6 个国内镜像），
+     *     首选连不上/超时/返回错误页就自动换下一个，而不是直接判失败；
+     *  2. **校验**：优先按同目录的 `SHA256SUMS` 核对整个文件 —— 错误页、
+     *     被截断的下载都能在这一步挡住；取不到校验文件时退回「大小 + gzip 魔数」，
+     *     不让一个次要请求把整个安装判死；
+     *  3. **不污染**：只有校验通过才解压，解压前先清空本画像自己的 rootfs；
+     *     任一环节失败都会把半成品清掉，避免留下「有目录没内容」的残状态。
      */
-    private fun installUbuntuBaseRootfs(
+    private suspend fun installUbuntuBaseRootfs(
         profile: ProotContainerProfile = legacyJava8Profile,
         onProgress: ((Int) -> Unit)? = null
     ): Boolean {
@@ -1479,32 +1568,37 @@ class TermuxRuntime(context: Context) {
             return true
         }
 
-        val archiveName = baseImageArchiveName(profile.distro)
-        val archive = File(installer.tmpDir, archiveName)
-        val urls = baseImageUrls(profile.distro)
+        val archive = File(installer.tmpDir, UbuntuImageSources.archiveName(profile.distro))
+        val sources = UbuntuImageSources.archiveSources(profile.distro)
         return try {
-            emitLog("[proot] 正在下载 ${profile.distro.displayName} ARM64 基础 rootfs（非 Docker Hub）")
+            emitLog("[proot] 正在下载 ${profile.distro.displayName} ARM64 基础 rootfs（${sources.size} 个镜像可自动切换）")
             archive.delete()
-            var lastError: Exception? = null
-            for (url in urls) {
-                try {
-                    emitLog("[proot] rootfs source: $url")
-                    // 下载占 rootfs 阶段的 85%，解压/修复占剩余 15%：
-                    // 下载是几百兆的网络传输，解压是本地操作，这个比例贴近真实耗时。
-                    downloadUbuntuRootfs(url, archive) { pct ->
-                        onProgress?.invoke(pct * 85 / 100)
+            val expectedSha = fetchRootfsSha256(profile.distro)
+            if (expectedSha == null) {
+                emitLog("[proot] 各镜像的 SHA256SUMS 都取不到，改用大小与文件头校验")
+            } else {
+                emitLog("[proot] rootfs 目标 SHA-256: ${expectedSha.take(16)}…")
+            }
+            onProgress?.invoke(3)
+            // 下载占 rootfs 阶段的 85%，解压/修复占剩余 15%：
+            // 下载是几十兆的网络传输，解压是本地操作，这个比例贴近真实耗时。
+            MultiSourceDownload.download(
+                sources = sources,
+                target = archive,
+                onAttempt = { attempt ->
+                    emitLog(
+                        "[proot] rootfs 来源 ${attempt.label}: " +
+                            if (attempt.ok) "成功" else "失败（${attempt.reason}）"
+                    )
+                },
+                onProgress = { done, total, _ ->
+                    if (total > 0) {
+                        val pct = (done * 100 / total).toInt() * 85 / 100
+                        onProgress?.invoke(pct.coerceIn(3, 85))
                     }
-                    if (isPlausibleUbuntuArchive(archive)) break
-                    throw IllegalStateException("rootfs download is incomplete")
-                } catch (e: Exception) {
-                    lastError = e
-                    archive.delete()
-                    emitLog("[proot] rootfs source failed: ${e.message}")
-                }
-            }
-            if (!isPlausibleUbuntuArchive(archive)) {
-                throw lastError ?: IllegalStateException("rootfs download failed")
-            }
+                },
+                validate = { file -> validateRootfsArchive(file, expectedSha) }
+            )
             onProgress?.invoke(85)
             emitLog("[proot] 正在解压 rootfs 并修复权限，请稍候")
             // 只动本画像自己的 rootfs。绝不去碰旧版 proot-distro 容器、
@@ -1514,11 +1608,14 @@ class TermuxRuntime(context: Context) {
             extractUbuntuRootfs(archive, rootfs)
             repairUbuntuRootfs(profile)
             if (!hasUsableUbuntuShell(rootfs)) {
-                throw IllegalStateException("rootfs is missing an executable shell")
+                throw IllegalStateException("rootfs 解压后没有可执行 shell，安装包可能已损坏")
             }
             onProgress?.invoke(100)
             emitLog("[proot] ${profile.distro.displayName} ARM64 rootfs 已就绪")
             true
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            rootfs.deleteRecursively()
+            throw e
         } catch (e: Exception) {
             rootfs.deleteRecursively()
             emitLog("[proot] rootfs 安装失败: ${e.message}")
@@ -1528,23 +1625,41 @@ class TermuxRuntime(context: Context) {
         }
     }
 
-    /** Ubuntu Base 归档文件名（按发行版）。 */
-    private fun baseImageArchiveName(distro: ProotDistro): String = when (distro) {
-        ProotDistro.Focal -> "ubuntu-base-20.04.5-base-arm64.tar.gz"
-        ProotDistro.Jammy -> "ubuntu-base-22.04.5-base-arm64.tar.gz"
+    /**
+     * 取 rootfs 的目标 SHA-256。
+     *
+     * 逐个镜像尝试 `SHA256SUMS`：Ubuntu Base 各个镜像的文件是同一份，
+     * 因此任一镜像给出的值都可用于校验任意源下载下来的文件。
+     * 全部取不到时返回 null（调用方退回结构性校验）。
+     */
+    private fun fetchRootfsSha256(distro: ProotDistro): String? {
+        val archiveName = UbuntuImageSources.archiveName(distro)
+        for (source in UbuntuImageSources.archiveSources(distro)) {
+            val url = UbuntuImageSources.sha256SumsUrl(source)
+            val text = try {
+                httpGetText(url)
+            } catch (e: Exception) {
+                emitLog("[proot] SHA256SUMS 不可用（${source.label}）: ${e.message}")
+                continue
+            }
+            UbuntuImageSources.expectedSha256(text, archiveName)?.let { return it }
+            emitLog("[proot] ${source.label} 的 SHA256SUMS 里没有 $archiveName")
+        }
+        return null
     }
 
-    /** Ubuntu Base 归档下载源，按顺序尝试（清华 → 中科大）。 */
-    private fun baseImageUrls(distro: ProotDistro): List<String> {
-        val release = when (distro) {
-            ProotDistro.Focal -> "20.04"
-            ProotDistro.Jammy -> "22.04"
+    /** rootfs 归档的内容校验：先看结构，再比哈希 */
+    private fun validateRootfsArchive(file: File, expectedSha: String?): String? {
+        if (!isPlausibleUbuntuArchive(file)) {
+            return "不是有效的 Ubuntu Base 归档（可能是错误页或被截断）"
         }
-        val archive = baseImageArchiveName(distro)
-        return listOf(
-            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu-cdimage/ubuntu-base/releases/$release/release/$archive",
-            "https://mirrors.ustc.edu.cn/ubuntu-cdimage/ubuntu-base/releases/$release/release/$archive"
-        )
+        if (expectedSha == null) return null
+        val actual = runCatching { MultiSourceDownload.sha256(file) }.getOrNull()
+            ?: return "无法计算 SHA-256"
+        if (!actual.equals(expectedSha, ignoreCase = true)) {
+            return "SHA-256 不匹配（下载不完整或镜像文件已损坏）"
+        }
+        return null
     }
 
     private fun hasUsableUbuntuShell(rootfs: File): Boolean =
@@ -1556,47 +1671,6 @@ class TermuxRuntime(context: Context) {
         if (!archive.isFile || archive.length() < 20L * 1024 * 1024) return false
         return FileInputStream(archive).use { input ->
             input.read() == 0x1f && input.read() == 0x8b
-        }
-    }
-
-    private fun downloadUbuntuRootfs(url: String, target: File, onPercent: ((Int) -> Unit)? = null) {
-        val connection = (URL(url).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 20_000
-            readTimeout = 60_000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Minexa/1.0")
-        }
-        try {
-            connection.connect()
-            if (connection.responseCode !in 200..299) {
-                throw IllegalStateException("HTTP ${connection.responseCode}")
-            }
-            val total = connection.contentLengthLong
-            var downloaded = 0L
-            var lastPercent = -1
-            connection.inputStream.use { input ->
-                FileOutputStream(target).use { output ->
-                    val buffer = ByteArray(64 * 1024)
-                    while (true) {
-                        val count = input.read(buffer)
-                        if (count < 0) break
-                        output.write(buffer, 0, count)
-                        downloaded += count
-                        if (total > 0) {
-                            val percent = (downloaded * 100 / total).toInt()
-                            if (percent / 10 != lastPercent / 10) {
-                                lastPercent = percent
-                                emitLog("[java] Ubuntu rootfs download: $percent%")
-                            }
-                            // 每 10% 回报一次，避免高频刷新 UI
-                            if (lastPercent == percent || percent % 10 == 0) onPercent?.invoke(percent)
-                        }
-                    }
-                }
-            }
-            onPercent?.invoke(100)
-        } finally {
-            connection.disconnect()
         }
     }
 
@@ -1864,6 +1938,11 @@ class TermuxRuntime(context: Context) {
     private fun repairUbuntuRootfs(profile: ProotContainerProfile = legacyJava8Profile): Boolean {
         val rootfs = containerRootfs(profile)
         if (!rootfs.isDirectory) return false
+        // 修过且 shell 仍可执行 → 直接放行。
+        // 这段的成本是「遍历 + chmod -R 上万个小文件」，而 runUbuntu 在
+        // 「容器自检 / 实测 box64 / 启动服务端」三条路径上都会调它 ——
+        // 不记标记的话，每次启动服务端都要凭空多花十几秒到几十秒。
+        if (repairMarker(rootfs).isFile && hasUsableUbuntuShell(rootfs)) return true
         var fixed = 0
         val visited = mutableSetOf<String>()
         val commandDirs = listOf("bin", "sbin", "usr/bin", "usr/sbin")
@@ -1897,10 +1976,15 @@ class TermuxRuntime(context: Context) {
             if (loader.isFile && !loader.canExecute() && loader.setExecutable(true, false)) fixed++
         }
         if (fixed > 0) emitLog("[bootstrap] 修复 $fixed 个 Ubuntu rootfs 命令可执行权限")
-        return listOf("bin/sh", "bin/bash", "usr/bin/bash")
+        val usable = listOf("bin/sh", "bin/bash", "usr/bin/bash")
             .map { File(rootfs, it) }
             .any { it.isFile && it.canExecute() }
+        if (usable) runCatching { repairMarker(rootfs).writeText(profile.distro.dirName + "\n") }
+        return usable
     }
+
+    /** 「这个 rootfs 的可执行位已修过」的标记（放 rootfs 内，随 rootfs 一起重建） */
+    private fun repairMarker(rootfs: File): File = File(rootfs, ".mineserve-exec-repaired")
 
     /**
      * 在容器里跑服务端自带的 installer，只把该服务端目录绑进去。
@@ -3314,11 +3398,18 @@ class TermuxRuntime(context: Context) {
                 val cmdline = try {
                     File(f, "cmdline").readText().replace('\u0000', ' ')
                 } catch (_: Exception) { return@forEach }
-                val isMc = cmdline.contains("java") && if (target != null) {
+                val isJavaMc = cmdline.contains("java") && if (target != null) {
                     matchesManagedServer(cmdline, target)
                 } else {
                     cmdline.contains(".jar") && cmdline.contains("nogui")
                 }
+                // BDS 的 argv 只有 `./bedrock_server`，路径不在 cmdline 里，
+                // 只能靠工作目录（/proc/<pid>/cwd）判断归属。不补这一条的话，
+                // 包装 shell 意外退出后残留的 BDS 永远清不掉，端口一直被占。
+                val isBds = target != null &&
+                    cmdline.contains(com.mineserve.mobile.server.BdsSupport.ENTRY_NAME) &&
+                    runCatching { File(f, "cwd").canonicalPath == target }.getOrDefault(false)
+                val isMc = isJavaMc || isBds
                 // 兜底护栏：调用方没给目标目录、但此刻确实有一个服务端在跑时，
                 // 只清「不属于当前服务端」的进程是无法判定的 —— `.jar && nogui`
                 // 匹配不出归属。这种情形下宁可不杀：多实例场景里那些 java 很可能是
@@ -3476,7 +3567,7 @@ class TermuxRuntime(context: Context) {
             "export TMPDIR=/tmp; export HOME=/root; export FONTCONFIG_PATH=/etc/fonts; " +
             "cd '$guestDir' && $forgeLibraryRepair$forgeServerClasspath exec $javaBin " +
             "-Djava.io.tmpdir=/tmp " +
-            baseJvmProperties() +
+            baseJvmProperties(maxHeapMb) +
             "-Xmx${maxHeapMb}m $javaArguments" + if (appendNogui) " nogui" else ""
         val rootfs = containerRootfs(profile)
         // PRoot creates glue files outside the guest rootfs. Keep this path in
@@ -3694,7 +3785,7 @@ class TermuxRuntime(context: Context) {
      * 因 `libc.so.6` 缺失而崩服的问题。该组属性原由「模组兼容模式」开关控制，现改为
      * **无条件注入**：Android 本就没有 udev/systemd，关掉这些探测只有好处，无需用户判断。
      */
-    private fun baseJvmProperties(): String = buildString {
+    private fun baseJvmProperties(maxHeapMb: Int): String = buildString {
         append("-Djava.awt.headless=true ")
         // Android 没有 /etc/localtime，且未设 TZ 时 JVM 默认时区会回退成 UTC，
         // 导致服务端日志时间戳比本地时间慢 8 小时（东八区）。
@@ -3732,7 +3823,7 @@ class TermuxRuntime(context: Context) {
          * 我们的服务端一律以 nogui 运行，终端探测失败是安全的。
          */
         append("-Dorg.jline.terminal.providers=exec,jni,ffi ")
-        append(memoryFootprintArgs())
+        append(memoryFootprintArgs(maxHeapMb))
         /*
          * 这里的取值来自 OSHI 的 GlobalConfig 常量表，只使用真实存在的键。
          *
@@ -3796,8 +3887,15 @@ class TermuxRuntime(context: Context) {
      *   服务端通常玩家少、堆不大，Serial GC 单线程回收开销极小且无这些额外结构，
      *   实际表现往往更快也更省内存。
      *
-     * - `MaxMetaspaceSize=256m`：类元数据区，默认**无上限**。每个模组的类加载器
-     *   都会往这里放东西，不设上限时会只增不减。
+     * - `MaxMetaspaceSize`：类元数据区。**必须跟随堆上限一起放宽**——
+     *   Metaspace 是 native 内存、完全不占 `-Xmx`，所以「堆还剩一大半」和
+     *   「Metaspace 已满」可以同时成立。
+     *   ⚠️ 1.2.6 曾把它写死成 256m，大型 Forge 整合包（两百多个 mod，每个 mod
+     *   一个类加载器）在 RegisterEvent 阶段必然撞上限，报
+     *   `OutOfMemoryError: Metaspace`，而 `-Xmx` 明明没用完。用户只会看到
+     *   「内存不足」，按提示去调 `-Xmx` 反而越调越糟。现改为
+     *   `max(768m, -Xmx)`：模组包越大堆越大，比例关系天然成立，且仍有天花板
+     *   避免无限增长拖死整机。
      *
      * - `ReservedCodeCacheSize=128m`：JIT 编译后的机器码缓存，默认约 240MB。
      *   手机端服务端长期运行的热点方法有限，砍到一半通常无感知。
@@ -3806,11 +3904,16 @@ class TermuxRuntime(context: Context) {
      *   每个省 256KB，几十个线程即可省下十几 MB。
      *   ⚠️ 不设得更小（如 512k）是因为部分模组递归较深，栈过小会 StackOverflow。
      *
-     * 这些参数都是「只减不增」的安全项：不改变服务端行为，只压缩 JVM 的预留与开销。
+     * 除 Metaspace 外其余参数都是「只减不增」的安全项：不改变服务端行为，
+     * 只压缩 JVM 的预留与开销。
      */
-    private fun memoryFootprintArgs(): String = buildString {
+    private fun memoryFootprintArgs(maxHeapMb: Int): String = buildString {
         append("-XX:+UseSerialGC ")
-        append("-XX:MaxMetaspaceSize=256m ")
+        // Metaspace 上限是「天花板」不是「预留」：调大本身不占内存，
+        // 只在真的加载了那么多类时才有意义。因此下限取 768m 足够小机器开机，
+        // 上限跟随堆上限让大整合包不至于先在类元数据上撞死。
+        val metaspaceMb = maxOf(METASPACE_FLOOR_MB, maxHeapMb)
+        append("-XX:MaxMetaspaceSize=${metaspaceMb}m ")
         append("-XX:ReservedCodeCacheSize=128m ")
         append("-Xss768k ")
     }
@@ -3961,7 +4064,7 @@ class TermuxRuntime(context: Context) {
             (systemTimeZoneId()?.let { "export TZ='$it'; " } ?: "") +
             "cd '$serverDir' && " +
             "exec '$javaPath' $nativeAccessArg-Djava.io.tmpdir='$jvmTmpDir' -Djna.tmpdir='$jvmTmpDir' " +
-            baseJvmProperties() +
+            baseJvmProperties(maxHeapMb) +
             "-Xmx${maxHeapMb}m " + (launchArgs ?: "-jar $jarPath") + if (appendNogui) " nogui" else ""
 
         Log.i(TAG, "startMc command: $javaCmd")
@@ -4094,6 +4197,534 @@ class TermuxRuntime(context: Context) {
     }
 
     /**
+     * 启动官方基岩版 BDS。
+     *
+     * 有两条完全不同的执行路径，由可执行文件的架构决定：
+     *
+     *  1. **原生**（目录里的 `bedrock_server` 就是 aarch64）：直接 `exec ./bedrock_server`，
+     *     只需 `LD_LIBRARY_PATH=<serverDir>`。
+     *  2. **box64 转译**（官方发行版，x86_64）：在 PRoot Ubuntu 容器里用 box64 执行
+     *     私有目录里的运行副本（公共存储是 FUSE、noexec，不能就地执行）。
+     *     见 [startBdsViaBox64]。
+     *
+     * 两条路径共用同一套进程托管（[trackMcProcess] / [prepareMcLogFile] / 退出回调），
+     * 因为对上层来说它就是「一个子进程 + 日志落文件 + stdin 发控制台命令」。
+     *
+     * @param version 核心版本，用来定位按版本共享的可执行副本
+     */
+    fun startBds(dirName: String, version: String, onExit: (Int) -> Unit): Process = withLaunchLock {
+        startBdsImpl(dirName, version, onExit)
+    }
+
+    private fun startBdsImpl(dirName: String, version: String, onExit: (Int) -> Unit): Process {
+        Log.i(TAG, "startBds: dirName=$dirName version=$version")
+        mcProcess?.let { if (it.isAlive) return it }
+
+        val serverDir = serverDirFor(dirName)
+        val logFile = prepareMcLogFile(serverDir)
+        killOrphanMcProcess(serverDir)
+
+        val entry = File(serverDir, com.mineserve.mobile.server.BdsSupport.ENTRY_NAME)
+        if (!entry.isFile) throw RuntimeException("BDS 主程序缺失：${entry.absolutePath}")
+
+        // 架构决定路径：x86_64 官方发行版必须走容器 + box64
+        val check = com.mineserve.mobile.server.BdsSupport.checkLaunch(
+            serverDir,
+            android.os.Build.SUPPORTED_ABIS.toList()
+        )
+        if (check.needsBox64) {
+            return startBdsViaBox64(dirName, version, serverDir, logFile, onExit)
+        }
+
+        val cmd = "export PATH='/system/bin:/system/xbin'; " +
+            "export LD_LIBRARY_PATH='${serverDir.absolutePath}'; " +
+            "export HOME='${installer.rootDir.absolutePath}/home'; " +
+            "export TMPDIR='${installer.rootDir.absolutePath}/tmp'; " +
+            "cd '${serverDir.absolutePath}' && exec './${entry.name}'"
+
+        Log.i(TAG, "startBds command: $cmd")
+        val pb = ProcessBuilder("/system/bin/sh", "-c", cmd).apply {
+            redirectErrorStream(true)
+            directory(serverDir)
+            environment()["LD_LIBRARY_PATH"] = serverDir.absolutePath
+        }
+        val process = pb.start()
+        trackMcProcess(process, serverDir)
+
+        Thread({
+            var writer: java.io.BufferedWriter? = null
+            try {
+                writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
+                    java.io.FileOutputStream(logFile, true), Charsets.UTF_8), 8192)
+                val reader = process.inputStream.bufferedReader()
+                var line = reader.readLine()
+                var lineCount = 0
+                while (line != null) {
+                    executor.emit(line)
+                    writer.appendLine(line)
+                    if (++lineCount % 50 == 0) writer.flush()
+                    line = reader.readLine()
+                }
+                writer.flush()
+            } catch (e: Exception) {
+                Log.w(TAG, "bds stdout reader error: ${e.message}")
+            } finally {
+                runCatching { writer?.close() }
+            }
+        }, "bds-stdout-reader").start()
+
+        Thread({
+            val code = process.waitFor()
+            Log.w(TAG, "BDS process exited code=$code")
+            if (clearMcProcessIfCurrent(process)) onExit(code)
+        }, "bds-watch").start()
+        return process
+    }
+
+    // ── BDS：box64 转译路径（官方 x86_64 发行版） ────────────────
+
+    /**
+     * BDS 用的容器画像。
+     *
+     * **固定为 Jammy**，不跟随 [selectedProotDistro]。
+     *
+     * 以前这里跟随用户「给 Java 选的发行版」以共用同一个 rootfs（省掉一份 150MB 容器），
+     * 但内置 box64 是预编译 ELF，写死了 `GLIBC_2.32`–`GLIBC_2.35` 符号版本；
+     * 用户选 focal（glibc 2.31）时它连 main 都进不去，只会打印
+     * `version GLIBC_2.3x not found (required by .../box64)`。
+     *
+     * 共用省下的 150MB 换不来「能启动」，且失败点在对用户完全不可见的 proot 输出里，
+     * 所以这里改为硬约束：BDS 容器永远是 [BdsContainerDistro]。
+     *
+     * @see BdsBox64MinGlibc
+     */
+    fun bdsContainerProfile(): ProotContainerProfile = BdsContainerProfile
+
+    /**
+     * 准备 BDS 用的 glibc 容器（PRoot Ubuntu rootfs + proot 本身）。
+     *
+     * 只负责「容器能跑起来」，box64 的获取由
+     * [com.mineserve.mobile.server.BdsEnvironmentManager] 负责 —— 那里的下载是
+     * 多源 + 校验的，放进运行时类会把状态机和网络重试混在一起。
+     *
+     * @param onProgress 0..100，包含 rootfs 下载与解压
+     * @return 容器是否可用
+     */
+    suspend fun prepareBdsContainer(
+        profile: ProotContainerProfile,
+        onProgress: (Int) -> Unit = {}
+    ): Boolean = withContext(Dispatchers.IO) {
+        prepareUbuntuRuntime(profile) { pct -> onProgress(pct) }
+    }
+
+    /**
+     * 初始化收尾的实测：在容器里真正跑一次 box64。
+     *
+     * 只看「文件存在、架构是 aarch64」是不够的 —— 用户装的可能是缺库的包、
+     * 或者容器里 glibc 版本不满足要求，这些都会在第一次启动服务端时才炸，
+     * 而那时候用户已经离开环境页面，只会看到「服务器启动失败」。
+     *
+     * @return null 表示可用；否则是给用户看的原因
+     */
+    fun verifyBdsBox64(profile: ProotContainerProfile, bdsRoot: File): String? {
+        val guestRoot = com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT
+        val bind = "${bdsRoot.absolutePath}:$guestRoot"
+        val command = "export BOX64_NOBANNER=1; '$guestRoot/box64' -v 2>&1 | grep -qi box64"
+        // 120 秒：首次在容器里跑 box64 要先加载 glibc、建 DynaRec 缓存，
+        // 慢设备上 60 秒会让「装好了但自检超时」误判成失败。
+        val code = runUbuntu(command, 120_000, listOf(bind), profile)
+        if (code == 0) return null
+        val tail = executor.lastTail?.trim()?.takeLast(300)
+        return "容器内执行 box64 失败（exit=$code）" + if (tail.isNullOrBlank()) "" else "：$tail"
+    }
+
+    /** 极简 GET，只用于取 box64 的 Packages 文本（10KB 级） */
+    private fun httpGetText(url: String): String {
+        val connection = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
+            connectTimeout = 15_000
+            readTimeout = 30_000
+            instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "Minexa/1.0")
+        }
+        try {
+            connection.connect()
+            if (connection.responseCode !in 200..299) {
+                throw RuntimeException("HTTP ${connection.responseCode}（$url）")
+            }
+            return connection.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            connection.disconnect()
+        }
+    }
+
+    /**
+     * 在容器里用 box64 启动 BDS。
+     *
+     * 为什么不能 `cd 服务器目录 && ./bedrock_server`：公共存储是 FUSE 且带 `noexec`，
+     * 244MB 的主程序既没有执行位、也无法被 mmap 成可执行段。因此：
+     *
+     *  - 主程序先复制到 `<私有目录>/var/lib/mineserve/bds/payload/<版本>/`（真实文件系统），
+     *    同一个 BDS 版本只复制一次；
+     *  - 每个服务器一个 run 目录，里面用**符号链接**指向那份共享副本，再额外铺
+     *    `definitions` / `resource_packs` 等内容的回链（见 [BdsRuntime.prepareRunDir]）；
+     *  - 工作目录仍是服务器目录，所以 `server.properties`、`worlds/`、`logs/`
+     *    全部落在用户看得到的地方，备份/文件管理/端口同步一行都不用改。
+     */
+    private fun startBdsViaBox64(
+        dirName: String,
+        version: String,
+        serverDir: File,
+        logFile: File,
+        onExit: (Int) -> Unit
+    ): Process {
+        val profile = bdsContainerProfile()
+        val prefix = installer.rootDir
+        val box64 = com.mineserve.mobile.server.BdsRuntime.box64Binary(prefix)
+        if (!box64.isFile) {
+            throw RuntimeException(
+                "BDS 专属运行环境未初始化。请先到「依赖与环境管理 → BDS」点「初始化环境」"
+            )
+        }
+        // 容器可能在初始化之后被单独删掉（例如用户清理存储，或换了发行版）。
+        // 这时环境标记还在，但 proot 一定起不来 —— 提前说清楚，别让用户对着
+        // 一句晦涩的 proot 报错自己猜。
+        if (!containerRootfsReady(profile)) {
+            throw RuntimeException(
+                "BDS 运行环境所需的 ${profile.distro.displayName} 容器已不存在。" +
+                    "请到「依赖与环境管理 → BDS」重新初始化"
+            )
+        }
+        emitLog("[bds] 正在准备可执行副本（公共存储不可执行，需复制到应用私有目录）")
+        var lastPercent = -1
+        val payload = com.mineserve.mobile.server.BdsRuntime.stageEntry(
+            serverDir = serverDir,
+            version = version,
+            payloadDir = com.mineserve.mobile.server.BdsRuntime.payloadDir(prefix, version)
+        ) { done, total ->
+            if (total > 0) {
+                val percent = (done * 100 / total).toInt()
+                if (percent / 10 != lastPercent / 10) {
+                    lastPercent = percent
+                    emitLog("[bds] 复制 bedrock_server $percent%")
+                }
+            }
+        }
+        val runDir = com.mineserve.mobile.server.BdsRuntime.runDir(prefix, dirName)
+        com.mineserve.mobile.server.BdsRuntime.prepareRunDir(
+            serverDir = serverDir,
+            runDir = runDir,
+            payloadEntry = payload,
+            guestServerDir = GUEST_SERVER_DIR
+        )
+
+        val guestBox64 = "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/box64"
+        val guestEntry = "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/run/$dirName/" +
+            com.mineserve.mobile.server.BdsRuntime.ENTRY_NAME
+        // BOX64_NOBANNER：BDS 的日志里不需要 box64 自己的横幅
+        //
+        // **BOX64_LD_LIBRARY_PATH 是关键**（不能写成 LD_LIBRARY_PATH）：
+        //  - 官方 bedrock_server 是**动态链接**的 x86_64 程序，DT_NEEDED 里是
+        //    libc.so.6 / libm.so.6 / libpthread.so.0 / libdl.so.2 / librt.so.1 /
+        //    libgcc_s.so.1 / ld-linux-x86-64.so.2，全部是 x86_64 架构的 glibc 运行库；
+        //    box64 只翻译指令，库要自己给，缺了就是
+        //    `Error loading needed libs in elf .../bedrock_server` + exit=255。
+        //  - 这些库**绝对不能**塞进给 box64 进程自己的 LD_LIBRARY_PATH：box64 是
+        //    aarch64 glibc 程序，它的 libc.so.6 会被我们这份 x86_64 的顶掉，
+        //    直接 `wrong ELF class` 起不来。BOX64_LD_LIBRARY_PATH 只影响它给
+        //    被翻译程序找库的顺序，正是这里要的语义。
+        //  - 顺序：内置 x86 库 → 服务器目录（老版本 BDS 把 libCrypto/libssl 放在
+        //    服务端目录里）→ 运行目录（符号链接那一层）。
+        val guestLibs = "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/x86libs"
+        // BOX64_RCFILE：box64 默认只读 /etc/box64.box64rc 与 ~/.box64rc，
+        // 我们解包出来的那份在 bind 目录里，必须显式指路，否则分支调优全部不生效。
+        val rcFile = com.mineserve.mobile.server.BdsRuntime.box64rcFile(prefix)
+        val rcExport = if (rcFile.isFile) {
+            "export BOX64_RCFILE='${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/${rcFile.name}'; "
+        } else ""
+        val libExport = "export BOX64_LD_LIBRARY_PATH='$guestLibs:$GUEST_SERVER_DIR:" +
+            "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/run/$dirName'; "
+        val command = libExport +
+            "export BOX64_NOBANNER=1; " +
+            rcExport +
+            "cd '$GUEST_SERVER_DIR' && exec '$guestBox64' '$guestEntry'"
+
+        val rootfs = containerRootfs(profile)
+        val prootTmp = profile.prootTmpDir(prefix).apply {
+            mkdirs()
+            setReadable(true, false)
+            setWritable(true, false)
+            setExecutable(true, false)
+        }
+        val sharedMemory = File(rootfs, "tmp").apply {
+            mkdirs()
+            setReadable(true, false)
+            setWritable(true, false)
+            setExecutable(true, false)
+        }
+        val resolver = prepareUbuntuDns(
+            rootfs,
+            profile.hostResolvConf(prefix),
+            "${profile.distro.dirName}-resolv.conf"
+        )
+        /*
+         * CA 根证书：Ubuntu Base 的最小 rootfs 常常没有 ca-certificates，
+         * 在线模式（online-mode=true）要靠 libcurl 走 HTTPS 连微软认证服务，
+         * 没根证书就校验不了 → 挂 60 秒后报 `Could not connect to Minecraft services`，
+         * 与「被墙」的现象一模一样（2026-10-31 真机踩过）。
+         */
+        val caCount = com.mineserve.mobile.server.BdsRuntime.ensureGuestCaBundle(rootfs)
+        when {
+            caCount > 0 -> emitLog("[bds] 已为容器补入 $caCount 个 CA 根证书（在线模式需要）")
+            caCount == 0 -> emitLog("[bds] 警告：容器缺 CA 根证书且未能补入，在线模式会连不上微软服务")
+        }
+        val caEnv = if (com.mineserve.mobile.server.BdsRuntime.guestCaBundle(rootfs).isFile) {
+            listOf(
+                // 显式指路：不同发行版 OpenSSL 编译期默认路径不一致，靠环境变量最稳
+                "SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt",
+                "CURL_CA_BUNDLE=/etc/ssl/certs/ca-certificates.crt",
+                "SSL_CERT_DIR=/etc/ssl/certs"
+            )
+        } else emptyList()
+        val proot = listOf(
+            File(prefix, "bin/proot"),
+            File(prefix, "usr/bin/proot")
+        ).firstOrNull { it.isFile && it.canExecute() }
+            ?: throw RuntimeException("proot is not available")
+        val bdsRoot = com.mineserve.mobile.server.BdsRuntime.rootDir(prefix)
+        val process = ProcessBuilder(
+            "/system/bin/sh", "-c",
+            "export PROOT_TMP_DIR='${prootTmp.absolutePath}'; " +
+                "export TMPDIR='${prootTmp.absolutePath}'; exec " +
+                listOf(
+                    proot.absolutePath, "--kill-on-exit", "--link2symlink", "--sysvipc", "-L", "--change-id=0:0",
+                    "--rootfs=${rootfs.absolutePath}", "--cwd=/root",
+                    "--bind=/dev", "--bind=/proc", "--bind=/sys", "--bind=/dev/urandom:/dev/random",
+                    "--bind=${sharedMemory.absolutePath}:/dev/shm",
+                    "--bind=${resolver.absolutePath}:/etc/resolv.conf",
+                    "--bind=${bdsRoot.absolutePath}:${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}",
+                    "--bind=${serverDir.absolutePath}:$GUEST_SERVER_DIR",
+                    "/usr/bin/env", "-i",
+                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                    "HOME=/root", "TMPDIR=/tmp", "LANG=C.UTF-8", "DEBIAN_FRONTEND=noninteractive",
+                    *caEnv.toTypedArray(),
+                    (systemTimeZoneId()?.let { "TZ=$it" } ?: "TZ=UTC"),
+                    "/bin/sh", "-lc", command
+                ).joinToString(" ") { shellQuote(it) }
+        ).apply {
+            redirectErrorStream(true)
+            directory(serverDir)
+            environment().putAll(executor.termuxEnv())
+            environment()["PROOT_TMP_DIR"] = prootTmp.absolutePath
+            environment()["TMPDIR"] = prootTmp.absolutePath
+        }.start()
+        // BDS 没有 -jar / -cp，只是「cd 到服务器目录后 exec 一个可执行文件」，
+        // 所以关掉「能看出启动哪个服务端」的那条检查，其余（exec 前缀、不被截断）照旧。
+        assertLaunchCommandComplete(command, "startBdsViaBox64", requireLauncherMarker = false)
+        Log.i(TAG, "startBdsViaBox64 command: $command")
+        emitLog("[bds] 正在以 box64 转译启动 BDS ${version}（首次启动较慢，转译执行性能低于原生）")
+        // box64 在 preload 阶段会对个别可选库打印 "Error: Loading needed libs in elf ..."，
+        // 只要后面出现 "Starting Server" 就是正常启动（这句话曾让用户以为启动失败）。
+        emitLog("[bds] 若见到 box64 的 Loading needed libs 提示可忽略，以出现 Starting Server 为准")
+        trackMcProcess(process, serverDir)
+
+        Thread({
+            var writer: java.io.BufferedWriter? = null
+            try {
+                writer = java.io.BufferedWriter(java.io.OutputStreamWriter(
+                    java.io.FileOutputStream(logFile, true), Charsets.UTF_8), 8192)
+                val reader = process.inputStream.bufferedReader()
+                var line = reader.readLine()
+                var lineCount = 0
+                while (line != null) {
+                    executor.emit(line)
+                    writer.appendLine(line)
+                    if (++lineCount % 50 == 0) writer.flush()
+                    line = reader.readLine()
+                }
+                writer.flush()
+            } catch (e: Exception) {
+                Log.w(TAG, "bds(box64) stdout reader error: ${e.message}")
+            } finally {
+                runCatching { writer?.close() }
+            }
+        }, "bds-box64-stdout-reader").start()
+
+        Thread({
+            val code = process.waitFor()
+            Log.w(TAG, "BDS(box64) process exited code=$code")
+            if (clearMcProcessIfCurrent(process)) onExit(code)
+        }, "bds-box64-watch").start()
+        return process
+    }
+
+    // ── BDS 网络自检（在线模式排障） ──────────────────────────────
+
+    /**
+     * 在 BDS 用的**同一个** PRoot 容器里做一次出网自检。
+     *
+     * 存在意义：`online-mode=true` 时 BDS 只给一句 `Could not connect to Minecraft
+     * services`，看不出是 DNS 污染、TCP 被拦、还是容器缺 CA。这三段的判据完全不同，
+     * 猜错方向会白折腾（用户开着代理却依然失败，就是分不清是哪一段断的）。
+     *
+     * 只依赖 Ubuntu Base 自带的工具（getent / coreutils timeout / bash 的 `/dev/tcp`），
+     * 不假设容器里装过 curl 或 openssl。
+     *
+     * @return 逐行输出（调用方原样打进控制台）
+     */
+    suspend fun probeBdsNetwork(dirName: String?): List<String> = withContext(Dispatchers.IO) {
+        val profile = bdsContainerProfile()
+        val prefix = installer.rootDir
+        val rootfs = containerRootfs(profile)
+        if (!containerRootfsReady(profile)) {
+            return@withContext listOf("容器未就绪：请先在「依赖与环境管理 → BDS」初始化环境")
+        }
+        val proot = listOf(File(prefix, "bin/proot"), File(prefix, "usr/bin/proot"))
+            .firstOrNull { it.isFile && it.canExecute() }
+            ?: return@withContext listOf("proot 不可用：请重新初始化 BDS 环境")
+
+        val prootTmp = profile.prootTmpDir(prefix).apply { mkdirs() }
+        val sharedMemory = File(rootfs, "tmp").apply { mkdirs() }
+        val resolver = prepareUbuntuDns(
+            rootfs,
+            profile.hostResolvConf(prefix),
+            "${profile.distro.dirName}-resolv.conf"
+        )
+        // 自检顺便把 CA 补上：真机实测容器里 ca-certificates.crt 不存在，
+        // 而在线模式的 TLS 校验必须靠它（详见 ensureGuestCaBundle 的注释）。
+        val caPems = com.mineserve.mobile.server.BdsRuntime.ensureGuestCaBundle(rootfs)
+
+        // 用 IP 直连而不是域名：否则 `/dev/tcp` 会自己再解析一次，DNS 失败会
+        // 被伪装成 TCP 失败，正好把要区分的东西混在一起。
+        val script = """
+            echo "容器时间: ${'$'}(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+            echo "DNS 配置:"
+            sed 's/^/  /' /etc/resolv.conf 2>/dev/null || echo "  (读不到 /etc/resolv.conf)"
+            if [ -s /etc/ssl/certs/ca-certificates.crt ]; then
+              echo "CA 证书: ${'$'}(wc -c < /etc/ssl/certs/ca-certificates.crt) 字节"
+            else
+              echo "CA 证书: 缺失"
+            fi
+            for h in api.minecraftservices.com user.auth.xboxlive.com xsts.auth.xboxlive.com multiplayer.minecraft.net; do
+              ip=${'$'}(getent ahostsv4 "${'$'}h" 2>/dev/null | awk 'NR==1{print ${'$'}1}')
+              if [ -z "${'$'}ip" ]; then
+                ip=${'$'}(getent hosts "${'$'}h" 2>/dev/null | awk 'NR==1{print ${'$'}1}')
+              fi
+              if [ -z "${'$'}ip" ]; then
+                echo "DNS 失败: ${'$'}h"
+                continue
+              fi
+              echo "DNS ok: ${'$'}h -> ${'$'}ip"
+              if timeout 8 bash -c "exec 3<>/dev/tcp/${'$'}ip/443" 2>/dev/null; then
+                echo "TCP ok: ${'$'}h:443"
+              else
+                echo "TCP 失败: ${'$'}h:443"
+              fi
+            done
+        """.trimIndent()
+
+        val args = mutableListOf(
+            proot.absolutePath, "--kill-on-exit", "--link2symlink", "--sysvipc", "-L", "--change-id=0:0",
+            "--rootfs=${rootfs.absolutePath}", "--cwd=/root",
+            "--bind=/dev", "--bind=/proc", "--bind=/sys", "--bind=/dev/urandom:/dev/random",
+            "--bind=${sharedMemory.absolutePath}:/dev/shm",
+            "--bind=${resolver.absolutePath}:/etc/resolv.conf"
+        )
+        dirName?.let { name ->
+            val serverDir = serverDirFor(name)
+            if (serverDir.isDirectory) args += "--bind=${serverDir.absolutePath}:$GUEST_SERVER_DIR"
+        }
+        args += listOf(
+            "/usr/bin/env", "-i",
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOME=/root", "TMPDIR=/tmp", "LANG=C.UTF-8",
+            "/bin/sh", "-lc", script
+        )
+
+        val process = try {
+            ProcessBuilder(
+                "/system/bin/sh", "-c",
+                "export PROOT_TMP_DIR='${prootTmp.absolutePath}'; " +
+                    "export TMPDIR='${prootTmp.absolutePath}'; exec " +
+                    args.joinToString(" ") { shellQuote(it) }
+            ).apply {
+                redirectErrorStream(true)
+                environment().putAll(executor.termuxEnv())
+                environment()["PROOT_TMP_DIR"] = prootTmp.absolutePath
+                environment()["TMPDIR"] = prootTmp.absolutePath
+            }.start()
+        } catch (e: Exception) {
+            return@withContext listOf("自检启动失败：${e.message}")
+        }
+
+        val lines = java.util.Collections.synchronizedList(mutableListOf<String>())
+        val reader = Thread {
+            runCatching {
+                process.inputStream.bufferedReader().forEachLine { line ->
+                    if (line.isNotBlank()) lines.add(line.trim())
+                }
+            }
+        }.apply { isDaemon = true; start() }
+
+        val finished = runCatching {
+            process.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
+        }.getOrDefault(false)
+        if (!finished) {
+            runCatching { process.destroy() }
+            lines.add("自检超时（120s），已中止")
+        }
+        reader.join(3000)
+        val out = lines.toList().toMutableList()
+        out += if (caPems > 0) {
+            "CA 修复: 已从系统根证书补入 $caPems 个（容器原先缺失）"
+        } else if (caPems == 0) {
+            "CA 修复: 系统里也没找到根证书，无法补入"
+        } else {
+            "CA 修复: 已有可用 bundle，未改动"
+        }
+        /*
+         * TLS 握手单独测一次（在 App 进程里用 JSSE）。
+         *
+         * 为什么 TCP 通了还要测：GFW 对部分域名是**放行 SYN、掐 TLS 的 SNI**，
+         * `/dev/tcp` 只能看到 443 通，看不到后面被重置。这一条能把它区分出来。
+         */
+        for (host in TLS_PROBE_HOSTS) {
+            val result = probeTlsHandshake(host)
+            out += if (result == "ok") "TLS ok: $host" else "TLS 失败: $host（$result）"
+        }
+        out.toList()
+    }
+
+    /** 对单个域名做一次真实的 TLS 握手（带 SNI），返回 "ok" 或失败原因 */
+    private fun probeTlsHandshake(host: String, timeoutMs: Int = 8000): String {
+        val socket = try {
+            (javax.net.ssl.SSLSocketFactory.getDefault().createSocket()) as javax.net.ssl.SSLSocket
+        } catch (e: Exception) {
+            return "无法创建 TLS 套接字：${e.message}"
+        }
+        return try {
+            socket.soTimeout = timeoutMs
+            socket.connect(java.net.InetSocketAddress(host, 443), timeoutMs)
+            socket.sslParameters = socket.sslParameters.apply {
+                serverNames = listOf(javax.net.ssl.SNIHostName(host))
+            }
+            socket.startHandshake()
+            "ok"
+        } catch (e: Exception) {
+            (e.message ?: e.javaClass.simpleName).take(80)
+        } finally {
+            runCatching { socket.close() }
+        }
+    }
+
+    /** 在线模式启动时 BDS 一定会碰的四个域名 */
+    private val TLS_PROBE_HOSTS = listOf(
+        "api.minecraftservices.com",
+        "user.auth.xboxlive.com",
+        "xsts.auth.xboxlive.com",
+        "multiplayer.minecraft.net"
+    )
+
+    /**
      * 使用完全自定义命令启动 MC 服务端（高级选项：完全自定义启动命令模式）。
      * 直接执行用户提供的完整 shell 命令，不进行任何自动拼接。
      */
@@ -4169,9 +4800,29 @@ class TermuxRuntime(context: Context) {
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
                 var lineCount = 0
+                var quitGuardArmed = false
                 while (line != null) {
                     executor.emit(line)
                     writer.appendLine(line)
+
+                    // BDS 打完 "Quit correctly" 就 exit(0)。个别设备上 proot/box64 的
+                    // 回收会卡住，进程挂着不退 —— 表现为服务端明明停了、UI 永远停在
+                    // "启动中"（等 300s 超时）。这里兜一手：8 秒还活着就强制收尾。
+                    if (!quitGuardArmed && line.contains("Quit correctly", ignoreCase = true)) {
+                        quitGuardArmed = true
+                        executor.emit("[bds] 服务端已正常退出")
+                        Thread({
+                            try {
+                                Thread.sleep(8000)
+                            } catch (e: InterruptedException) {
+                                return@Thread
+                            }
+                            if (process.isAlive) {
+                                runCatching { executor.emit("[bds] 进程未自行退出，已强制结束") }
+                                runCatching { process.destroy() }
+                            }
+                        }, "bds-quit-guard").start()
+                    }
                     if (++lineCount % 50 == 0) writer.flush()
                     line = reader.readLine()
                 }
@@ -4211,6 +4862,9 @@ class TermuxRuntime(context: Context) {
     /** 标记"用户主动请求停止"，供崩溃判定区分「主动停」与「真崩溃」。 */
     fun markUserStopRequested() {
         lastUserStopRequestAtMs = System.currentTimeMillis()
+        // 用户明确要停：立刻收起「启动在途」的保护，
+        // 否则看门狗会因为保护期而迟迟不敢把状态切成已停止。
+        clearStartInFlight()
     }
 
     /** 新一次启动时清掉标记，否则本轮真实崩溃会被误判成正常停止而漏报。 */
@@ -4235,6 +4889,62 @@ class TermuxRuntime(context: Context) {
      */
     @Volatile
     private var startGeneration: Long = 0L
+
+    /**
+     * 「启动在途」窗口起点（毫秒时间戳，0 表示没有启动在进行）。
+     *
+     * 为什么需要它：`McServerController.start()` 的准备阶段可能长达数分钟
+     * （装依赖、修 rootfs、下载核心、切 Java），这期间**进程还没 spawn**，
+     * [isMcRunning] 必然返回 false。前台服务的看门狗只会看 `/proc`，
+     * 于是它按「进程不在 ⇒ 已停止」把 isRunning 改回 false ——
+     * UI 上就出现「点启动后闪一下已停止，过一会儿又变回启动中」。
+     *
+     * 现在由 [markStartInFlight] / [clearStartInFlight] 圈出这段窗口，
+     * 期间所有「进程不在就判停止」的逻辑都必须让位（见 McForegroundService 的看门狗）。
+     */
+    @Volatile
+    private var startInFlightAtMs = 0L
+
+    /**
+     * 撤掉在途标记后的缓冲期终点。
+     *
+     * 进程刚 spawn 的几百毫秒里，[mcProcess] 可能还没登记完（另一条线程正在锁内 track），
+     * 此刻探一次就是「不在」；给一小段缓冲期，避免这次误判把状态又打回已停止。
+     */
+    @Volatile
+    private var startupGraceUntilMs = 0L
+
+    /** 在途窗口的兜底上限：超过这么久还没 spawn，就不再拦着看门狗（多半是真卡死了）。 */
+    private val START_IN_FLIGHT_MAX_MS = 15 * 60_000L
+
+    /** 撤标记后的缓冲期。 */
+    private val STARTUP_GRACE_MS = 6_000L
+
+    /** 标记「一次启动正在进行中」；[McServerController.start] 进入准备阶段时调用。 */
+    fun markStartInFlight() {
+        startInFlightAtMs = System.currentTimeMillis()
+        startupGraceUntilMs = 0L
+    }
+
+    /** 撤掉在途标记，同时开一小段缓冲期（见 [startupGraceUntilMs]）。 */
+    fun clearStartInFlight() {
+        if (startInFlightAtMs == 0L) return
+        startInFlightAtMs = 0L
+        startupGraceUntilMs = System.currentTimeMillis() + STARTUP_GRACE_MS
+    }
+
+    /**
+     * 是否处在「启动尚未落地」的阶段：在途窗口内，或刚 spawn 完的缓冲期内。
+     *
+     * 处于该阶段时，**不能**因为「进程不在」就把服务器状态改成已停止。
+     */
+    fun isStartupPending(): Boolean {
+        val startedAt = startInFlightAtMs
+        if (startedAt != 0L && System.currentTimeMillis() - startedAt < START_IN_FLIGHT_MAX_MS) {
+            return true
+        }
+        return System.currentTimeMillis() < startupGraceUntilMs
+    }
 
     /** 用户发起的启动请求：递增代际并返回本次启动的代际号。 */
     fun beginStartRequest(): Long {
@@ -4813,7 +5523,7 @@ class TermuxRuntime(context: Context) {
      * 返回快照文件路径，失败返回 null。
      */
     fun createSnapshot(maxSnapshots: Int = 0, dirName: String = "default"): String? {
-        val serverDir = File(installer.rootDir, "home/servers/$dirName")
+        val serverDir = serverDirFor(dirName)
         // MC 1.16+ 维度目录与 world 平级：world / world_nether / world_the_end
         val worlds = listOf("world", "world_nether", "world_the_end", "worlds")
             .map { File(serverDir, it) }
@@ -4887,6 +5597,16 @@ class TermuxRuntime(context: Context) {
         private const val TAG = "TermuxRuntime"
 
         /**
+         * `-XX:MaxMetaspaceSize` 的下限（MB）。
+         *
+         * 实际取值是 `max(768, -Xmx)`。设下限是因为：
+         * 1. 原版/小型插件服只需要几十 MB，768m 只是天花板，不会被实际占用；
+         * 2. 大型 Forge 整合包（200+ mod）实测需要 1GB 级别，256m 必崩。
+         * 见 [memoryFootprintArgs] 的说明。**不要**再降回 256m。
+         */
+        private const val METASPACE_FLOOR_MB = 768
+
+        /**
          * 宿主服务端目录在 PRoot 来宾里的挂载点。
          *
          * 整个方案的关键约定：`--bind=<宿主 serverDir>:/srv/mineserve`
@@ -4906,6 +5626,15 @@ class TermuxRuntime(context: Context) {
          * 应用往里 append 会出现每行两份。
          */
         private const val MC_CONSOLE_LOG_NAME = "logs/mineserve-console.log"
+
+        /**
+         * 按偏移增量读日志时最多回看的字节数。
+         *
+         * 「清除」之后可能隔很久才回到终端页，这段时间的增量可能有几十 MB，
+         * 而界面只要最后几百行。窗口之外的内容读进来也会被 takeLast 丢掉，
+         * 白白占一次 IO 与内存。
+         */
+        private const val LOG_TAIL_WINDOW_BYTES = 256L * 1024L
 
         /**
          * 用户手动点「停止」后等待服务端自行退出的时长。
@@ -5022,8 +5751,32 @@ private val PROOT_CRASH_MARKERS = listOf(
     "Segmentation fault"
 )
 
+/**
+ * 容器可用性探针。只判断「能进容器、shell 可执行」，不碰网络与 apt。
+ */
+private const val SHELL_PROBE = "test -x /bin/sh && exit 0"
+
+/**
+ * 探针的超时。
+ *
+ * 原来给 60 秒，在真机上太紧：刚解压出来的 rootfs 有上万个小文件，proot 首次
+ * 进入要逐个处理 `--link2symlink` 与 ptrace 初始化，慢设备上超过一分钟很常见。
+ * 一旦超时就会把**刚装好的** rootfs 判为不可用，于是重建、再超时、再重建 ——
+ * 用户看到的就是「进度条停在部署阶段不动」。给到 3 分钟能覆盖真实设备。
+ */
+private const val ROOTFS_PROBE_TIMEOUT_MS = 180_000L
+
 /** 容器内装 JDK 需要的最小可用空间（MB）：openjdk-21-jdk 解包 ~500MB + apt 缓存 + 依赖。 */
 internal const val CONTAINER_INSTALL_MIN_FREE_MB = 1536
+
+/**
+ * BDS 运行环境需要的最小可用空间（MB）。
+ *
+ * box64 解包后约 30MB，`bedrock_server` 的运行副本约 244MB（1.21+ 是静态链接的
+ * 单文件），再加压缩包与临时文件。空间不够时复制会在中途失败，
+ * 用户只会看到「启动失败」，所以在开始前就拦下来。
+ */
+internal const val BDS_RUNTIME_MIN_FREE_MB = 600
 
 /**
  * 把容器安装的退出码翻成用户能照做的提示。

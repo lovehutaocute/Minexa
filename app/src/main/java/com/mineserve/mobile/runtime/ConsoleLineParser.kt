@@ -49,7 +49,12 @@ data class ConsoleSignals(
  */
 object ConsoleLineParser {
 
-    private val PLAYERS_REGEX = Regex("There are (\\d+) of a max of (\\d+) players online")
+    /**
+     * 玩家数：Java 版与官方 BDS 的措辞不同，同一条正则一起收。
+     *  - Java：`There are 3 of a max of 20 players online:`
+     *  - BDS ：`There are 3/10 players online:`
+     */
+    private val PLAYERS_REGEX = Regex("There are (\\d+)(?: of a max of |\\s*/\\s*)(\\d+) players online")
     private val TPS_REGEX = Regex("TPS from last 1m.*?:\\s*([\\d.]+)")
 
     /** 命中玩家数/就绪/TPS 判定所必需的廉价子串。 */
