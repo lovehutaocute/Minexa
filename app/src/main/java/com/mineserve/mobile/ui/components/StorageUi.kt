@@ -158,7 +158,11 @@ fun LegacyMigrationDialog(
     progressTotal: Int,
     progressName: String,
     onMigrate: () -> Unit,
-    onLater: () -> Unit
+    onLater: () -> Unit,
+    /** 上次失败仅因个别源文件读不出来：多给一个「忽略这些文件继续」的出口 */
+    canSkipFailed: Boolean = false,
+    lastError: String? = null,
+    onMigrateSkippingUnreadable: () -> Unit = {}
 ) {
     if (candidates.isEmpty() && !running) return
     AlertDialog(
@@ -207,16 +211,36 @@ fun LegacyMigrationDialog(
                         color = Indigo, fontSize = 11.sp
                     )
                 }
+                // 上次失败的原因 + 「忽略无法读取的文件」出口。
+                // 不显示原因时用户只能看到一句「迁移完成 0 个」，完全不知道卡在哪个文件。
+                if (!running && lastError != null) {
+                    Spacer(Modifier.height(10.dp))
+                    Text(lastError, color = Coral, fontSize = 11.sp, lineHeight = 16.sp)
+                }
+                if (!running && canSkipFailed) {
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        stringResource(R.string.legacy_migrate_skip_hint),
+                        color = Muted, fontSize = 11.sp, lineHeight = 16.sp
+                    )
+                }
             }
         },
         confirmButton = {
-            TextButton(onClick = onMigrate, enabled = !running) {
-                Text(
-                    if (running) stringResource(R.string.legacy_migrate_running)
-                    else stringResource(R.string.legacy_migrate_confirm),
-                    color = if (running) Muted else Indigo,
-                    fontWeight = FontWeight.SemiBold
-                )
+            Row {
+                if (!running && canSkipFailed) {
+                    TextButton(onClick = onMigrateSkippingUnreadable) {
+                        Text(stringResource(R.string.legacy_migrate_skip_confirm), color = Coral, fontSize = 13.sp)
+                    }
+                }
+                TextButton(onClick = onMigrate, enabled = !running) {
+                    Text(
+                        if (running) stringResource(R.string.legacy_migrate_running)
+                        else stringResource(R.string.legacy_migrate_confirm),
+                        color = if (running) Muted else Indigo,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
             }
         },
         dismissButton = {

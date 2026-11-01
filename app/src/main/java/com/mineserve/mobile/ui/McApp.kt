@@ -212,7 +212,10 @@ fun McApp() {
         progressTotal = legacyMigration.progressTotal,
         progressName = legacyMigration.progressName,
         onMigrate = { vm.runLegacyMigration() },
-        onLater = { vm.dismissLegacyMigration() }
+        onLater = { vm.dismissLegacyMigration() },
+        canSkipFailed = legacyMigration.canSkipFailed,
+        lastError = legacyMigration.lastError,
+        onMigrateSkippingUnreadable = { vm.runLegacyMigration(skipUnreadable = true) }
     )
     // 更新通知点击 → 打开更新对话框
     LaunchedEffect(McApplication.get().openUpdateRequest.value) {
@@ -315,7 +318,7 @@ fun McApp() {
                             onNavigateProperties = { navigate(SubPage.Properties) },
                             onNavigateOpGuide = { navigate(SubPage.OpLevelGuide) }
                         )
-                        McTab.Files -> FileManagerScreen(vm = vm, onOpenMtGuide = { navigate(SubPage.MtGuide) })
+                        McTab.Files -> FileManagerScreen(vm = vm)
                         McTab.Terminal -> TerminalScreen(vm = vm)
                         McTab.Settings -> SettingsScreen(
                             vm = vm,

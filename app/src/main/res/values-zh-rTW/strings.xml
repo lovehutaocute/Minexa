@@ -1582,6 +1582,52 @@
     <string name="set_max_heap_range_hint">記憶體上限需在 256–65536 MB 之間，已自動調整。</string>
     <string name="fm_new_dir_invalid_name">名稱不能包含斜槓、反斜槓或 .. ，且首尾不能為空白。</string>
 
+    <!-- 檔案管理：圖示工具列與項目操作 -->
+    <string name="fm_action_root">返回根目錄</string>
+    <string name="fm_action_new_file">新增檔案</string>
+    <string name="fm_action_sort">排序</string>
+    <string name="fm_sort_name">名稱</string>
+    <string name="fm_sort_time">修改時間</string>
+    <string name="fm_sort_size">大小</string>
+    <string name="fm_action_hidden_on">顯示隱藏檔案</string>
+    <string name="fm_action_hidden_off">不顯示隱藏檔案</string>
+    <string name="fm_all_hidden">目前目錄只有隱藏檔案，點工具列的「眼睛」圖示可顯示。</string>
+    <string name="fm_action_select">多選</string>
+    <string name="fm_selected_count">已選 %1$d 項</string>
+    <string name="fm_select_all">全選</string>
+    <string name="fm_select_exit">退出多選</string>
+    <string name="fm_delete_selected">刪除所選</string>
+    <string name="fm_more">更多操作</string>
+    <string name="fm_rename">重新命名</string>
+    <string name="fm_copy">複製</string>
+    <string name="fm_paste">貼到此處</string>
+    <string name="fm_copy_path">複製路徑</string>
+    <string name="fm_detail">屬性</string>
+    <string name="fm_new_file_name">檔案名稱</string>
+    <string name="fm_create_file">建立檔案</string>
+    <string name="fm_path_copied">路徑已複製</string>
+    <string name="fm_copied_src">已記下「%1$s」，進入目標目錄後點「貼到此處」</string>
+    <string name="fm_clipboard_empty">剪貼簿為空，請先對檔案選擇「複製」</string>
+    <string name="fm_delete_batch_title">刪除所選項目</string>
+    <string name="fm_delete_batch_msg">將永久刪除 %1$d 項內容，此操作不可復原。</string>
+    <string name="fm_prop_type">類型</string>
+    <string name="fm_prop_size">大小</string>
+    <string name="fm_prop_modified">修改時間</string>
+    <string name="fm_prop_path">完整路徑</string>
+    <string name="fm_type_folder">資料夾</string>
+    <string name="fm_type_file">檔案</string>
+    <string name="fm_renamed">已重新命名為 %1$s</string>
+    <string name="fm_rename_failed">重新命名失敗: %1$s</string>
+    <string name="fm_name_exists">同名項目已存在: %1$s</string>
+    <string name="fm_created">已建立 %1$s</string>
+    <string name="fm_create_failed">建立失敗: %1$s</string>
+    <string name="fm_copied_to">已複製到 %1$s</string>
+    <string name="fm_copy_failed">複製失敗: %1$s</string>
+    <string name="fm_deleted_count">已刪除 %1$d 項</string>
+    <string name="fm_delete_failed_count">%1$d 項刪除失敗</string>
+    <string name="fm_deleted_partial">已刪除 %1$d 項，%2$d 項失敗</string>
+    <string name="fm_copy_into_self">不能把資料夾複製到它自己內部</string>
+
     <!-- FTP：匿名访问风险提示 -->
     <string name="ftp_anonymous_risk">風險提示：匿名使用者無需密碼即可訪問並修改伺服器目錄，請僅在可信局域網內開啟。</string>
 
@@ -2060,6 +2106,11 @@
     <string name="legacy_migrate_later">以後再說</string>
     <string name="legacy_migrate_done">已遷移 %1$d 個伺服器到統一儲存目錄</string>
     <string name="legacy_migrate_partial">遷移完成 %1$d 個，失敗：%2$s（失敗項仍保留在舊目錄，下次啟動會再次提示）</string>
+    <string name="legacy_migrate_skip_hint">可以忽略這些無法讀取的檔案繼續遷移，其餘檔案會完整搬過來；被忽略的檔案會隨舊目錄一併刪除。</string>
+    <string name="legacy_migrate_skip_confirm">忽略並繼續</string>
+    <string name="legacy_migrate_skipped">已略過 %1$d 個無法讀取的檔案（%2$s）</string>
+    <string name="files_no_permission">未取得儲存權限，無法讀取目錄。請點上方「去授權」完成授權後重試。</string>
+    <string name="files_root_missing">目錄尚未建立：%1$s（下載或匯入伺服器後會自動建立）</string>
 
     <!-- BDS 专属运行环境 -->
     <string name="env_tab_bds">BDS</string>

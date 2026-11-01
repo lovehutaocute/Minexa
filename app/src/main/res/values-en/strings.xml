@@ -1196,6 +1196,52 @@
     <string name="set_max_heap_range_hint">Max heap must be between 256 and 65536 MB. Adjusted automatically.</string>
     <string name="fm_new_dir_invalid_name">The name cannot contain slashes, backslashes or .., and cannot start or end with spaces.</string>
 
+    <!-- File manager: icon toolbar & entry actions -->
+    <string name="fm_action_root">Back to root</string>
+    <string name="fm_action_new_file">New file</string>
+    <string name="fm_action_sort">Sort</string>
+    <string name="fm_sort_name">Name</string>
+    <string name="fm_sort_time">Modified</string>
+    <string name="fm_sort_size">Size</string>
+    <string name="fm_action_hidden_on">Show hidden files</string>
+    <string name="fm_action_hidden_off">Hide hidden files</string>
+    <string name="fm_all_hidden">This folder contains only hidden files. Tap the eye icon in the toolbar to show them.</string>
+    <string name="fm_action_select">Select</string>
+    <string name="fm_selected_count">%1$d selected</string>
+    <string name="fm_select_all">Select all</string>
+    <string name="fm_select_exit">Exit selection</string>
+    <string name="fm_delete_selected">Delete selected</string>
+    <string name="fm_more">More actions</string>
+    <string name="fm_rename">Rename</string>
+    <string name="fm_copy">Copy</string>
+    <string name="fm_paste">Paste here</string>
+    <string name="fm_copy_path">Copy path</string>
+    <string name="fm_detail">Properties</string>
+    <string name="fm_new_file_name">File name</string>
+    <string name="fm_create_file">Create file</string>
+    <string name="fm_path_copied">Path copied</string>
+    <string name="fm_copied_src">Copied “%1$s”. Open the target folder, then tap “Paste here”.</string>
+    <string name="fm_clipboard_empty">Clipboard is empty. Choose “Copy” on a file first.</string>
+    <string name="fm_delete_batch_title">Delete selected items</string>
+    <string name="fm_delete_batch_msg">%1$d item(s) will be permanently deleted. This cannot be undone.</string>
+    <string name="fm_prop_type">Type</string>
+    <string name="fm_prop_size">Size</string>
+    <string name="fm_prop_modified">Modified</string>
+    <string name="fm_prop_path">Full path</string>
+    <string name="fm_type_folder">Folder</string>
+    <string name="fm_type_file">File</string>
+    <string name="fm_renamed">Renamed to %1$s</string>
+    <string name="fm_rename_failed">Rename failed: %1$s</string>
+    <string name="fm_name_exists">An item with that name already exists: %1$s</string>
+    <string name="fm_created">Created %1$s</string>
+    <string name="fm_create_failed">Create failed: %1$s</string>
+    <string name="fm_copied_to">Copied to %1$s</string>
+    <string name="fm_copy_failed">Copy failed: %1$s</string>
+    <string name="fm_deleted_count">Deleted %1$d item(s)</string>
+    <string name="fm_delete_failed_count">%1$d item(s) failed to delete</string>
+    <string name="fm_deleted_partial">Deleted %1$d, %2$d failed</string>
+    <string name="fm_copy_into_self">A folder cannot be copied into itself</string>
+
     <!-- FTP: anonymous access risk warning -->
     <string name="ftp_anonymous_risk">Risk: anonymous users can access and modify the server directory without a password. Only enable this on a trusted LAN.</string>
 
@@ -2044,6 +2090,11 @@
     <string name="legacy_migrate_later">Later</string>
     <string name="legacy_migrate_done">Migrated %1$d server(s) to the unified storage folder</string>
     <string name="legacy_migrate_partial">Migrated %1$d, failed: %2$s (failed items stay in the old folder and will be offered again next launch)</string>
+    <string name="legacy_migrate_skip_hint">You can skip these unreadable files and continue: everything else is copied intact, and the skipped files are removed together with the old folder.</string>
+    <string name="legacy_migrate_skip_confirm">Skip and continue</string>
+    <string name="legacy_migrate_skipped">Skipped %1$d unreadable file(s) (%2$s)</string>
+    <string name="files_no_permission">Storage permission not granted, the directory cannot be read. Tap the grant button above and try again.</string>
+    <string name="files_root_missing">Folder not created yet: %1$s (created automatically after downloading or importing a server)</string>
 
     <!-- BDS 专属运行环境 -->
     <string name="env_tab_bds">BDS</string>

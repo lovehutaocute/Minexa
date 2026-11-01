@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>文件管理页 · 新布局预览</title>
+<style>
+  :root{
+    --bg:#F3F4F8; --card:#FFFFFF; --ink:#1F2430; --muted:#6B7385; --line:#E4E7EE;
+    --indigo:#3B4C9C; --indigo-soft:#EEF0FA; --mint:#2FBF87; --mint-soft:#E7F8F0;
+    --coral:#F97066;
+  }
+  *{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+  body{
+    margin:0;padding:40px 24px 64px;background:#EEF0F5;
+    font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif;color:var(--ink);
+    display:flex;justify-content:center;gap:40px;flex-wrap:wrap;align-items:flex-start;
+  }
+  .phone{
+    width:393px;background:var(--bg);border-radius:26px;overflow:hidden;
+    box-shadow:0 18px 48px rgba(31,36,48,.16),0 0 0 1px rgba(31,36,48,.06);
+  }
+  .status{display:flex;justify-content:space-between;align-items:center;
+    padding:10px 18px 2px;font-size:12px;color:var(--ink);opacity:.85}
+  .head{padding:14px 16px 4px}
+  .eyebrow{font-size:11px;color:var(--muted);letter-spacing:.02em}
+  .title{font-size:22px;font-weight:800;margin-top:2px;letter-spacing:-.01em}
+  .card{
+    background:var(--card);margin:8px 16px;border-radius:18px;border:1px solid var(--line);
+    padding:14px;box-shadow:0 1px 2px rgba(31,36,48,.04);
+  }
+  .card-title{font-size:14px;font-weight:800;margin-bottom:10px}
+  .pathrow{display:flex;align-items:center;gap:2px}
+  .path{
+    flex:1;font-family:"JetBrains Mono",Consolas,monospace;font-size:11px;line-height:15px;
+    color:var(--muted);word-break:break-all;
+  }
+  .ic{
+    width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;
+    flex:0 0 auto;cursor:default;
+  }
+  .ic svg{width:18px;height:18px;display:block;fill:var(--indigo)}
+  .ic.mute svg{fill:var(--muted)} .ic.mint svg{fill:var(--mint)} .ic.coral svg{fill:var(--coral)}
+  .ic.off svg{fill:#A9AFBC}
+  .ic.on{background:var(--indigo-soft)}
+  .divider{height:1px;background:var(--line);margin:6px 0}
+  .tools{display:flex;gap:2px;align-items:center}
+  .selbar{display:flex;align-items:center;padding:4px 16px;gap:2px}
+  .selbar .count{flex:1;font-size:12px;font-weight:700;color:var(--indigo)}
+  .row{display:flex;align-items:center;padding:8px 6px 8px 16px;gap:10px}
+  .tile{width:34px;height:34px;border-radius:12px;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+  .tile.folder{background:rgba(47,191,135,.15)} .tile.folder svg{fill:var(--mint)}
+  .tile.file{background:var(--indigo-soft)} .tile.file svg{fill:var(--indigo)}
+  .tile svg{width:18px;height:18px}
+  .meta{flex:1;min-width:0}
+  .name{font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub{font-size:11px;color:var(--muted);margin-top:1px}
+  .rownums{display:flex;align-items:center;gap:0}
+  .rownums .ic{width:36px;height:36px}
+  .menu{
+    background:#fff;border-radius:12px;border:1px solid var(--line);padding:6px 0;
+    box-shadow:0 10px 28px rgba(31,36,48,.16);font-size:13px;width:150px;
+  }
+  .menu div{display:flex;align-items:center;gap:10px;padding:9px 14px}
+  .menu svg{width:18px;height:18px;fill:var(--indigo)}
+  .caption{width:340px;font-size:13px;line-height:1.7;color:#3A4152}
+  .caption h3{font-size:15px;margin:0 0 10px}
+  .caption ul{margin:0 0 16px;padding-left:18px}
+  .caption li{margin-bottom:6px}
+  .k{font-family:Consolas,monospace;background:#fff;border:1px solid var(--line);border-radius:5px;padding:0 5px;font-size:12px}
+  .tag{display:inline-block;font-size:11px;color:#fff;background:var(--indigo);border-radius:6px;padding:1px 7px;margin-right:6px}
+  .tag.gone{background:var(--coral)} .tag.new{background:var(--mint)}
+  .stack{display:flex;flex-direction:column;gap:14px;align-items:center}
+</style>
+</head>
+<body>
+
+<div class="stack">
+  <div class="phone">
+    <div class="status"><span>22:06</span><span>8.20 KB/s　5G　87%</span></div>
+    <div class="head">
+      <div class="eyebrow">文件管理</div>
+      <div class="title">文件管理</div>
+    </div>
+
+    <!-- 路径 + 图标工具条 -->
+    <div class="card">
+      <div class="card-title">当前路径</div>
+      <div class="pathrow">
+        <div class="path">/storage/emulated/0/Minexa/Minecraftserver/server-20261031-bds-ff5s</div>
+        <div class="ic mute"><svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg></div>
+        <div class="ic mute"><svg viewBox="0 0 24 24"><path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg></div>
+      </div>
+      <div class="divider"></div>
+      <div class="tools">
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></svg></div>
+        <div class="ic mint"><svg viewBox="0 0 24 24"><path d="M9 16h6v-6h4l-7-7-7 7h4zm-4 2h14v2H5z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M20 6h-8l-2-2H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V8c0-1.11-.89-2-2-2zm-1 8h-3v3h-2v-3h-3v-2h3V9h2v3h3v2z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 14h-3v3h-2v-3H8v-2h3v-3h2v3h3v2zm-3-7V3.5L18.5 9H13z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M3 18h6v-2H3v2zM3 6v2h18V6H3zm0 7h12v-2H3v2z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M12 7c2.76 0 5 2.24 5 5 0 .65-.13 1.26-.36 1.83l2.92 2.92c1.51-1.26 2.7-2.89 3.43-4.75-1.73-4.39-6-7.5-11-7.5-1.4 0-2.74.25-3.98.7l2.16 2.16C10.74 7.13 11.35 7 12 7zM2 4.27l2.28 2.28.46.46C3.08 8.3 1.78 10.02 1 12c1.73 4.39 6 7.5 11 7.5 1.55 0 3.03-.3 4.38-.84l.42.42L19.73 22 21 20.73 3.27 3 2 4.27z"/></svg></div>
+        <div class="ic"><svg viewBox="0 0 24 24"><path d="M22 7h-9v2h9V7zm0 4h-9v2h9v-2zm0 4h-9v2h9v-2zM7 13.5L4.5 11 3 12.5 7 16.5l6-6-1.5-1.5z"/></svg></div>
+        <div class="ic mint"><svg viewBox="0 0 24 24"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0S9.6.84 9.18 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg></div>
+      </div>
+    </div>
+
+    <!-- 多选操作条（多选模式时出现） -->
+    <div class="selbar" style="display:none">
+      <div class="count">已选 2 项</div>
+      <div class="ic"><svg viewBox="0 0 24 24"><path d="M3 5h2V3c-1.1 0-2 .9-2 2zm0 8h2v-2H3v2zm4 8h2v-2H7v2zM3 9h2V7H3v2zm10-6h-2v2h2V3zm6 0v2h2c0-1.1-.9-2-2-2zM5 21v-2H3c0 1.1.9 2 2 2zm-2-4h2v-2H3v2zM9 3H7v2h2V3zm2 18h2v-2h-2v2zm8-8h2v-2h-2v2zm0 8c1.1 0 2-.9 2-2h-2v2zm0-12h2V7h-2v2zm0 8h2v-2h-2v2zm-4 4h2v-2h-2v2zm0-16h2V3h-2v2zM7 17h10V7H7v10z"/></svg></div>
+      <div class="ic coral"><svg viewBox="0 0 24 24"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg></div>
+      <div class="ic mute"><svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg></div>
+    </div>
+
+    <!-- 列表 -->
+    <div style="padding-top:4px">
+      <div class="row">
+        <div class="tile folder"><svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></div>
+        <div class="meta">
+          <div class="name">server-20261031-bds-ff5s</div>
+          <div class="sub">2026-10-31 20:35</div>
+        </div>
+        <div class="rownums">
+          <div class="ic"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></div>
+          <div class="ic mute"><svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="tile folder"><svg viewBox="0 0 24 24"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg></div>
+        <div class="meta">
+          <div class="name">server-b3d2485062c1</div>
+          <div class="sub">2026-11-01 15:20</div>
+        </div>
+        <div class="rownums">
+          <div class="ic"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></div>
+          <div class="ic mute"><svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></div>
+        </div>
+      </div>
+      <div class="row">
+        <div class="tile file"><svg viewBox="0 0 24 24"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg></div>
+        <div class="meta">
+          <div class="name">server.properties <span style="color:#6B7385;font-size:10px">【服务器核心配置文件】</span></div>
+          <div class="sub">1.4 KB · 2026-11-01 15:18</div>
+        </div>
+        <div class="rownums">
+          <div class="ic"><svg viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></svg></div>
+          <div class="ic"><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg></div>
+          <div class="ic mute"><svg viewBox="0 0 24 24"><path d="M12 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2zm0 2c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm0 6c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2z"/></svg></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="caption" style="width:393px">
+    <p style="margin:0 0 8px;font-size:12px;color:#6B7385">上面是默认态：工具条 8 个纯图标动作，行内只留 3 个图标。</p>
+  </div>
+</div>
+
+<div class="stack">
+  <div class="phone" style="width:393px">
+    <div style="padding:16px 0 20px;background:var(--bg)">
+      <div style="padding:0 16px 6px;font-size:11px;color:#6B7385">「更多」菜单（行内第三个图标展开）</div>
+      <div style="display:flex;justify-content:flex-end;padding:0 20px">
+        <div class="menu">
+          <div><svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>重命名</div>
+          <div><svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>复制</div>
+          <div><svg viewBox="0 0 24 24" style="fill:#2FBF87"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0S9.6.84 9.18 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg><span style="color:#2FBF87">粘贴到此处</span></div>
+          <div><svg viewBox="0 0 24 24"><path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/></svg>属性</div>
+          <div><svg viewBox="0 0 24 24" style="fill:#F97066"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg><span style="color:#F97066">删除</span></div>
+        </div>
+      </div>
+      <div style="padding:14px 16px 0">
+        <div class="card-title" style="margin-bottom:6px">排序菜单</div>
+        <div class="menu" style="width:170px">
+          <div style="color:#3B4C9C;font-weight:700">名称  ↑</div>
+          <div>修改时间</div>
+          <div>大小</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="caption">
+    <h3>这次改了什么</h3>
+    <ul>
+      <li><span class="tag gone">移除</span>两个「MT 管理器」大按钮、教程视频按钮、导出服务器按钮，以及那一行折叠箭头 —— 整块顶部大色块区域消失。</li>
+      <li><span class="tag">改</span>「当前路径」显示<strong>完整绝对路径</strong>，等宽字体最多两行，右侧一键复制。</li>
+      <li><span class="tag">改</span>返回上级 / 上传 / 新建这三个宽按钮改成<strong>单个 18dp 图标</strong>，命中区仍 40dp，一排 8 个动作。</li>
+      <li><span class="tag new">新增</span>返回根目录、新建文件、排序（名称/时间/大小，可切升降序）、显示隐藏文件、多选批量删除、复制/粘贴、重命名、复制路径、属性。</li>
+      <li><span class="tag">改</span>列表行「删除」从带内边距的文字按钮改成 36dp 图标按钮，低频动作（重命名/复制/粘贴/属性/删除）收进「更多」菜单，文件名多出约 40dp 显示宽度。</li>
+    </ul>
+    <p style="font-size:12px;color:#6B7385;margin:0">色彩与圆角全部沿用现有令牌：卡片 18dp、图标底 10dp、Indigo #3B4C9C / Mint #2FBF87 / Coral #F97066，Muted 文字 4.8:1 对比度达 WCAG AA。</p>
+  </div>
+</div>
+
+</body>
+</html>

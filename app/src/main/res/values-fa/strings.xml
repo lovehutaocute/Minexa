@@ -1553,6 +1553,52 @@
     <string name="set_max_heap_range_hint">سقف حافظه باید بین ۲۵۶ تا ۶۵۵۳۶ مگابایت باشد و خودکار تنظیم شد.</string>
     <string name="fm_new_dir_invalid_name">نام نباید شامل اسلش، بک‌اسلش یا .. باشد و ابتدا و انتهای آن نباید فاصله داشته باشد.</string>
 
+    <!-- مدیر فایل: نوار ابزار آیکونی و عملیات آیتم -->
+    <string name="fm_action_root">بازگشت به ریشه</string>
+    <string name="fm_action_new_file">فایل جدید</string>
+    <string name="fm_action_sort">مرتب‌سازی</string>
+    <string name="fm_sort_name">نام</string>
+    <string name="fm_sort_time">تاریخ تغییر</string>
+    <string name="fm_sort_size">حجم</string>
+    <string name="fm_action_hidden_on">نمایش فایل‌های مخفی</string>
+    <string name="fm_action_hidden_off">پنهان کردن فایل‌های مخفی</string>
+    <string name="fm_all_hidden">این پوشه فقط فایل مخفی دارد؛ برای نمایش، آیکون چشم در نوار ابزار را بزنید.</string>
+    <string name="fm_action_select">انتخاب چندگانه</string>
+    <string name="fm_selected_count">%1$d مورد انتخاب شد</string>
+    <string name="fm_select_all">انتخاب همه</string>
+    <string name="fm_select_exit">خروج از انتخاب</string>
+    <string name="fm_delete_selected">حذف انتخاب‌شده‌ها</string>
+    <string name="fm_more">عملیات بیشتر</string>
+    <string name="fm_rename">تغییر نام</string>
+    <string name="fm_copy">کپی</string>
+    <string name="fm_paste">چسباندن در اینجا</string>
+    <string name="fm_copy_path">کپی مسیر</string>
+    <string name="fm_detail">مشخصات</string>
+    <string name="fm_new_file_name">نام فایل</string>
+    <string name="fm_create_file">ایجاد فایل</string>
+    <string name="fm_path_copied">مسیر کپی شد</string>
+    <string name="fm_copied_src">«%1$s» کپی شد. به پوشه مقصد بروید و «چسباندن در اینجا» را بزنید.</string>
+    <string name="fm_clipboard_empty">حافظه موقت خالی است؛ ابتدا روی فایل «کپی» را بزنید.</string>
+    <string name="fm_delete_batch_title">حذف موارد انتخاب‌شده</string>
+    <string name="fm_delete_batch_msg">%1$d مورد برای همیشه حذف می‌شود. این عمل بازگشت‌پذیر نیست.</string>
+    <string name="fm_prop_type">نوع</string>
+    <string name="fm_prop_size">حجم</string>
+    <string name="fm_prop_modified">تاریخ تغییر</string>
+    <string name="fm_prop_path">مسیر کامل</string>
+    <string name="fm_type_folder">پوشه</string>
+    <string name="fm_type_file">فایل</string>
+    <string name="fm_renamed">به %1$s تغییر نام یافت</string>
+    <string name="fm_rename_failed">تغییر نام ناموفق: %1$s</string>
+    <string name="fm_name_exists">موردی با این نام وجود دارد: %1$s</string>
+    <string name="fm_created">%1$s ایجاد شد</string>
+    <string name="fm_create_failed">ایجاد ناموفق: %1$s</string>
+    <string name="fm_copied_to">به %1$s کپی شد</string>
+    <string name="fm_copy_failed">کپی ناموفق: %1$s</string>
+    <string name="fm_deleted_count">%1$d مورد حذف شد</string>
+    <string name="fm_delete_failed_count">حذف %1$d مورد ناموفق بود</string>
+    <string name="fm_deleted_partial">%1$d حذف شد، %2$d ناموفق</string>
+    <string name="fm_copy_into_self">پوشه را نمی‌توان درون خودش کپی کرد</string>
+
     <string name="ftp_anonymous_risk">هشدار ریسک: کاربر ناشناس بدون رمز می‌تواند به پوشه سرور دسترسی بگیرد و آن را تغییر دهد؛ آن را فقط در شبکه محلی مطمئن روشن کنید.</string>
 
     <string name="pl_running_block">سرور در حال اجراست؛ برای فعال و غیرفعال کردن یا حذف پلاگین و ماد ابتدا سرور را متوقف کنید.</string>
@@ -2016,6 +2062,11 @@
     <string name="legacy_migrate_later">بعداً</string>
     <string name="legacy_migrate_done">%1$d سرور به پوشهٔ ذخیره‌سازی یکپارچه منتقل شد</string>
     <string name="legacy_migrate_partial">%1$d منتقل شد، ناموفق: %2$s (موارد ناموفق در پوشهٔ قدیمی می‌مانند و اجرای بعدی دوباره پیشنهاد می‌شوند)</string>
+    <string name="legacy_migrate_skip_hint">می‌توانید این فایل‌های غیرقابل‌خواندن را نادیده بگیرید و ادامه دهید؛ بقیهٔ فایل‌ها کامل منتقل می‌شوند و فایل‌های نادیده‌گرفته‌شده همراه پوشهٔ قدیمی حذف می‌شوند.</string>
+    <string name="legacy_migrate_skip_confirm">نادیده بگیر و ادامه بده</string>
+    <string name="legacy_migrate_skipped">%1$d فایل غیرقابل‌خواندن نادیده گرفته شد (%2$s)</string>
+    <string name="files_no_permission">دسترسی ذخیره‌سازی داده نشده و پوشه خوانده نمی‌شود. دکمهٔ دسترسی در بالا را بزنید و دوباره تلاش کنید.</string>
+    <string name="files_root_missing">پوشه هنوز ساخته نشده است: %1$s (پس از دانلود یا واردکردن سرور خودکار ساخته می‌شود)</string>
 
     <!-- BDS 专属运行环境 -->
     <string name="env_tab_bds">BDS</string>

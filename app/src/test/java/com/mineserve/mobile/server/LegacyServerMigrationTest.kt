@@ -113,6 +113,49 @@ class LegacyServerMigrationTest {
     }
 
     @Test
+    fun temporaryDirFromPreviousRunIsReusedInsteadOfRecopied() {
+        // 上次失败留下的 .res.migrating-* 目录应被复用：已在位且大小一致的文件不再重写，
+        // 否则每次重试都要重搬整棵树（真实场景约 750MB）
+        val source = File(temp.newFolder("legacy"), "res")
+        makeServer(source)
+        val internal = temp.newFolder("internal")
+        val stale = File(internal, ".res.migrating-1000")
+        stale.mkdirs()
+        // 预先放一个内容错误的同名文件：大小不同 → 必须被覆盖重写
+        File(stale, "server.jar").writeText("wrong-size-content")
+        val staleTime = 1000L
+        File(stale, "server.jar").setLastModified(staleTime)
+
+        val outcome = LegacyServerMigration.migrateOne(source, internal, mutableSetOf())
+
+        assertTrue(outcome.error, outcome.success)
+        assertEquals(4, outcome.fileCount)
+        assertEquals("jar", File(internal, "res/server.jar").readText())
+        assertTrue(File(internal, "res/world/region_1.mca").isFile)
+        assertFalse(source.exists())
+        // 临时目录已被改名，不该留下残留
+        assertFalse(stale.exists())
+    }
+
+    @Test
+    fun manifestComparisonDetectsTruncatedFileNotJustMissingOne() {
+        // 只比「文件总数」会把「同名但被截断」当成成功；必须按 相对路径 → 字节数 比对
+        val source = temp.newFolder("a")
+        val target = temp.newFolder("b")
+        File(source, "world").mkdirs()
+        File(source, "world/level.dat").writeText("0123456789")
+        File(target, "world").mkdirs()
+        File(target, "world/level.dat").writeText("01234")
+
+        val expected = LegacyServerMigration.manifest(source)
+        val actual = LegacyServerMigration.manifest(target)
+        val missing = LegacyServerMigration.missingEntries(expected, actual)
+
+        assertEquals(1, missing.size)
+        assertEquals("world/level.dat", missing.single().first)
+    }
+
+    @Test
     fun applyOutcomesMovesRegisteredCoreToInternal() {
         val internal = temp.newFolder("internal")
         File(internal, "666").mkdirs()
