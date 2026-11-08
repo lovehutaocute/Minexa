@@ -61,9 +61,25 @@ class BdsElfDepsTest {
 
         val aliases = BdsElfDeps.ensureSonameAliases(runDir, "/opt/minexa-bds/run/server-1")
         assertEquals(listOf("libc.so.6" to "libcurl.so.4"), aliases)
-        // 软链或复制都算成功：Windows/部分文件系统不允许建软链，实现里有复制兜底
-        assertTrue(File(runDir, "libc.so.6").isFile)
-        assertEquals(File(runDir, "libcurl.so.4").length(), File(runDir, "libc.so.6").length())
+        // 软链或复制都算成功：Windows/部分文件系统不允许建软链，实现里有复制兜底。
+        // 判据必须用 NOFOLLOW —— 软链的目标是**容器内**路径，宿主上不存在，
+        // 直接 isFile / exists 会跟随解析得到 false（这正是 Linux CI 上挂掉的那次）。
+        val alias = File(runDir, "libc.so.6")
+        assertTrue(
+            "别名应存在（软链或副本）",
+            Files.exists(alias.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS)
+        )
+        if (Files.isSymbolicLink(alias.toPath())) {
+            // 目标必须是容器内路径（proot 里才存在），且用斜杠比较 —— Windows 上
+            // Path.toString() 会把分隔符换回反斜杠、还可能带盘符前缀
+            val target = Files.readSymbolicLink(alias.toPath()).toString().replace('\\', '/')
+            assertTrue(
+                "软链目标应是容器内路径，实际 $target",
+                target.endsWith("opt/minexa-bds/run/server-1/libcurl.so.4")
+            )
+        } else {
+            assertEquals(File(runDir, "libcurl.so.4").length(), alias.length())
+        }
 
         // 幂等：第二次启动什么都不该新建（否则每次启动都刷一行日志）
         assertTrue(BdsElfDeps.ensureSonameAliases(runDir, "/opt/minexa-bds/run/server-1").isEmpty())

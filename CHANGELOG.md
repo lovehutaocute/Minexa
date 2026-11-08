@@ -45,6 +45,9 @@
 - 按 SONAME 补别名软链（`repairAliases`）：包里写 `libcurl.so.4`、系统里只有
   `libcurl-gnutls.so.4` 这类「名字对不上」的故障，此前只会得到
   `Error loading needed libs in elf .../bedrock_server` + `exit=255`。
+- 别名是否已存在用 `Files.exists(NOFOLLOW_LINKS)` 判断：软链目标是 guest 路径、宿主上悬空，
+  `File.exists()` 会跟随解析得 false，导致每次启动都「重链一次 → 又走复制兜底」。
+  `BdsRuntime.linkOrCopy` 有同一个坑，一并改掉。
 - 启动前一次性列出全部缺失的 `DT_NEEDED`（`missingNeeded`），不再让 box64 报第一条就退出。
 
 ### 历史版本兼容库：按依赖闭包补齐

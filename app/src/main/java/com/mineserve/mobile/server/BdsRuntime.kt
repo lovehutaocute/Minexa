@@ -10,6 +10,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
 
 /**
  * 官方 BDS 在 arm64 设备上的运行环境：**box64 转译器 + 可执行的运行副本**。
@@ -742,7 +743,9 @@ object BdsRuntime {
     )
 
     private fun linkOrCopy(source: File?, link: File, guestTarget: String) {
-        if (link.exists() && Files.isSymbolicLink(link.toPath())) {
+        // NOFOLLOW：链接目标是 guest 路径，宿主上悬空，exists() 会跟随解析得 false，
+        // 于是每次启动都「删掉再重链一遍」—— 幂等但白做 IO，中间还有一小段无链窗口。
+        if (Files.exists(link.toPath(), LinkOption.NOFOLLOW_LINKS) && Files.isSymbolicLink(link.toPath())) {
             val current = runCatching { Files.readSymbolicLink(link.toPath()).toString() }.getOrNull()
             if (current == guestTarget) return
         }

@@ -3,6 +3,7 @@ package com.mineserve.mobile.server
 import java.io.File
 import java.io.RandomAccessFile
 import java.nio.file.Files
+import java.nio.file.LinkOption
 
 /**
  * 读 ELF 的动态段，得到 `DT_NEEDED` / `DT_SONAME`，并据此修「文件名与 SONAME 不一致」。
@@ -202,7 +203,11 @@ object BdsElfDeps {
             if (soname.isBlank() || soname == name) return@forEach
             if (!isSharedLib(soname)) return@forEach
             val alias = File(runDir, soname)
-            if (alias.exists()) return@forEach
+            // 必须用 NOFOLLOW 判断：软链的目标是**容器内路径**（`/opt/minexa-bds/...`），
+            // 在宿主上这个路径并不存在，`exists()` / `isFile` 会跟随解析、永远返回 false。
+            // 用它们的话每次启动都会「建链失败 → 复制兜底」，把上一次的软链替换成真实副本，
+            // 既白拷几 MB，又每次刷一行别名日志（幂等假设直接失效）。
+            if (Files.exists(alias.toPath(), LinkOption.NOFOLLOW_LINKS)) return@forEach
             // 优先软链（0 额外空间）；极少数文件系统/权限不允许建软链时退回复制。
             // 复制也只有几百 KB ~ 几 MB，比「启动失败」便宜得多。
             val ok = runCatching {
