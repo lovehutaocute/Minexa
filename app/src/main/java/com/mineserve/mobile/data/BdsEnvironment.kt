@@ -13,15 +13,19 @@ enum class BdsEnvStage {
     /** 下载并安装 box64 转译器 */
     Box64,
 
+    /** 下载历史版本 BDS 需要的 x86_64 兼容运行库（libssl1.1 / libstdc++ / libnsl …） */
+    Compat,
+
     /** 在容器里实测 box64 能否执行 */
     Verify;
 
     /** 该阶段的进度区间（占比），用于把整条进度条铺满 */
     val range: IntRange
         get() = when (this) {
-            Container -> 0..60
-            Box64 -> 60..92
-            Verify -> 92..100
+            Container -> 0..55
+            Box64 -> 55..85
+            Compat -> 85..94
+            Verify -> 94..100
         }
 }
 
@@ -57,6 +61,13 @@ enum class BdsEnvError {
 data class BdsEnvStatus(
     /** 环境完整可用（容器 + box64 都在位） */
     val installed: Boolean = false,
+    /**
+     * 以前初始化过，但环境结构代次已升级（见 `BdsEnvironmentManager.ENV_GENERATION`）。
+     *
+     * 这种情况下 [installed] 是 false —— 老环境缺历史版本兼容库，起不来 ——
+     * 但提示语不能再用「首次初始化」，否则升级用户会以为自己白装过一次。
+     */
+    val upgradeRequired: Boolean = false,
     val installing: Boolean = false,
     val stage: BdsEnvStage? = null,
     /** 整条进度 0..100 */

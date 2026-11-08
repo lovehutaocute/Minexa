@@ -1,5 +1,80 @@
 # 更新日志
 
+## 1.5.0（versionCode 61）
+
+主题：**BDS 从「能跑最新版」变成「能装任意版本，且知道装的是什么」**。
+
+### BDS 历史版本与降级
+
+- 内置版本清单 `assets/bds/bds-versions.json`：123 条构建（`1.7.0.13` → `1.21.100.6`），
+  每条 `{v,c,u}`（版本、构建号、直链）。官方 links 接口只有「当前稳定版 + 当前 Preview」两条，
+  没有它就只能装最新版。
+- `data/BdsVersions.kt` 三路合并：**官方 links 优先**（链路权威）→ 远端清单补历史与 SHA-256 →
+  内置清单兜底离线可用。合并结果缓存 30 分钟。
+- 同版判定只比前三段、预览版整串比（`sameRelease`）：`1.26.61.1` 的补零变体算同版，
+  `1.21.100.6` 与 `1.21.100.62` 不算。版本排序按数字段（`compare`），不是字符串。
+- 一个版本给多个直链候选（构建号补零/去零变体），逐个试而不是只赌一条；
+  清单缺摘要时按需拉该版本的 `metadata.json` 补齐。
+- 新增「历史版本」弹窗（`ui/screens/BdsVersionDialog.kt`）：搜索、稳定/预览筛选、已安装标记、
+  每条显示校验等级徽标、**降级二次确认**（降级会丢新版世界，不能当重装处理）。
+- 维护脚本 `tools/fix-bds-catalog.py`：探测远端清单里写错的构建号并修正。
+
+### 安装包三档完整性校验
+
+`data/BdsPackageIntegrity.kt`：按当前能拿到的最高一档校验，不再是「下载完就信」。
+
+| 档 | 判据 |
+|---|---|
+| `ManifestSha256` | 清单给出的该版本 SHA-256 |
+| `PinnedSha256` | 本地固定摘要表（`BdsDigestStore`），换源重下仍可判真 |
+| `Structural` | zip 可读 + 全条目 CRC + 含 `bedrock_server` + 体积下限 |
+
+`server/BdsPackageDownload.kt`：候选直链逐个试，**每个源下完立刻校验**，通过才 rename 到最终路径；
+单源 15 分钟、总预算 20 分钟。校验失败可原地重新下载，不用回下载页重来。
+
+### 跨版本解压兼容
+
+`server/BdsCompatibility.kt` 不再按版本号写死布局，而是**读 zip 中央目录生成安装计划**：
+识别顶层目录、动态库集合、调试符号、是否自带 `server.properties`；拒绝 Windows 包与非法路径
+（`..` / 绝对路径）；解压时剥离前缀；包里没有配置就写官方默认模板。
+落地复检三件事：体积下限、主程序 ELF 架构、同目录每个 `.so` 架构与主程序一致。
+
+### ELF 依赖自愈
+
+- `server/BdsElfDeps.kt` 解析 ELF64 的 `PT_DYNAMIC`，取 `DT_NEEDED` / `DT_SONAME`。
+- 按 SONAME 补别名软链（`repairAliases`）：包里写 `libcurl.so.4`、系统里只有
+  `libcurl-gnutls.so.4` 这类「名字对不上」的故障，此前只会得到
+  `Error loading needed libs in elf .../bedrock_server` + `exit=255`。
+- 启动前一次性列出全部缺失的 `DT_NEEDED`（`missingNeeded`），不再让 box64 报第一条就退出。
+
+### 历史版本兼容库：按依赖闭包补齐
+
+`server/BdsCompatLibs.kt`：从 6 个根库（`libcurl` / `libstdc++` / `libssl1.1` / `libcrypto1.1` /
+`libz` / `libnsl`）出发，按 41 条 soname → Ubuntu focal amd64 包做依赖闭包；走 `Packages.gz`
+索引查真实文件名（不写死版本号），下载后硬校验 SHA-256，只从 `data.tar.*` 里取所需 `.so`。
+`libnsl.so.1` 在 focal 已删除，单独从 old-releases 取 glibc 2.21 那份。
+
+- 环境代次升到 `gen=2`：老安装的 `runtime.ready` 记的是 gen=1，会被判定 `staleGeneration`。
+  文案是「**重新初始化**」而不是「首次安装」——容器和 box64 都还在，只缺兼容库。
+
+### 设置页重构
+
+原本 20 多项平铺，用户找不到「自动备份」在哪。改为四组：**通用 / 下载与更新 / 运行与保活 /
+关于与支持**；APT 源这类次要配置收进折叠区，外部链接收敛为底部三个图标。
+
+### 终端页重做
+
+- 独立深浅色（默认深色，与全局主题解耦），长日志不再被主题切换打断阅读。
+- 会话标签 + 标题栏溢出菜单 + 空状态。
+- 输入行改为自绘命令行：原 `TextField` 在长命令 + 中文输入法下会把提示符挤出行外。
+
+### 测试与构建
+
+- 新增 7 个测试类：`BdsVersionsTest`、`BdsVersionMatrixTest`、`BdsPackageIntegrityTest`、
+  `BdsCompatibilityTest`、`BdsCompatLibsTest`、`BdsElfDepsTest`、`BdsEnvironmentMarkerTest`。
+- Gradle 转发 `-DbdsMatrix` / `-DbdsCompat` 到测试 JVM：联网矩阵测试与兼容库测试按需跑，
+  `assembleDebug` 不受影响。
+
 ## 1.4.2（versionCode 60）
 
 ### 文件管理页重做（607 → 898 行）

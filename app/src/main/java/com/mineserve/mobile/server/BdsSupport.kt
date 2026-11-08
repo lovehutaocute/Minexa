@@ -255,6 +255,16 @@ object BdsSupport {
     // ── 解压 ─────────────────────────────────────────────────────
 
     /**
+     * 按安装计划解压（历史版本一律走这条）。
+     *
+     * 计划来自 [BdsCompatibility.plan]：剥离重打包包里的顶层目录、跳过调试符号、
+     * 核对每个文件的声明体积。旧的无计划重载保留给单测与「只知道是 zip」的场景，
+     * 它的「平铺解压」假设对 1.7~1.26 的官方包成立，但对第三方重打包不成立。
+     */
+    fun extractZip(zip: File, targetDir: File, plan: BdsCompatibility.Plan): Int =
+        BdsCompatibility.extract(zip, targetDir, plan)
+
+    /**
      * 解压官方 zip 到服务器目录。
      *
      * 与 `ServerImporter` 的通用解压刻意分开：BDS 包没有顶层目录、必须保留

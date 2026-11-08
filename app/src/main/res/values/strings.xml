@@ -1796,6 +1796,16 @@
     <string name="net_dash_frp_address">FRP 公网地址</string>
     <string name="net_dash_stun_address">STUN 公网地址</string>
 
+    <!-- 设置页：分组标签（与 HeaderBlock 的 eyebrow 同规格） -->
+    <string name="set_group_general">通用</string>
+    <string name="set_group_download">下载与更新</string>
+    <string name="set_group_runtime">运行与保活</string>
+    <string name="set_group_about">关于与支持</string>
+    <!-- 页面底部外链图标的标签 -->
+    <string name="set_link_github">GitHub</string>
+    <string name="set_link_email">邮箱</string>
+    <string name="set_link_qq">QQ 群</string>
+
     <!-- 设置页：语言 -->
     <string name="set_language_title">语言</string>
     <string name="set_language_hint">选择应用界面语言。选择后立即生效，并在下次启动时继续使用。</string>
@@ -1859,6 +1869,9 @@
     <!-- Terminal screen -->
     <string name="tm_send">发送</string>
     <string name="tm_title">终端</string>
+    <string name="tm_empty">会话还没有输出。\n服务器启动后，日志会实时显示在这里。</string>
+    <string name="tm_theme_light">浅色终端</string>
+    <string name="tm_theme_hint">关闭时使用深色（默认）</string>
     <string name="tm_settings">终端设置</string>
     <string name="tm_clear_session">清空当前会话</string>
     <string name="tm_resume_scroll">继续自动滚动</string>
@@ -2094,7 +2107,7 @@
     <string name="mt_legacy_dir">旧版目录（迁移源）：%1$s</string>
     <string name="dl_desc_bds">官方基岩版专用服务器，原生可执行文件，不依赖 Java</string>
     <string name="dl_bds_platform_warning">官方 BDS 只提供 Linux x86_64 构建，本机是 arm64：需要 PRoot 容器 + box64 转译才能运行。请先在「依赖与环境管理 → BDS」初始化 BDS 专属运行环境（首次约 32MB 下载，box64 已内置在应用里、无需联网），完成后再启动；转译启动较慢、性能约为原生的一半，属正常现象。</string>
-    <string name="dl_bds_version_note">BDS 版本无需选择：下载时自动取官方接口给出的最新 Linux 构建，实际版本号会写进服务器目录。</string>
+    <string name="dl_bds_version_note">BDS 版本可选任意历史版本：下载页的版本抽屉列出内置存档清单 + 官方接口 + 远端版本库的全部版本，安装后会做 SHA-256 或结构校验；实际版本号写进服务器目录的 bds-version.txt。</string>
 
     <!-- 旧版目录迁移 -->
     <string name="legacy_migrate_title">检测到 %1$d 个旧版服务器</string>
@@ -2123,6 +2136,7 @@
     <string name="bds_env_status_failed">初始化失败</string>
     <string name="bds_env_stage_container">下载并解压 Ubuntu 容器</string>
     <string name="bds_env_stage_box64">下载并安装 box64</string>
+    <string name="bds_env_stage_compat">下载历史版本兼容运行库</string>
     <string name="bds_env_stage_verify">容器内实测 box64</string>
     <string name="bds_env_component_container">PRoot 容器</string>
     <string name="bds_env_component_box64">box64</string>
@@ -2141,6 +2155,7 @@
     <string name="bds_env_probe_ok">到微软认证服务的链路正常；若 BDS 仍报错，把控制台日志发给我</string>
     <string name="bds_env_remove_confirm">只删除 box64 与就绪标记，PRoot 容器会保留（Java 版可能仍在用）。确定移除？</string>
     <string name="bds_env_ready_hint">环境已就绪：回到概览页选中 BDS 服务端即可直接启动，不需要再次初始化。</string>
+    <string name="bds_env_upgrade_hint">运行环境已升级（新增 1.18 及更早版本所需的兼容运行库），需要重新初始化一次。已装好的容器与运行库会被复用，不会重复下载。</string>
     <string name="bds_env_missing_hint">首次初始化只需下载 PRoot 容器（约 32MB，6 个镜像可自动切换）；box64 已随应用内置。总占用约 380MB 磁盘（容器 + box64 + 244MB 运行副本）。</string>
     <string name="bds_env_need_bootstrap">Termux 运行环境尚未初始化，请先在「依赖」页完成安装，再初始化 BDS 运行环境</string>
     <string name="bds_env_source">来源：%1$s</string>
@@ -2193,6 +2208,30 @@
     <string name="bds_update_rolled_back">已回滚到更新前状态</string>
     <string name="bds_update_failed_title">更新失败</string>
     <string name="bds_update_close">关闭</string>
+    <string name="bds_update_retry">重新下载</string>
+    <string name="bds_update_integrity">安装包校验：%1$s 通过</string>
+
+    <!-- BDS 历史版本 -->
+    <string name="bds_version_history">历史版本</string>
+    <string name="bds_version_count">共 %1$d 个版本</string>
+    <string name="bds_version_offline">离线清单</string>
+    <string name="bds_version_refresh">刷新</string>
+    <string name="bds_version_close">关闭</string>
+    <string name="bds_version_search">搜索版本号，如 1.20</string>
+    <string name="bds_version_filter_all">全部</string>
+    <string name="bds_version_filter_stable">稳定版</string>
+    <string name="bds_version_note">历史版本来自内置存档清单与远端版本库：标「SHA-256」的版本有官方公布的摘要，安装前逐字节比对；标「结构校验」的老版本没有公开摘要，改为校验压缩包完整性与文件结构，并把本次摘要记到本机，下次同版本必须一致。</string>
+    <string name="bds_version_empty">没有匹配的版本</string>
+    <string name="bds_version_installed">已安装</string>
+    <string name="bds_version_install">安装</string>
+    <string name="bds_version_digest_sha">SHA-256</string>
+    <string name="bds_version_digest_structural">结构校验</string>
+    <string name="bds_version_downgrade_title">回退到旧版本</string>
+    <string name="bds_version_downgrade_msg">将把核心从 %1$s 回退到 %2$s。\n\n· 世界存档可能已被新版本升级过，旧版本核心可能读不出来，回退前会自动备份，但备份能不能救回世界取决于升级改动了什么\n· 旧核心会保留为 bedrock_server.old-%1$s，随时可以改回去\n· 客户端也要跟着换成 %2$s 才能进服\n\n确定要回退吗？</string>
+    <string name="bds_version_downgrade_ok">仍然回退</string>
+    <string name="bds_version_list_failed">版本清单加载失败</string>
+    <string name="bds_version_list_empty">没有可安装的版本</string>
+    <string name="bds_version_resolve_failed">无法准备版本 %1$s：%2$s</string>
 
     <!-- 核心下载页（装配单版式） -->
     <string name="dl2_subtitle">选核心、选版本，命名后一键装配到统一目录</string>
@@ -2371,5 +2410,6 @@
     <string name="prop_opt_log_verbose">详细</string>
     <string name="prop_opt_zlib">zlib</string>
     <string name="prop_opt_snappy">Snappy</string>
+    <string name="manual_entry_desc">说明书</string>
 
 </resources>

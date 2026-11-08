@@ -1,0 +1,626 @@
+{
+  "schema": 1,
+  "note": "Minexa 内置 BDS 历史版本清单。Mojang 不提供历史版本索引，官方 links 接口只给当前两条直链；本文件记录历史版本的完整文件名（构建号无法推算），供离线/弱网时列出可选版本。带 sha256 的版本由远端清单补充，不在此文件里硬写。",
+  "sources": [
+    "https://net-secondary.web.minecraft-services.net/api/v1.0/download/links",
+    "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/",
+    "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/"
+  ],
+  "versions": [
+    {
+      "v": "1.21.100.6",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.100.6.zip"
+    },
+    {
+      "v": "1.21.94.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.94.1.zip"
+    },
+    {
+      "v": "1.21.93.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.93.1.zip"
+    },
+    {
+      "v": "1.21.92.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.92.1.zip"
+    },
+    {
+      "v": "1.21.91.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.91.1.zip"
+    },
+    {
+      "v": "1.21.90.3",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.90.3.zip"
+    },
+    {
+      "v": "1.21.84.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.84.1.zip"
+    },
+    {
+      "v": "1.21.83.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.83.1.zip"
+    },
+    {
+      "v": "1.21.82.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.82.1.zip"
+    },
+    {
+      "v": "1.21.81.2",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.81.2.zip"
+    },
+    {
+      "v": "1.21.80.3",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.80.3.zip"
+    },
+    {
+      "v": "1.21.72.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.72.01.zip"
+    },
+    {
+      "v": "1.21.71.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.71.01.zip"
+    },
+    {
+      "v": "1.21.70.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.70.03.zip"
+    },
+    {
+      "v": "1.21.62.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.62.01.zip"
+    },
+    {
+      "v": "1.21.61.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.61.01.zip"
+    },
+    {
+      "v": "1.21.60.10",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.60.10.zip"
+    },
+    {
+      "v": "1.21.51.2",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.51.02.zip"
+    },
+    {
+      "v": "1.21.50.10",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.50.10.zip"
+    },
+    {
+      "v": "1.21.44.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.44.01.zip"
+    },
+    {
+      "v": "1.21.43.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.43.01.zip"
+    },
+    {
+      "v": "1.21.42.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.42.01.zip"
+    },
+    {
+      "v": "1.21.41.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.41.01.zip"
+    },
+    {
+      "v": "1.21.40.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.40.03.zip"
+    },
+    {
+      "v": "1.21.31.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.31.04.zip"
+    },
+    {
+      "v": "1.21.30.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.30.03.zip"
+    },
+    {
+      "v": "1.21.23.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.23.01.zip"
+    },
+    {
+      "v": "1.21.22.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.22.01.zip"
+    },
+    {
+      "v": "1.21.20.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.20.03.zip"
+    },
+    {
+      "v": "1.21.2.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.2.02.zip"
+    },
+    {
+      "v": "1.21.1.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.1.03.zip"
+    },
+    {
+      "v": "1.21.0.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.21.0.03.zip"
+    },
+    {
+      "v": "1.20.81.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.81.01.zip"
+    },
+    {
+      "v": "1.20.80.05",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.80.05.zip"
+    },
+    {
+      "v": "1.20.73.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.73.01.zip"
+    },
+    {
+      "v": "1.20.72.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.72.01.zip"
+    },
+    {
+      "v": "1.20.71.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.71.01.zip"
+    },
+    {
+      "v": "1.20.70.05",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.70.05.zip"
+    },
+    {
+      "v": "1.20.62.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.62.01.zip"
+    },
+    {
+      "v": "1.20.61.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.61.01.zip"
+    },
+    {
+      "v": "1.20.51.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.51.01.zip"
+    },
+    {
+      "v": "1.20.50.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.50.03.zip"
+    },
+    {
+      "v": "1.20.41.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.41.02.zip"
+    },
+    {
+      "v": "1.20.40.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.40.01.zip"
+    },
+    {
+      "v": "1.20.32.3",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.32.03.zip"
+    },
+    {
+      "v": "1.20.31.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.31.01.zip"
+    },
+    {
+      "v": "1.20.30.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.30.02.zip"
+    },
+    {
+      "v": "1.20.15.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.15.01.zip"
+    },
+    {
+      "v": "1.20.12.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.12.01.zip"
+    },
+    {
+      "v": "1.20.10.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.10.01.zip"
+    },
+    {
+      "v": "1.20.1.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.1.02.zip"
+    },
+    {
+      "v": "1.20.0.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.20.0.01.zip"
+    },
+    {
+      "v": "1.19.83.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.83.01.zip"
+    },
+    {
+      "v": "1.19.81.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.81.01.zip"
+    },
+    {
+      "v": "1.19.80.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.80.02.zip"
+    },
+    {
+      "v": "1.19.73.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.73.02.zip"
+    },
+    {
+      "v": "1.19.72.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.72.01.zip"
+    },
+    {
+      "v": "1.19.71.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.71.02.zip"
+    },
+    {
+      "v": "1.19.70.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.70.02.zip"
+    },
+    {
+      "v": "1.19.63.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.63.01.zip"
+    },
+    {
+      "v": "1.19.62.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.62.01.zip"
+    },
+    {
+      "v": "1.19.60.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.60.04.zip"
+    },
+    {
+      "v": "1.19.51.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.51.01.zip"
+    },
+    {
+      "v": "1.19.50.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.50.02.zip"
+    },
+    {
+      "v": "1.19.41.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.41.01.zip"
+    },
+    {
+      "v": "1.19.40.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.40.02.zip"
+    },
+    {
+      "v": "1.19.31.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.31.01.zip"
+    },
+    {
+      "v": "1.19.30.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.30.04.zip"
+    },
+    {
+      "v": "1.19.22.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.22.01.zip"
+    },
+    {
+      "v": "1.19.21.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.21.01.zip"
+    },
+    {
+      "v": "1.19.20.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.20.02.zip"
+    },
+    {
+      "v": "1.19.11.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.11.01.zip"
+    },
+    {
+      "v": "1.19.10.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.10.03.zip"
+    },
+    {
+      "v": "1.19.2.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.19.2.02.zip"
+    },
+    {
+      "v": "1.18.33.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.33.02.zip"
+    },
+    {
+      "v": "1.18.32.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.32.02.zip"
+    },
+    {
+      "v": "1.18.31.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.31.04.zip"
+    },
+    {
+      "v": "1.18.30.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.30.04.zip"
+    },
+    {
+      "v": "1.18.12.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.12.01.zip"
+    },
+    {
+      "v": "1.18.11.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.11.01.zip"
+    },
+    {
+      "v": "1.18.2.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.2.03.zip"
+    },
+    {
+      "v": "1.18.1.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.1.02.zip"
+    },
+    {
+      "v": "1.18.0.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.18.0.02.zip"
+    },
+    {
+      "v": "1.17.41.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.41.01.zip"
+    },
+    {
+      "v": "1.17.40.06",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.40.06.zip"
+    },
+    {
+      "v": "1.17.34.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.34.02.zip"
+    },
+    {
+      "v": "1.17.33.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.33.01.zip"
+    },
+    {
+      "v": "1.17.32.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.32.02.zip"
+    },
+    {
+      "v": "1.17.30.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.30.04.zip"
+    },
+    {
+      "v": "1.17.11.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.11.01.zip"
+    },
+    {
+      "v": "1.17.10.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.10.04.zip"
+    },
+    {
+      "v": "1.17.2.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.2.01.zip"
+    },
+    {
+      "v": "1.17.1.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.1.01.zip"
+    },
+    {
+      "v": "1.17.0.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.17.0.03.zip"
+    },
+    {
+      "v": "1.16.221.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.221.01.zip"
+    },
+    {
+      "v": "1.16.220.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.220.02.zip"
+    },
+    {
+      "v": "1.16.210.05",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.210.05.zip"
+    },
+    {
+      "v": "1.16.201.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.201.02.zip"
+    },
+    {
+      "v": "1.16.200.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.200.02.zip"
+    },
+    {
+      "v": "1.16.101.01",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.101.01.zip"
+    },
+    {
+      "v": "1.16.100.04",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.100.04.zip"
+    },
+    {
+      "v": "1.16.40.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.40.02.zip"
+    },
+    {
+      "v": "1.16.20.03",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.20.03.zip"
+    },
+    {
+      "v": "1.16.1.02",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.1.02.zip"
+    },
+    {
+      "v": "1.16.0.2",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.16.0.2.zip"
+    },
+    {
+      "v": "1.14.60.5",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.14.60.5.zip"
+    },
+    {
+      "v": "1.14.30.2",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.14.30.2.zip"
+    },
+    {
+      "v": "1.14.20.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.14.20.1.zip"
+    },
+    {
+      "v": "1.14.1.4",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.14.1.4.zip"
+    },
+    {
+      "v": "1.14.0.9",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.14.0.9.zip"
+    },
+    {
+      "v": "1.13.3.0",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.13.3.0.zip"
+    },
+    {
+      "v": "1.13.2.0",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.13.2.0.zip"
+    },
+    {
+      "v": "1.13.1.5",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.13.1.5.zip"
+    },
+    {
+      "v": "1.12.1.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.12.1.1.zip"
+    },
+    {
+      "v": "1.12.0.28",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.12.0.28.zip"
+    },
+    {
+      "v": "1.11.4.2",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.11.4.2.zip"
+    },
+    {
+      "v": "1.11.2.1",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.11.2.1.zip"
+    },
+    {
+      "v": "1.11.1.2",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.11.1.2.zip"
+    },
+    {
+      "v": "1.10.0.7",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.10.0.7.zip"
+    },
+    {
+      "v": "1.9.0.15",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.9.0.15.zip"
+    },
+    {
+      "v": "1.8.1.2",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.8.1.2.zip"
+    },
+    {
+      "v": "1.8.0.24",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.8.0.24.zip"
+    },
+    {
+      "v": "1.7.0.13",
+      "c": "stable",
+      "u": "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.7.0.13.zip"
+    }
+  ]
+}

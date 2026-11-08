@@ -88,10 +88,13 @@ class BdsEnvironmentManager(
             }
             return
         }
+        // 代次不匹配的老环境在这里必然是 false：不再做「就地补几个库」的兜底，
+        // 统一引导用户重新初始化（容器与已下的 .so 按幂等规则复用，不会白下）。
         val installed = isReady(prefix)
         val version = BdsRuntime.installedBox64Version(prefix)
         _status.value = BdsEnvStatus(
             installed = installed,
+            upgradeRequired = !installed && staleGeneration(prefix),
             box64Version = version,
             distroLabel = runCatching { termux.bdsContainerProfile().distro.displayName }.getOrNull(),
             percent = if (installed) 100 else 0,
@@ -195,7 +198,19 @@ class BdsEnvironmentManager(
             // ② box64
             if (!installBox64()) return
 
-            // ③ 容器内实测：文件在位 ≠ 能跑
+            /*
+             * ③ 历史版本兼容运行库（联网下载，见 [BdsCompatLibs]）
+             *
+             * 1.19+ 只用 libcurl（包自带），≤1.18 还要 libssl1.1 / libstdc++ / libz /
+             * libnsl。容器是 arm64 rootfs，这些库必须另外取 x86_64 版本，否则用户
+             * 装了老版本会在启动时报 `Error loading needed libs`。
+             *
+             * 失败**不阻断**初始化：当前主流版本不需要它们，为几个历史版本把整个
+             * 环境卡成「未就绪」得不偿失。失败原因会写进日志与就绪标记。
+             */
+            val compat = installCompatLibs()
+
+            // ④ 容器内实测：文件在位 ≠ 能跑
             emitStage(BdsEnvStage.Verify, 10)
             val problem = termux.verifyBdsBox64(profile, BdsRuntime.rootDir(prefix))
             if (problem != null) {
@@ -233,7 +248,9 @@ class BdsEnvironmentManager(
 
             readyMarker(prefix).parentFile?.mkdirs()
             readyMarker(prefix).writeText(
-                "${profile.distro.dirName}\n${BdsRuntime.installedBox64Version(prefix).orEmpty()}\n"
+                "${profile.distro.dirName}\n${BdsRuntime.installedBox64Version(prefix).orEmpty()}\n" +
+                    "compat=${if (compat.ok) "ok" else "partial"}\n" +
+                    "gen=$ENV_GENERATION\n"
             )
             _status.update {
                 it.copy(
@@ -392,6 +409,48 @@ class BdsEnvironmentManager(
     }
 
     /**
+     * 下载并落地历史版本 BDS 的 x86_64 兼容运行库。
+     *
+     * 纯联网动作（不碰容器），每个包在多个 Ubuntu 镜像间切换，索引带 SHA-256 时
+     * 硬校验；已经存在的库直接跳过，所以重复调用是幂等的、且几乎不耗流量。
+     */
+    private suspend fun installCompatLibs(): BdsCompatLibs.Report {
+        emitStage(BdsEnvStage.Compat, 0)
+        val report = try {
+            BdsCompatLibs.install(
+                prefix = prefix,
+                tmpDir = termux.installer.tmpDir,
+                onLog = { log(it) },
+                onProgress = { emitStage(BdsEnvStage.Compat, it) }
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            log("兼容运行库补齐失败：${e.message ?: e.javaClass.simpleName}")
+            emitStage(BdsEnvStage.Compat, 100)
+            return BdsCompatLibs.Report(
+                installed = emptyList(),
+                present = emptyList(),
+                failed = mapOf("compat" to (e.message ?: e.javaClass.simpleName))
+            )
+        }
+        when {
+            report.installed.isNotEmpty() ->
+                log("历史版本兼容运行库已安装：${report.installed.joinToString("、")}")
+            report.present.isNotEmpty() ->
+                log("历史版本兼容运行库已就位（${report.present.size} 个）")
+        }
+        if (report.failed.isNotEmpty()) {
+            log(
+                "警告：以下运行库没能补上，1.18 及更早的 BDS 可能起不来：" +
+                    report.failed.entries.joinToString("、") { "${it.key}（${it.value}）" }
+            )
+        }
+        emitStage(BdsEnvStage.Compat, 100)
+        return report
+    }
+
+    /**
      * .deb 的内容校验。
      *
      * 顺序有意为之：**先看长度与哈希**，再谈能不能解开。
@@ -473,12 +532,14 @@ class BdsEnvironmentManager(
     private fun stageLogLabel(stage: BdsEnvStage): String = when (stage) {
         BdsEnvStage.Container -> "准备 PRoot 容器（提供 glibc）"
         BdsEnvStage.Box64 -> "下载并安装 box64"
+        BdsEnvStage.Compat -> "下载历史版本兼容运行库"
         BdsEnvStage.Verify -> "容器内实测 box64"
     }
 
     private fun stageDetail(stage: BdsEnvStage): String = when (stage) {
         BdsEnvStage.Container -> "（PRoot 容器）"
         BdsEnvStage.Box64 -> "（box64）"
+        BdsEnvStage.Compat -> "（历史版本运行库）"
         BdsEnvStage.Verify -> "（环境自检）"
     }
 
@@ -511,6 +572,18 @@ class BdsEnvironmentManager(
     companion object {
         private const val TAG = "BdsEnvironment"
 
+        /**
+         * 运行环境的**结构代次**。每次环境布局发生不向后兼容的变化时 +1：
+         *
+         *  - gen 1：只有容器 + box64 + 内置 7 个 x86 库（历史版本兼容库不存在）；
+         *  - gen 2：新增 `x86libs/` 里的历史版本兼容库（libcurl 闭包 / libssl1.1 /
+         *    libstdc++ / libnsl…），1.19~1.21 的 BDS 没有它们必然起不来。
+         *
+         * 老标记没有 `gen=` 行 → [isReady] 直接判「未初始化」，用户重新初始化一次
+         * 即可拿到完整环境（容器与已装的 .so 都会按幂等规则复用，不会白下）。
+         */
+        const val ENV_GENERATION = 2
+
         fun readyMarker(prefix: File): File = File(BdsRuntime.rootDir(prefix), "runtime.ready")
 
         /**
@@ -526,12 +599,32 @@ class BdsEnvironmentManager(
             if (!BdsRuntime.hasX86Libs(prefix)) return false
             val marker = readyMarker(prefix)
             if (!marker.isFile) return false
+            val lines = runCatching { marker.readLines() }.getOrDefault(emptyList())
             // marker 首行是当初落地用的容器目录名。BDS 容器从「跟随用户选择的
             // 发行版」改成固定的 [BdsContainerDistro] 之后，老环境（多半是 focal）
             // 里的 box64 会因为 glibc 太旧而连 main 都进不去 ——
             // 所以容器换了就必须重装，不能让「就绪」这个标记继续骗人。
-            val recorded = runCatching { marker.readLines().firstOrNull()?.trim() }.getOrNull()
-            return recorded == BdsContainerDistro.dirName
+            if (lines.firstOrNull()?.trim() != BdsContainerDistro.dirName) return false
+            // 代次不匹配同样不算就绪：老环境缺历史版本兼容库，
+            // 让用户重新初始化一次拿到完整环境。
+            return lines.any { it.trim() == "gen=$ENV_GENERATION" }
+        }
+
+        /**
+         * 是不是「装过、但代次旧了」的环境。
+         *
+         * 只用来挑提示语：全新设备（没有标记）和升级用户（有旧标记）都显示
+         * 「未初始化」，但后者要说清「重新初始化」而不是「首次初始化」，否则
+         * 用户会以为之前那次白装了。
+         */
+        fun staleGeneration(prefix: File): Boolean {
+            if (!BdsRuntime.box64Binary(prefix).isFile) return false
+            val marker = readyMarker(prefix)
+            if (!marker.isFile) return false
+            val lines = runCatching { marker.readLines() }.getOrDefault(emptyList())
+            // 容器也换掉的更老环境，提示语与「旧代次」一样成立
+            if (lines.isEmpty()) return false
+            return lines.none { it.trim() == "gen=$ENV_GENERATION" }
         }
     }
 }

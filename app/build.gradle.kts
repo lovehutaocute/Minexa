@@ -27,8 +27,8 @@ android {
         applicationId = "com.mineserve.mobile"
         minSdk = 26
         targetSdk = 28
-        versionCode = 60
-        versionName = "1.4.2"
+        versionCode = 61
+        versionName = "1.5.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
@@ -121,6 +121,26 @@ android {
             isIncludeAndroidResources = true
         }
     }
+}
+
+/**
+ * BDS 版本兼容性矩阵（`BdsVersionMatrixTest`）的开关。
+ *
+ * 这是个**按需执行**的测试：默认（不传 -DbdsMatrix）整组会被 assume 跳过，
+ * 既不会拖慢日常 `testDebugUnitTest`，也不需要联网。用法：
+ * ```
+ * ./gradlew :app:testDebugUnitTest --tests "*BdsVersionMatrixTest*" -DbdsMatrix=catalog
+ * ./gradlew :app:testDebugUnitTest --tests "*BdsVersionMatrixTest*" -DbdsMatrix=download -DbdsMatrixLimit=5
+ * ```
+ * Gradle 的 `-D` 只作用于 Gradle 自身 JVM，测试 JVM 是另一个进程，必须显式转发。
+ */
+tasks.withType(org.gradle.api.tasks.testing.Test::class.java).configureEach {
+    systemProperty("bdsMatrix", System.getProperty("bdsMatrix") ?: "")
+    systemProperty("bdsMatrixLimit", System.getProperty("bdsMatrixLimit") ?: "")
+    systemProperty("bdsMatrixVersions", System.getProperty("bdsMatrixVersions") ?: "")
+    systemProperty("bdsMatrixSeedOnly", System.getProperty("bdsMatrixSeedOnly") ?: "")
+    // BdsCompatLibsTest 的联网端到端用例：-DbdsCompat=live 才跑（约 6MB 下载）
+    systemProperty("bdsCompat", System.getProperty("bdsCompat") ?: "")
 }
 
 dependencies {

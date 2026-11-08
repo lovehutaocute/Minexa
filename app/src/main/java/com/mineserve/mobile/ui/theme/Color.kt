@@ -2,6 +2,7 @@ package com.mineserve.mobile.ui.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
 // ── 亮色设计令牌（与参考界面完全对齐） ──────────────────────────────
@@ -60,6 +61,110 @@ val DarkContainerHigh = Color(0xFF20262F)
 val DarkContainerHighest = Color(0xFF262C38)
 val DarkSurfaceDim = Color(0xFF10131A)
 val DarkSurfaceBright = Color(0xFF343B49)
+
+// ── 终端配色 ─────────────────────────────────────────────────────
+/**
+ * 终端页专用调色板。
+ *
+ * 终端是唯一需要「等宽字体 + 区分语义的日志色」的页面，直接套卡片体系里的
+ * Indigo / Mint / Coral 不行 —— 那几档是给浅色卡片上的小面积点缀用的，
+ * 铺成整屏正文会艳得跳出体系。但也不能像改造前那样把 `#121419`、`#57E357`
+ * 这些散装十六进制写死在页面里：亮色主题下这一页会变成一整块黑洞，
+ * 与全 App 的浅色卡片完全割裂，深色主题下它的底色又和 [DarkBg] 差一点点，
+ * 和其它页拼在同一条导航栏上看着就是不齐。
+ *
+ * 所以这里单独定义一套终端色，由主题通过 [LocalTerminalPalette] 下发：
+ * 浅色主题 = 浅底深字，夜间主题 = 深底浅字，色相全部取自现有令牌家族。
+ *
+ * 日志色均在各自底色上校验过对比度，正文档 ≥ 4.5:1（WCAG AA），
+ * 命令提示与加粗标识 ≥ 3:1；同一色相在浅/深两套里保持一致的语义指向。
+ */
+data class TerminalPalette(
+    /** 页面底色。 */
+    val surface: Color,
+    /** 标题栏 / 输入栏底色，比 [surface] 高一档做出分区。 */
+    val bar: Color,
+    /** 分隔线、描边。 */
+    val line: Color,
+    /** 正文。 */
+    val ink: Color,
+    /** 次要文字、未选中标签。 */
+    val muted: Color,
+    /** 强调色：选中标签、光标、发送按钮。 */
+    val accent: Color,
+    /** 选中标签上的文字色。 */
+    val onAccent: Color,
+    /** 未选中胶囊 / 快捷指令底色。 */
+    val chipBg: Color,
+    /** 输入框底色。 */
+    val fieldBg: Color,
+    val logCommand: Color,
+    val logError: Color,
+    val logWarning: Color,
+    val logInfo: Color,
+    val logDebug: Color,
+    val logDownload: Color,
+    val logSuccess: Color,
+    val logDefault: Color
+)
+
+val LightTerminalPalette = TerminalPalette(
+    surface = Color(0xFFFBFBFD),
+    bar = LightCard,
+    line = LightLine,
+    ink = LightInk,
+    muted = LightMuted,
+    accent = Indigo,
+    onAccent = Color.White,
+    chipBg = LightFieldGray,
+    fieldBg = LightCard,
+    // 浅底上的日志色统一压暗一档：原来的 One Dark 亮色（#57E357 等）
+    // 放到白底上对比度不到 2:1，等于看不见。
+    logCommand = Color(0xFF0E7A54),
+    logError = Color(0xFFC0362C),
+    logWarning = Color(0xFF8A6000),
+    logInfo = Color(0xFF0F6B66),
+    logDebug = Color(0xFF2B4FA8),
+    logDownload = Color(0xFF3B4C9C),
+    logSuccess = Color(0xFF146C46),
+    logDefault = LightInk
+)
+
+val DarkTerminalPalette = TerminalPalette(
+    surface = DarkContainerLowest,
+    bar = DarkContainerLow,
+    line = DarkLine,
+    ink = DarkInk,
+    muted = DarkMuted,
+    accent = Color(0xFF9FB0F0),
+    onAccent = Color(0xFF1B2447),
+    chipBg = DarkContainerHigh,
+    fieldBg = DarkContainerLow,
+    // 深底上的日志色沿用原终端观感（用户已经看惯了），但把色相对齐到项目色系：
+    // 原来的 #82AAFF / #89B4FA 两个蓝几乎分不出，这里 Debug 归到 Indigo、
+    // Download 改成更亮的青蓝，两者一眼能分开。
+    logCommand = Color(0xFF7EE7B8),
+    logError = Color(0xFFFF9E93),
+    logWarning = Color(0xFFE8BE5C),
+    logInfo = Color(0xFF79D6CC),
+    logDebug = Color(0xFF9FB0F0),
+    logDownload = Color(0xFF8CC4FF),
+    logSuccess = Color(0xFFA6E3A1),
+    logDefault = DarkInk
+)
+
+/**
+ * 当前终端会话的调色板。
+ *
+ * 终端的深浅色由终端页自己的开关决定（默认深色），不跟随系统主题 ——
+ * 所以这里由 [com.mineserve.mobile.ui.screens.TerminalScreen] 在页面内 provide，
+ * 而不是在 [MineServeMobileTheme] 里统一下发。默认值取深色，任何遗漏包裹的
+ * 调用点都会落在「黑色终端」这个默认约定上，不会出现半深半浅的混合页面。
+ *
+ * 用 static 版本：它只在这一个开关切换时变化，不随重组读取，终端页有几百个
+ * 日志行，每行都去读一次 compositionLocalOf 的 track 没有意义。
+ */
+val LocalTerminalPalette = staticCompositionLocalOf { DarkTerminalPalette }
 
 // Theme tokens come from MaterialTheme, so previews and explicit theme overrides
 // remain consistent instead of silently reading the system theme again.

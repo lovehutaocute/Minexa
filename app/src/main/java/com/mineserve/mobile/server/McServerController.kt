@@ -12,6 +12,8 @@ import com.mineserve.mobile.data.InstalledCore
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.MultiThreadDownloader
+import com.mineserve.mobile.data.BdsDigestStore
+import com.mineserve.mobile.data.BdsVersionCatalogLoader
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.ServerStorage
@@ -468,7 +470,7 @@ class McServerController(
         // BDS 是唯一「下载的是 zip 而不是单个 jar」的核心：官方包里有主程序 + 一批
         // 动态库 + 默认配置，必须整体解压，不能塞进 server.jar 路径当 JAR 处理。
         if (normalizedConfig.selectedCore == ServerCore.Bds) {
-            return@withContext downloadBds(customName, onProgress)
+            return@withContext downloadBds(customName, normalizedConfig.mcVersion, onProgress)
         }
         // 统一存储目录必须先可写：没有文件权限时 mkdirs 会静默失败，
         // 届时错误会推迟到几十秒后以「下载完成但找不到文件」的形式出现。
@@ -606,40 +608,70 @@ class McServerController(
     }
 
     /**
-     * 下载并安装官方 BDS。
+     * 下载并安装官方 BDS（**支持指定任意历史版本**）。
      *
      * 与其它核心的差别（都是官方包的客观事实，不是实现选择）：
      *  - 下载物是 zip（含 bedrock_server + 动态库 + 默认配置），解压而不是改名；
-     *  - 版本号由官方 links 接口给出，无法由用户选择（官方只提供最新版直链）；
-     *  - 解压后立刻做一次架构检查并写进日志，让用户在**下载完成时**就知道能不能跑，
-     *    而不是点了启动才被告知。
+     *  - 版本号来自 [com.mineserve.mobile.data.BdsVersionCatalogLoader]（官方接口 +
+     *    内置历史清单 + 带摘要的远端清单），而不是只取「最新一条直链」；
+     *  - 解压前先按包的真实结构生成安装计划（[BdsCompatibility]）：老版本带 `.so`、
+     *    主程序小得多，新版本是静态单文件；
+     *  - 下载完必须通过完整性校验才解压，失败时把这个服务器目录整个删掉
+     *    （新装场景没有用户数据可保），绝不留半成品目录。
      */
     private suspend fun downloadBds(
         customName: String,
+        version: String,
         onProgress: (Long, Long, Long) -> Unit
     ): String {
         ServerStorage.requireInternalWritable(repo.context)
-        termux.emitLog("[bds] 正在获取官方 BDS 下载地址…")
-        val build = runCatching { BdsSupport.parseLatestLinux(fetchText(BdsSupport.DOWNLOAD_LINKS_API)) }
-            .getOrNull()
-            ?: throw RuntimeException("无法从官方接口解析 BDS 下载地址，请检查网络后重试")
-        termux.emitLog("[bds] 官方最新版本：${build.version}")
+        val requested = version.trim().ifBlank {
+            throw RuntimeException("未选择 BDS 版本，请先在版本列表里选一个历史版本")
+        }
+        termux.emitLog("[bds] 正在解析 $requested 的下载信息…")
+        val entry = BdsVersionCatalogLoader.resolve(repo.context, requested)
+            .getOrElse { e ->
+                throw RuntimeException("无法解析 BDS $requested：${e.message ?: "版本清单不可用"}", e)
+            }
+        termux.emitLog(
+            "[bds] 目标版本 ${entry.version}" +
+                "（${entry.channel.downloadType}，" +
+                (if (entry.hasDigest) "清单提供 SHA-256" else "无清单摘要，将做结构校验") + "）"
+        )
         // 与 Java 核心同一套命名规则，核心类型位固定为 bds。
         val dirName = uniqueDirNameIn(autoDirName(ServerCore.Bds))
         termux.emitLog("[bds] 目录名：$dirName（显示名：$customName）")
         val serverDir = termux.serverDirFor(dirName)
-        val zip = File(termux.installer.tmpDir, "bds-${build.version}.zip")
+        val safeVersion = BdsPackageDownload.safeName(entry.version)
+        val zip = File(termux.installer.tmpDir, "bds-$safeVersion.zip")
+        zip.delete()
         try {
-            MultiThreadDownloader.download(
-                url = build.url,
-                target = zip,
+            val prepared = BdsPackageDownload.download(
+                entry = entry,
+                dest = zip,
+                digests = BdsDigestStore(repo.context),
                 onProgress = { downloaded, total, speed -> onProgress(downloaded, total, speed) },
-                onLog = { message -> termux.emitLog("[bds] $message") }
+                onAttempt = { attempt ->
+                    termux.emitLog("[bds] 下载源 ${attempt.label}：" + if (attempt.ok) "成功" else (attempt.reason ?: "失败"))
+                }
             )
-            if (zip.length() < 1024) throw RuntimeException("BDS 安装包过小（${zip.length()} 字节），下载可能失败")
-            val entries = BdsSupport.extractZip(zip, serverDir)
-            File(serverDir, "bds-version.txt").writeText(build.version + "\n")
+            termux.emitLog(
+                "[bds] 下载完成 ${prepared.report.bytes / (1024 * 1024)}MB，" +
+                    "校验 ${prepared.levelLabel} 通过（sha256=${prepared.report.sha256.take(16)}…）"
+            )
+
+            val plan = BdsCompatibility.plan(zip, entry.version)
+            plan.notes.forEach { termux.emitLog("[bds] $it") }
+            val entries = BdsSupport.extractZip(zip, serverDir, plan)
+            if (!plan.hasProperties) {
+                File(serverDir, BdsSupport.PROPERTIES_NAME)
+                    .writeText(BdsCompatibility.propertiesTemplate(port = 19132))
+                termux.emitLog("[bds] 安装包未自带 ${BdsSupport.PROPERTIES_NAME}，已生成官方默认配置")
+            }
+            File(serverDir, "bds-version.txt").writeText(entry.version + "\n")
             termux.emitLog("[bds] 已解压 $entries 个文件到 ${serverDir.absolutePath}")
+            BdsCompatibility.verifyInstalled(serverDir, plan, android.os.Build.SUPPORTED_ABIS.toList())
+                ?.let { throw RuntimeException("安装包解压后不可用：$it") }
             val check = BdsSupport.checkLaunch(serverDir, android.os.Build.SUPPORTED_ABIS.toList())
             termux.emitLog(
                 when {
@@ -648,13 +680,18 @@ class McServerController(
                     else -> "[bds] 平台检查通过（原生执行）"
                 }
             )
+        } catch (e: Throwable) {
+            // 新装失败必须把半成品目录清掉：否则列表里会出现一个「有目录、没核心」
+            // 的幽灵服务器，启动时才报错，用户还得手动去文件管理里删。
+            runCatching { serverDir.deleteRecursively() }
+            throw e
         } finally {
             zip.delete()
         }
         registerDownloadedCore(
             customName = customName,
             core = ServerCore.Bds,
-            version = build.version,
+            version = entry.version,
             dirName = dirName,
             serverFile = BdsSupport.ENTRY_NAME
         )
@@ -674,17 +711,23 @@ class McServerController(
         bdsUpdater.installedVersion(termux.serverDirFor(dirName))
 
     /**
-     * 把指定服务器的 BDS 核心更新到 [target]。
+     * 把指定服务器的 BDS 核心换成 [target]（升级、降级、同版本重装都走这条）。
      *
      * 前置条件（由 [BdsUpdater] 校验并抛 [BdsUpdater.UpdateFailed]）：
-     * 服务器已停止、目录是 BDS 布局、备份成功。
+     * 服务器已停止、目录是 BDS 布局、备份成功、安装包通过完整性校验。
      */
     suspend fun updateBdsCore(
         dirName: String,
         currentVersion: String?,
-        target: com.mineserve.mobile.data.BdsBuild,
+        target: com.mineserve.mobile.data.BdsVersionEntry,
         onEvent: (BdsUpdater.Event) -> Unit = {}
-    ): BdsUpdater.Result = bdsUpdater.update(dirName, currentVersion, target, onEvent)
+    ): BdsUpdater.Result = bdsUpdater.update(
+        dirName = dirName,
+        currentVersion = currentVersion,
+        target = target,
+        digests = BdsDigestStore(repo.context),
+        onEvent = onEvent
+    )
 
     /**
      * 在 servers 目录下为 [base] 找一个未被占用的目录名。
@@ -742,13 +785,19 @@ class McServerController(
             ServerCore.PowerNukkitX -> resolvePowerNukkitXUrl(version)
             ServerCore.PocketMine -> resolvePocketMineUrl(version)
             ServerCore.Allay -> resolveAllayUrl(version)
-            // BDS 版本由官方链接接口决定，不参与 Java 版本的解析
+            // BDS 走 downloadBds（zip + 解压），这里的解析只在兜底路径上用
             ServerCore.Bds -> resolveBdsUrl()
             ServerCore.Unknown -> throw IllegalArgumentException("未知核心类型，无法解析下载地址")
         }
     }
 
-    /** 官方 BDS 当前 Linux 构建的直链（版本无法指定，官方只给最新版） */
+    /**
+     * 官方 BDS 当前 Linux 构建的直链。
+     *
+     * 只作为兜底：正常下载走 [downloadBds]，版本由用户在历史版本列表里选定。
+     * 这里保留是因为 `resolveDownloadUrls` 是所有核心的统一入口，
+     * 未来若有「只要最新版直链」的调用方（例如 MCP 工具）仍能用。
+     */
     private fun resolveBdsUrl(): String {
         val build = BdsSupport.parseLatestLinux(fetchText(BdsSupport.DOWNLOAD_LINKS_API))
             ?: throw IllegalStateException("无法解析官方 BDS 下载索引")
@@ -1125,6 +1174,29 @@ class McServerController(
         fetchVersionOptions(core).map { it.version }
     }
 
+    /**
+     * BDS 的可选版本列表（全部历史版本）。
+     *
+     * 单独一个函数是因为它有两个额外消费者：下载页的版本抽屉、「服务器管理 → BDS
+     * 核心版本」里的历史版本弹窗。两者都要「版本 + 是否带摘要」，而不是只要一个字符串。
+     */
+    suspend fun fetchBdsVersionOptions(): List<CoreVersionOption> = withContext(Dispatchers.IO) {
+        val catalog = BdsVersionCatalogLoader.load(repo.context).getOrElse { e ->
+            throw RuntimeException("无法获取 BDS 版本清单：${e.message ?: "网络不可用"}", e)
+        }
+        catalog.entries
+            .filter { it.installable }
+            .map { entry ->
+                CoreVersionOption(
+                    version = entry.version,
+                    // 预览版在下拉里必须能区分出来：版本号长得很像，装错了会连不上正式服
+                    supportedGameVersion = if (entry.channel == com.mineserve.mobile.data.BdsChannel.Preview) "Preview" else null,
+                    assetUrl = entry.url,
+                    assetDigest = entry.sha256
+                )
+            }
+    }
+
     suspend fun fetchVersionOptions(core: ServerCore): List<CoreVersionOption> = withContext(Dispatchers.IO) {
         when (core) {
             ServerCore.Paper -> fetchPaperVersions().map(::CoreVersionOption)
@@ -1142,15 +1214,10 @@ class McServerController(
             ServerCore.PowerNukkitX -> fetchPowerNukkitXVersionOptions()
             ServerCore.PocketMine -> fetchPocketMineVersions()
             ServerCore.Allay -> fetchAllayVersionOptions()
-            // BDS 只有「官方当前版本」一个可选值：版本由官方接口给出，不能自选。
-            // 这里仍然返回一项（而不是空列表），版本下拉才不会显示成「无可用版本」。
-            ServerCore.Bds -> listOfNotNull(
-                runCatching { BdsSupport.parseLatestLinux(fetchText(BdsSupport.DOWNLOAD_LINKS_API)) }
-                    .getOrNull()
-                    ?.let { build ->
-                        CoreVersionOption(build.version, build.url)
-                    }
-            )
+            // BDS：列出**全部可选版本**（内置历史存档清单 + 官方接口 + 带摘要的远端清单），
+            // 用户在下拉里选哪个就下哪个。之前这里只返回「官方当前最新」一项，
+            // 想装旧版本只能自己找包、自己解压。
+            ServerCore.Bds -> fetchBdsVersionOptions()
             ServerCore.Unknown -> emptyList()
         }
     }

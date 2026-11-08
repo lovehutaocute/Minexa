@@ -143,7 +143,9 @@ fun HeaderBlock(
             modifier = Modifier
                 .fillMaxWidth()
                 .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
-                .padding(horizontal = McSpacing.Page, vertical = 10.dp)
+                // 纵向内边距与行距收紧过一次（10dp→5dp、3dp→1dp、标题 18sp→17sp），
+                // 目的是让头部少占约 12dp 让给内容；三处是同一套视觉节奏，改动时一起调。
+                .padding(horizontal = McSpacing.Page, vertical = 5.dp)
         ) {
             if (reserveBackSlot) Spacer(Modifier.height(ReserveBackSlotHeight))
             Text(
@@ -153,12 +155,12 @@ fun HeaderBlock(
                 fontWeight = FontWeight.Bold,
                 letterSpacing = 0.6.sp
             )
-            Spacer(Modifier.height(3.dp))
+            Spacer(Modifier.height(1.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     text = title,
                     color = MaterialTheme.colorScheme.onBackground,
-                    fontSize = 18.sp,
+                    fontSize = 17.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,

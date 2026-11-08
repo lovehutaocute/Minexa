@@ -17,6 +17,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -53,8 +54,15 @@ import com.mineserve.mobile.ui.theme.Muted
 fun BdsCoreCard(vm: McViewModel) {
     val status by vm.bdsCoreStatus.collectAsState()
     val progress by vm.bdsUpdateState.collectAsState()
+    val versions by vm.bdsVersions.collectAsState()
+    val versionsState by vm.bdsVersionsState.collectAsState()
     var pendingChannel by remember { mutableStateOf<BdsChannel?>(null) }
+    var showHistory by remember { mutableStateOf(false) }
     val busy = progress is BdsUpdateProgress.Running
+    // 弹窗打开时才拉清单：列表有 150 项以上，进页面就拉会白等一次网络
+    LaunchedEffect(showHistory) {
+        if (showHistory) vm.loadBdsVersions()
+    }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -124,6 +132,14 @@ fun BdsCoreCard(vm: McViewModel) {
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold
                     )
+                    // 校验强度是「这次装的东西有没有被验过」的唯一证据，必须留在结果里
+                    if (state.integrity.isNotBlank()) {
+                        Text(
+                            stringResource(R.string.bds_update_integrity, state.integrity),
+                            color = Muted,
+                            fontSize = 11.sp
+                        )
+                    }
                     Text(
                         stringResource(R.string.bds_update_backup_hint, state.backupName),
                         color = Muted,
@@ -148,8 +164,21 @@ fun BdsCoreCard(vm: McViewModel) {
                     if (state.rolledBack) {
                         Text(stringResource(R.string.bds_update_rolled_back), color = Mint, fontSize = 11.sp)
                     }
-                    TextButton(onClick = { vm.dismissBdsUpdateState() }) {
-                        Text(stringResource(R.string.bds_update_close), color = Indigo, fontSize = 11.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        // 校验失败 / 下载中断时服务器目录没有被动过，重下一次就是正解
+                        if (state.version != null) {
+                            TextButton(onClick = { vm.retryBdsInstall() }) {
+                                Text(
+                                    stringResource(R.string.bds_update_retry),
+                                    color = Indigo,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            }
+                        }
+                        TextButton(onClick = { vm.dismissBdsUpdateState() }) {
+                            Text(stringResource(R.string.bds_update_close), color = Indigo, fontSize = 11.sp)
+                        }
                     }
                 }
 
@@ -186,6 +215,15 @@ fun BdsCoreCard(vm: McViewModel) {
                                     color = Indigo
                                 )
                             }
+                        }
+                        // 「历史版本」在任何状态下都要有：用户想换版本与「有没有新版」无关，
+                        // 尤其在已经是最新版、但服务端插件只兼容旧版的时候。
+                        TextButton(onClick = { showHistory = true }, enabled = !busy) {
+                            Text(
+                                stringResource(R.string.bds_version_history),
+                                color = if (busy) Muted else Indigo,
+                                fontSize = 12.sp
+                            )
                         }
                     }
                     Text(stringResource(R.string.bds_core_note), color = Muted, fontSize = 11.sp)
@@ -228,6 +266,23 @@ fun BdsCoreCard(vm: McViewModel) {
                     Text(stringResource(R.string.bds_core_cancel), color = Muted)
                 }
             }
+        )
+    }
+
+    if (showHistory) {
+        BdsVersionDialog(
+            versions = versions,
+            listState = versionsState,
+            installedVersion = status.installedVersion,
+            busy = busy,
+            onRefresh = { vm.loadBdsVersions(force = true) },
+            onPick = { entry ->
+                showHistory = false
+                // 版本号到安装之间还要取一次远端元数据（直链 + SHA-256），
+                // 那一步失败只会弹提示，不会动磁盘上的任何东西。
+                vm.installBdsVersion(entry.version)
+            },
+            onDismiss = { showHistory = false }
         )
     }
 }

@@ -250,6 +250,33 @@ class BdsRuntimeTest {
     }
 
     /**
+     * 老版本（≤1.16）的动态库必须也进运行目录。
+     *
+     * 那批 ELF 的 RPATH 是 `$ORIGIN`，而主程序在运行目录里是硬链接、realpath 也在
+     * 运行目录 —— loader 会先去 `run/<dir>/` 找 `libCrypto.so` 之类。只把库留在
+     * 服务器目录里，靠 LD_LIBRARY_PATH 不一定救得回来（RPATH 优先），现象是启动即
+     * 报 `Error loading needed libs`，看起来像「包不完整」，实际是链接计划缺了一条。
+     */
+    @Test
+    fun runDirPlanLinksLegacySharedLibs() {
+        val serverDir = temp.newFolder("legacy-server")
+        File(serverDir, BdsRuntime.ENTRY_NAME).writeText("core")
+        File(serverDir, "libCrypto.so").writeText("lib")
+        File(serverDir, "libssl.so.1.1").writeText("lib")
+        File(serverDir, "bedrock_server.old-1.20.1").writeText("old")
+        File(serverDir, "server.properties").writeText("server-port=19132\n")
+
+        val plan = BdsRuntime.runDirPlan(serverDir, "/srv/mineserve")
+        val linked = plan.drop(1).map { it.name }
+
+        assertTrue(linked.contains("libCrypto.so"))
+        assertTrue(linked.contains("libssl.so.1.1"))
+        // 旧核心备份不是运行依赖，不该被链进运行目录
+        assertFalse(linked.any { it.startsWith("bedrock_server.old-") })
+        assertEquals("/srv/mineserve/libCrypto.so", plan.first { it.name == "libCrypto.so" }.guestTarget)
+    }
+
+    /**
      * `server.properties` 必须是**复制**过去的普通文件。
      *
      * 实测符号链接在这里读不出内容（BDS 打印 `Contents of server.properties: {}`

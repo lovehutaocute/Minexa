@@ -102,31 +102,20 @@ object BdsBuildCatalog {
      *
      * 不能直接比字符串：`1.26.9` 会大于 `1.26.61`。段数不同时短的用 0 补齐
      * （`1.26` == `1.26.0`），非数字段按 0 处理，保证任何输入都有确定结果。
+     *
+     * 实现在 [BdsVersions.compare]，这里保留旧入口是为了让既有调用点与单测不动；
+     * 新增代码请直接用 [BdsVersions]，避免出现两套比较规则。
      */
-    fun compareVersions(a: String?, b: String?): Int {
-        val left = segments(a)
-        val right = segments(b)
-        val size = maxOf(left.size, right.size)
-        for (i in 0 until size) {
-            val l = left.getOrElse(i) { 0 }
-            val r = right.getOrElse(i) { 0 }
-            if (l != r) return l.compareTo(r)
-        }
-        return 0
-    }
-
-    private fun segments(version: String?): List<Int> {
-        if (version.isNullOrBlank()) return emptyList()
-        return version.trim()
-            .split('.', '-', '_')
-            .map { part -> part.takeWhile(Char::isDigit).toIntOrNull() ?: 0 }
-    }
+    fun compareVersions(a: String?, b: String?): Int = BdsVersions.compare(a, b)
 
     /** [candidate] 是否比 [current] 新；[current] 未知时一律认为「有事可做」。 */
     fun isNewer(candidate: String?, current: String?): Boolean {
         if (candidate.isNullOrBlank()) return false
         if (current.isNullOrBlank()) return true
-        return compareVersions(candidate, current) > 0
+        // 段数不同但指同一版本（1.26.62 vs 1.26.62.1）不算「更新」：
+        // 否则界面会一直提示「可更新到 1.26.62.1」，而装完还是这句。
+        if (BdsVersions.sameRelease(candidate, current)) return false
+        return BdsVersions.compare(candidate, current) > 0
     }
 
     /**

@@ -110,6 +110,8 @@ fun MineServeMobileTheme(
         typography = McTypography,
         shapes = McShapes
     ) {
+        // 终端调色板不在这里下发：终端的深浅色是终端页自己的开关（默认深色），
+        // 与 App 主题无关，由 TerminalScreen 在页面内 provide。
         CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
             content()
         }

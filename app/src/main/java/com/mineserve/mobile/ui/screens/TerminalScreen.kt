@@ -1,54 +1,94 @@
 package com.mineserve.mobile.ui.screens
 
 // 性能修改理由：终端列表保留复用能力，并缓存行样式和截断超长显示文本以降低测量开销。
+//
+// 视觉修改理由（2026-11）：
+// 1. 原先整页把背景 / 文字 / 日志色写死成 #121419、#E8E8E8、#57E357 等散装十六进制。
+//    现在统一走 [LocalTerminalPalette]：色相全部归到项目色系，并且由终端页自己的
+//    「浅色终端」开关决定用哪一套 —— 默认深色，与 App 主题解耦。
+// 2. 标题栏原先只是一行 22sp 等宽文字 + 5 个裸图标按钮，和别的页「eyebrow + 标题」
+//    的层级语言不一致。现在改成同一套层次，并把低频操作（清空 / 新建 / 设置）收进
+//    溢出菜单，主操作只留「暂停滚动 + 复制」。
+// 3. 会话标签、快捷指令原先各自手搓圆角，与全项目的胶囊语言（McShape.Chip）不统一。
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
-import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
-import androidx.compose.runtime.snapshotFlow
-import kotlinx.coroutines.flow.distinctUntilChanged
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import android.content.Context
-import androidx.compose.ui.res.stringResource
+import android.content.SharedPreferences
 import com.mineserve.mobile.R
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.TerminalDisplayLine
 import com.mineserve.mobile.ui.TerminalLogTone
+import com.mineserve.mobile.ui.TerminalSession
 import com.mineserve.mobile.ui.TerminalSessionType
+import com.mineserve.mobile.ui.theme.DarkTerminalPalette
+import com.mineserve.mobile.ui.theme.LightTerminalPalette
+import com.mineserve.mobile.ui.theme.LocalTerminalPalette
+import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.theme.TerminalPalette
+import kotlinx.coroutines.flow.distinctUntilChanged
+
+/**
+ * 终端页的深浅色偏好。
+ *
+ * 与 App 主题解耦：用户可能整套 App 用浅色、但终端仍想要黑底（终端惯例），
+ * 也可能反过来。所以这是终端页自己的一个开关，默认深色（KEY_TERMINAL_LIGHT 缺省 false）。
+ */
+private const val LOG_PREFS = "log_prefs"
+private const val KEY_TERMINAL_LIGHT = "terminal_light"
 
 private data class QuickMcCommand(val emoji: String, val labelRes: Int, val command: String)
 
@@ -80,16 +120,45 @@ private val quickMcCommands = listOf(
 
 @Composable
 fun TerminalScreen(vm: McViewModel) {
+    val context = LocalContext.current
+    val prefs = remember { context.getSharedPreferences(LOG_PREFS, Context.MODE_PRIVATE) }
+    // 默认深色：缺省值 false = 黑色终端
+    var lightTheme by remember { mutableStateOf(prefs.getBoolean(KEY_TERMINAL_LIGHT, false)) }
+    CompositionLocalProvider(
+        LocalTerminalPalette provides if (lightTheme) LightTerminalPalette else DarkTerminalPalette
+    ) {
+        TerminalPane(
+            vm = vm,
+            prefs = prefs,
+            lightTheme = lightTheme,
+            onLightThemeChange = { on ->
+                lightTheme = on
+                prefs.edit().putBoolean(KEY_TERMINAL_LIGHT, on).apply()
+            }
+        )
+    }
+}
+
+@Composable
+private fun TerminalPane(
+    vm: McViewModel,
+    prefs: SharedPreferences,
+    lightTheme: Boolean,
+    onLightThemeChange: (Boolean) -> Unit
+) {
     val sessions by vm.terminalSessions.collectAsState()
     val activeId by vm.activeTerminalSessionId.collectAsState()
-    val active = sessions.firstOrNull { it.id == activeId } ?: sessions.first()
+    // 会话列表由 VM 维护，理论上进来时至少有一条；真为空时给一帧空态，
+    // 不用 first() 硬取（否则整棵组合树会抛异常）。
+    val active = sessions.firstOrNull { it.id == activeId } ?: sessions.firstOrNull() ?: return
     val mcLines by vm.terminalConsoleLines.collectAsState()
     val context = LocalContext.current
+    val pal = LocalTerminalPalette.current
     var input by remember(activeId) { mutableStateOf("") }
-    val logPrefs = remember { context.getSharedPreferences("log_prefs", Context.MODE_PRIVATE) }
-    var translateLogs by remember { mutableStateOf(logPrefs.getBoolean("localize", true)) }
+    var translateLogs by remember { mutableStateOf(prefs.getBoolean("localize", true)) }
     var showSettings by remember { mutableStateOf(false) }
-    // 日志汉化只对中文界面有意义，其它语言下隐藏入口并强制关闭翻译
+    var menuOpen by remember { mutableStateOf(false) }
+    // 日志汉化只对中文界面有意义；主题开关对所有语言都显示（它是通用偏好）。
     val isChineseUi = java.util.Locale.getDefault().language == "zh"
     var autoScrollPaused by rememberSaveable { mutableStateOf(false) }
     var pendingDangerousCommand by remember { mutableStateOf<String?>(null) }
@@ -153,140 +222,136 @@ fun TerminalScreen(vm: McViewModel) {
             input = ""
         }
     }
+
+    val clearSession = {
+        if (active.type == TerminalSessionType.Minecraft) vm.clearConsole()
+        else vm.clearTerminalSession(active.id)
+    }
+
     Scaffold(
-        containerColor = Color(0xFF121419),
+        containerColor = pal.surface,
         contentWindowInsets = WindowInsets(0.dp),
         bottomBar = {
             // Kept in this screen's bottom slot so the app navigation bar and
             // IME cannot overlay the command field or its send action.
-            Row(
-                Modifier
-                    .fillMaxWidth()
-                    .background(Color(0xFF121419))
-                    .imePadding()
-                    .padding(start = 16.dp, top = 8.dp, end = 16.dp, bottom = 12.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    if (active.type == TerminalSessionType.Minecraft) ">" else "$",
-                    color = Color(0xFF57E357),
-                    fontFamily = FontFamily.Monospace
-                )
-                OutlinedTextField(
-                    value = input,
-                    onValueChange = { input = it },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFF3996FF),
-                        unfocusedBorderColor = Color(0xFF596273),
-                        cursorColor = Color(0xFF57E357)
-                    )
-                )
-                IconButton(
-                    onClick = sendInput,
-                    enabled = input.isNotBlank(),
-                    modifier = Modifier
-                        .size(48.dp)
-                        .background(Color(0xFF3996FF), RoundedCornerShape(12.dp))
-                ) {
-                    Icon(Icons.AutoMirrored.Outlined.Send, stringResource(R.string.tm_send), tint = Color.White)
-                }
-            }
+            CommandBar(
+                value = input,
+                onValueChange = { input = it },
+                onSubmit = { sendInput() },
+                prompt = if (active.type == TerminalSessionType.Minecraft) ">" else "$",
+                pal = pal
+            )
         }
     ) { terminalPadding ->
-    Column(
-        Modifier
-            .fillMaxSize()
-            .background(Color(0xFF121419))
-            .statusBarsPadding()
-            .padding(terminalPadding)
-    ) {
-        Row(Modifier.fillMaxWidth().padding(14.dp), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(stringResource(R.string.tm_title), color = Color(0xFFE8E8E8), fontSize = 22.sp, fontFamily = FontFamily.Monospace)
-            Row {
-                if (isChineseUi) IconButton(onClick = { showSettings = true }) { Icon(Icons.Outlined.Settings, stringResource(R.string.tm_settings), tint = Color.White) }
-                IconButton(onClick = {
-                    if (active.type == TerminalSessionType.Minecraft) vm.clearConsole()
-                    else vm.clearTerminalSession(active.id)
-                }) { Icon(Icons.Outlined.Delete, stringResource(R.string.tm_clear_session), tint = Color(0xFFFFA7A7)) }
-                IconButton(onClick = { autoScrollPaused = !autoScrollPaused }) {
-                    Icon(
-                        if (autoScrollPaused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
-                        if (autoScrollPaused) stringResource(R.string.tm_resume_scroll) else stringResource(R.string.tm_pause_scroll),
-                        tint = if (autoScrollPaused) Color(0xFFFFC857) else Color.White
-                    )
-                }
-                IconButton(onClick = {
-                    val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+        Column(
+            Modifier
+                .fillMaxSize()
+                .background(pal.surface)
+                .padding(terminalPadding)
+        ) {
+            TerminalTopBar(
+                sessionName = active.name,
+                autoScrollPaused = autoScrollPaused,
+                onTogglePause = { autoScrollPaused = !autoScrollPaused },
+                onCopy = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                     clipboard.setPrimaryClip(android.content.ClipData.newPlainText(active.name, rawLines.joinToString("\n") { it.text }))
                     android.widget.Toast.makeText(context, context.getString(R.string.tm_copied), android.widget.Toast.LENGTH_SHORT).show()
-                }) { Icon(Icons.Outlined.ContentCopy, stringResource(R.string.tm_copy_log), tint = Color.White) }
-                IconButton(onClick = vm::createTerminalSession) { Icon(Icons.Outlined.Add, stringResource(R.string.tm_new_session), tint = Color.White) }
+                },
+                onClear = clearSession,
+                onNewSession = { vm.createTerminalSession() },
+                onOpenSettings = { showSettings = true },
+                menuOpen = menuOpen,
+                onMenuOpenChange = { menuOpen = it },
+                pal = pal
+            )
+            SessionTabs(
+                sessions = sessions,
+                activeId = activeId,
+                onSelect = { vm.selectTerminalSession(it) },
+                onClose = { vm.closeTerminalSession(it) },
+                pal = pal
+            )
+            if (active.type == TerminalSessionType.Minecraft) {
+                QuickCommandRow(onSend = sendCommand, pal = pal)
             }
-        }
-        Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            sessions.forEach { session ->
-                Row(Modifier.background(if (session.id == activeId) Color(0xFF2B313C) else Color(0xFF20242C), RoundedCornerShape(12.dp)).padding(start = 12.dp), horizontalArrangement = Arrangement.Center) {
-                    Text(session.name, color = Color(0xFFE8E8E8), fontSize = 12.sp, modifier = Modifier.padding(vertical = 10.dp).clickable { vm.selectTerminalSession(session.id) })
-                    if (session.type == TerminalSessionType.Termux) IconButton(onClick = { vm.closeTerminalSession(session.id) }) { Icon(Icons.Outlined.Close, stringResource(R.string.tm_close), tint = Color(0xFF999999)) } else Spacer(Modifier.width(8.dp))
-                }
-            }
-        }
-        if (active.type == TerminalSessionType.Minecraft) {
-            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                quickMcCommands.forEach { item ->
-                    AssistChip(
-                        onClick = { sendCommand(item.command) },
-                        label = { Text("${item.emoji} ${stringResource(item.labelRes)}", fontSize = 11.sp) }
-                    )
-                }
-            }
-        }
-        LazyColumn(state = listState, modifier = Modifier.weight(1f).fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            itemsIndexed(
-                renderedLines,
-                key = { _, line -> line.id },
-                contentType = { _, _ -> "terminal-log" }
-            ) { _, line ->
-                val style = terminalLogStyles.getValue(line.tone)
-                val displayText = remember(line.text) { line.text.forTerminalDisplay() }
-                Text(
-                    displayText,
-                    color = style.color,
-                    fontSize = 11.sp,
-                    fontFamily = terminalLogFontFamily,
-                    softWrap = true
-                )
-            }
-        }
-    }
-    }
-    if (showSettings) AlertDialog(
-        onDismissRequest = { showSettings = false },
-        title = { Text(stringResource(R.string.tm_settings)) },
-        text = {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.tm_localize))
-                Switch(
-                    checked = translateLogs,
-                    onCheckedChange = {
-                        translateLogs = it
-                        logPrefs.edit().putBoolean("localize", it).apply()
-                        vm.setLogTranslationEnabled(it && isChineseUi)
+            if (renderedLines.isEmpty()) {
+                EmptyTerminalState(pal = pal, modifier = Modifier.weight(1f))
+            } else {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(1.dp)
+                ) {
+                    itemsIndexed(
+                        renderedLines,
+                        key = { _, line -> line.id },
+                        contentType = { _, _ -> "terminal-log" }
+                    ) { _, line ->
+                        val color = pal.colorFor(line.tone)
+                        val displayText = remember(line.text) { line.text.forTerminalDisplay() }
+                        Text(
+                            displayText,
+                            color = color,
+                            fontSize = 11.5.sp,
+                            // 显式给出 lineHeight：一条日志自动折行时行距由它决定。
+                            // 不写会按字体默认值走，多行日志挤成一片，读不出是一句还是两句。
+                            lineHeight = 16.5.sp,
+                            fontFamily = terminalLogFontFamily,
+                            softWrap = true
+                        )
                     }
-                )
+                }
             }
-        },
-        confirmButton = { TextButton(onClick = { showSettings = false }) { Text(stringResource(R.string.tm_done)) } }
-    )
+        }
+    }
+    if (showSettings) {
+        // tm_localize 是「主标题\n副说明」两段式文案：整串丢进一个 Text 会让
+        // 标题和说明同字号同颜色，扫一眼分不出哪句是开关的名字。
+        val localizeParts = stringResource(R.string.tm_localize).split('\n', limit = 2)
+        AlertDialog(
+            onDismissRequest = { showSettings = false },
+            shape = McShape.Dialog,
+            title = { Text(stringResource(R.string.tm_settings), fontWeight = FontWeight.Bold) },
+            text = {
+                Column(Modifier.fillMaxWidth()) {
+                    TerminalSwitchRow(
+                        title = stringResource(R.string.tm_theme_light),
+                        subtitle = stringResource(R.string.tm_theme_hint),
+                        checked = lightTheme,
+                        onCheckedChange = onLightThemeChange
+                    )
+                    if (isChineseUi) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 4.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant
+                        )
+                        TerminalSwitchRow(
+                            title = localizeParts[0],
+                            subtitle = localizeParts.getOrNull(1).orEmpty(),
+                            checked = translateLogs,
+                            onCheckedChange = {
+                                translateLogs = it
+                                prefs.edit().putBoolean("localize", it).apply()
+                                vm.setLogTranslationEnabled(it && isChineseUi)
+                            }
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showSettings = false }) { Text(stringResource(R.string.tm_done)) }
+            }
+        )
+    }
     pendingDangerousCommand?.let { command ->
         AlertDialog(
             onDismissRequest = { pendingDangerousCommand = null },
-            title = { Text(stringResource(R.string.tm_danger_title), color = Color(0xFFFF7B72)) },
+            shape = McShape.Dialog,
+            title = { Text(stringResource(R.string.tm_danger_title), color = pal.logError) },
             text = { Text(stringResource(R.string.tm_danger_body, command)) },
             dismissButton = {
                 TextButton(onClick = { pendingDangerousCommand = null }) { Text(stringResource(R.string.s402)) }
@@ -297,29 +362,407 @@ fun TerminalScreen(vm: McViewModel) {
                         pendingDangerousCommand = null
                         vm.sendCommand(command)
                     },
-                    colors = ButtonDefaults.textButtonColors(contentColor = Color(0xFFFF7B72))
+                    colors = ButtonDefaults.textButtonColors(contentColor = pal.logError)
                 ) { Text(stringResource(R.string.tm_danger_confirm)) }
             }
         )
     }
 }
 
+/** 终端设置里的一行开关：标题 + 一句副说明 + Switch。 */
+@Composable
+private fun TerminalSwitchRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            if (subtitle.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    subtitle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontSize = 11.sp,
+                    lineHeight = 15.sp
+                )
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
+}
+
+/**
+ * 顶部标题栏。
+ *
+ * 与其它页面共用「eyebrow（10sp 加宽小字）+ 标题（18sp Bold）」这套层级。
+ * 标题位置放当前会话名 —— 终端里「我在哪条会话」比「这是终端页」更需要一眼看到
+ * （底栏图标已经说明了后者）。
+ *
+ * 操作分两档：高频的「暂停滚动 / 复制」留在外面，低频的「新建 / 清空 / 设置」
+ * 收进溢出菜单。改造前 5 个图标平铺，既挤又有两个（清空、新建）误触代价高。
+ */
+@Composable
+private fun TerminalTopBar(
+    sessionName: String,
+    autoScrollPaused: Boolean,
+    onTogglePause: () -> Unit,
+    onCopy: () -> Unit,
+    onClear: () -> Unit,
+    onNewSession: () -> Unit,
+    onOpenSettings: () -> Unit,
+    menuOpen: Boolean,
+    onMenuOpenChange: (Boolean) -> Unit,
+    pal: TerminalPalette
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(pal.bar)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .statusBarsPadding()
+                .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(
+                    stringResource(R.string.tm_title),
+                    color = pal.muted,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 0.6.sp
+                )
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    sessionName,
+                    color = pal.ink,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            TerminalIconAction(
+                icon = if (autoScrollPaused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
+                description = stringResource(
+                    if (autoScrollPaused) R.string.tm_resume_scroll else R.string.tm_pause_scroll
+                ),
+                tint = if (autoScrollPaused) pal.logWarning else pal.muted,
+                onClick = onTogglePause
+            )
+            TerminalIconAction(
+                icon = Icons.Outlined.ContentCopy,
+                description = stringResource(R.string.tm_copy_log),
+                tint = pal.muted,
+                onClick = onCopy
+            )
+            Box {
+                TerminalIconAction(
+                    icon = Icons.Outlined.MoreVert,
+                    description = stringResource(R.string.tm_settings),
+                    tint = pal.muted,
+                    onClick = { onMenuOpenChange(true) }
+                )
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { onMenuOpenChange(false) }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.tm_new_session), fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Outlined.Add, null, modifier = Modifier.size(McIcon.Item), tint = pal.muted) },
+                        onClick = {
+                            onMenuOpenChange(false)
+                            onNewSession()
+                        }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.tm_clear_session), fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Outlined.Delete, null, modifier = Modifier.size(McIcon.Item), tint = pal.logError) },
+                        onClick = {
+                            onMenuOpenChange(false)
+                            onClear()
+                        }
+                    )
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.tm_settings), fontSize = 13.sp) },
+                        leadingIcon = { Icon(Icons.Outlined.Settings, null, modifier = Modifier.size(McIcon.Item), tint = pal.muted) },
+                        onClick = {
+                            onMenuOpenChange(false)
+                            onOpenSettings()
+                        }
+                    )
+                }
+            }
+        }
+        HorizontalDivider(color = pal.line)
+    }
+}
+
+/** 标题栏图标按钮：命中区固定 [McIcon.Touch]，视觉图标 [McIcon.Item]。 */
+@Composable
+private fun TerminalIconAction(
+    icon: ImageVector,
+    description: String,
+    tint: Color,
+    onClick: () -> Unit
+) {
+    IconButton(onClick = onClick, modifier = Modifier.size(McIcon.Touch)) {
+        Icon(icon, contentDescription = description, tint = tint, modifier = Modifier.size(McIcon.Item))
+    }
+}
+
+/** 会话标签行。胶囊外观与全项目的 [McShape.Chip] 对齐，不再各写各的圆角。 */
+@Composable
+private fun SessionTabs(
+    sessions: List<TerminalSession>,
+    activeId: String,
+    onSelect: (String) -> Unit,
+    onClose: (String) -> Unit,
+    pal: TerminalPalette
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(pal.bar)
+            .horizontalScroll(rememberScrollState())
+            .padding(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        sessions.forEach { session ->
+            val selected = session.id == activeId
+            Row(
+                modifier = Modifier
+                    .height(SessionChipHeight)
+                    .clip(McShape.Chip)
+                    .background(if (selected) pal.accent else pal.chipBg)
+                    .clickable { onSelect(session.id) }
+                    .padding(
+                        start = 14.dp,
+                        end = if (session.type == TerminalSessionType.Termux) 4.dp else 14.dp
+                    ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    session.name,
+                    color = if (selected) pal.onAccent else pal.muted,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    modifier = Modifier
+                        .widthIn(max = 180.dp)
+                        .then(if (session.type == TerminalSessionType.Termux) Modifier.padding(end = 2.dp) else Modifier)
+                )
+                if (session.type == TerminalSessionType.Termux) {
+                    // 关闭按钮单独 28dp 命中区：原先整个会话标签可点关闭，
+                    // 想切会话却关掉会话是这里最常见的一次误操作。
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .clickable { onClose(session.id) },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Outlined.Close,
+                            contentDescription = stringResource(R.string.tm_close),
+                            tint = if (selected) pal.onAccent else pal.muted,
+                            modifier = Modifier.size(14.dp)
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private val SessionChipHeight = 34.dp
+
+/** 快捷指令行（仅 Minecraft 控制台）。 */
+@Composable
+private fun QuickCommandRow(onSend: (String) -> Unit, pal: TerminalPalette) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(pal.bar)
+            .horizontalScroll(rememberScrollState())
+            .padding(start = 14.dp, end = 14.dp, bottom = 10.dp),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        quickMcCommands.forEach { item ->
+            Box(
+                modifier = Modifier
+                    .height(30.dp)
+                    .clip(McShape.Chip)
+                    .background(pal.chipBg)
+                    .clickable { onSend(item.command) }
+                    .padding(horizontal = 11.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "${item.emoji} ${stringResource(item.labelRes)}",
+                    color = pal.ink,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 空状态。
+ *
+ * 会话刚建、或刚执行完清空时，日志区如果只是纯背景色，看不出是「没有日志」
+ * 还是「页面挂了」。这里给一个图标 + 一句说明，明确告诉用户日志何时出现。
+ */
+@Composable
+private fun EmptyTerminalState(pal: TerminalPalette, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center
+    ) {
+        Box(
+            modifier = Modifier
+                .size(56.dp)
+                .clip(CircleShape)
+                .background(pal.chipBg),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Outlined.Terminal,
+                contentDescription = null,
+                tint = pal.muted,
+                modifier = Modifier.size(McIcon.Display)
+            )
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(
+            stringResource(R.string.tm_empty),
+            color = pal.muted,
+            fontSize = 12.sp,
+            lineHeight = 18.sp,
+            textAlign = TextAlign.Center
+        )
+    }
+}
+
+/**
+ * 底部命令行。
+ *
+ * 用自绘的 BasicTextField 而不是 OutlinedTextField：后者的最小高度固定 56dp，
+ * 在「标题栏 + 标签行 + 快捷指令」已经占掉三行之后，输入区再占 56dp 会把
+ * 日志区压得很窄。这里固定 44dp（仍满足最小触摸区）。
+ */
+@Composable
+private fun CommandBar(
+    value: String,
+    onValueChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    prompt: String,
+    pal: TerminalPalette
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(pal.bar)
+            .imePadding()
+    ) {
+        HorizontalDivider(color = pal.line)
+        Row(
+            modifier = Modifier.padding(start = 16.dp, end = 14.dp, top = 10.dp, bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                prompt,
+                color = pal.logCommand,
+                fontFamily = FontFamily.Monospace,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .height(CommandFieldHeight)
+                    .clip(McShape.ControlCompact)
+                    .background(pal.fieldBg)
+                    .border(1.dp, pal.line, McShape.ControlCompact),
+                contentAlignment = Alignment.CenterStart
+            ) {
+                BasicTextField(
+                    value = value,
+                    onValueChange = onValueChange,
+                    singleLine = true,
+                    textStyle = TextStyle(
+                        color = pal.ink,
+                        fontSize = 13.sp,
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    cursorBrush = SolidColor(pal.accent),
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { onSubmit() }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                )
+            }
+            val canSend = value.isNotBlank()
+            Box(
+                modifier = Modifier
+                    .size(CommandFieldHeight)
+                    .clip(McShape.ControlCompact)
+                    .background(if (canSend) pal.accent else pal.chipBg)
+                    .clickable(enabled = canSend, onClick = onSubmit),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.Send,
+                    contentDescription = stringResource(R.string.tm_send),
+                    tint = if (canSend) pal.onAccent else pal.muted,
+                    modifier = Modifier.size(McIcon.Item)
+                )
+            }
+        }
+    }
+}
+
+private val CommandFieldHeight = 44.dp
+
 private const val MAX_RENDERED_LINES = 300
 private const val MAX_DISPLAY_LOG_CHARS = 400
 
-private data class TerminalLogStyle(val color: Color)
-
 private val terminalLogFontFamily = FontFamily.Monospace
-private val terminalLogStyles = mapOf(
-    TerminalLogTone.Command to TerminalLogStyle(Color(0xFF57E357)),
-    TerminalLogTone.Error to TerminalLogStyle(Color(0xFFFF7B72)),
-    TerminalLogTone.Warning to TerminalLogStyle(Color(0xFFE3B341)),
-    TerminalLogTone.Info to TerminalLogStyle(Color(0xFF8BD5CA)),
-    TerminalLogTone.Debug to TerminalLogStyle(Color(0xFF82AAFF)),
-    TerminalLogTone.Download to TerminalLogStyle(Color(0xFF89B4FA)),
-    TerminalLogTone.Success to TerminalLogStyle(Color(0xFFA6E3A1)),
-    TerminalLogTone.Default to TerminalLogStyle(Color(0xFFE8E8E8))
-)
+
+/**
+ * 日志语义色。取值全部来自 [TerminalPalette]，浅/深两套各自保证对比度：
+ * 浅底上用压暗一档的同色相，深底上用提亮一档的同色相，语义指向保持一致。
+ */
+private fun TerminalPalette.colorFor(tone: TerminalLogTone): Color = when (tone) {
+    TerminalLogTone.Command -> logCommand
+    TerminalLogTone.Error -> logError
+    TerminalLogTone.Warning -> logWarning
+    TerminalLogTone.Info -> logInfo
+    TerminalLogTone.Debug -> logDebug
+    TerminalLogTone.Download -> logDownload
+    TerminalLogTone.Success -> logSuccess
+    TerminalLogTone.Default -> logDefault
+}
 
 private fun String.forTerminalDisplay(): String =
     if (length > MAX_DISPLAY_LOG_CHARS) take(MAX_DISPLAY_LOG_CHARS) + "..." else this

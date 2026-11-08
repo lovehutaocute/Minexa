@@ -705,7 +705,22 @@ object BdsRuntime {
                 entries += RunEntry(name, "$guestServerDir/$name")
             }
         }
+        // 老版本（≤1.16）是**动态链接**的：`bedrock_server` 依赖同目录的 .so，
+        // 且这批 ELF 的 RPATH 是 `$ORIGIN`。主程序在运行目录里是硬链接，
+        // realpath 就在 `run/<dir>/`，于是 loader 会去**运行目录**找库 ——
+        // 只把库留在服务器目录里，靠 LD_LIBRARY_PATH 不一定救得回来
+        // （RPATH 优先于 LD_LIBRARY_PATH 时直接失败）。
+        // 库只有几 MB，全部链进运行目录最省事，也不影响 1.21+（那里没有 .so）。
+        serverDir.listFiles { f -> f.isFile && isSharedLibName(f.name) }
+            ?.sortedBy { it.name }
+            ?.forEach { lib -> entries += RunEntry(lib.name, "$guestServerDir/${lib.name}") }
         return entries
+    }
+
+    /** 顶层共享库：`libCrypto.so`、`libssl.so.1.1` 两种命名都要认 */
+    private fun isSharedLibName(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.endsWith(".so") || lower.contains(".so.")
     }
 
     /**

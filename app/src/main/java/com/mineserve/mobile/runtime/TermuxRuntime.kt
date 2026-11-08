@@ -4417,6 +4417,62 @@ class TermuxRuntime(context: Context) {
             guestServerDir = GUEST_SERVER_DIR
         )
 
+        /*
+         * SONAME 别名：老版本（1.21 之前）的包自带一批 .so，其中 `libcurl.so.4`
+         * 的 SONAME 是 `libcurl-gnutls.so.4`（Mojang 在 Debian 系上构建），而包里
+         * 只有前者这一个文件名。正常发行版靠 `libcurl4` 包里的软链补齐，
+         * 直接拷文件的安装包没有 —— box64 按 SONAME 找库时就会报
+         * `Error initializing native libcurl.so.4 (last dlerror is libcurl-gnutls.so.4)`
+         * 然后 `Error: Loading needed libs in elf .../bedrock_server`。
+         * 这里按 ELF 里写的 SONAME 补软链，不写死任何库名。
+         */
+        val aliases = runCatching {
+            val rootfsHost = containerRootfs(profile)
+            com.mineserve.mobile.server.BdsElfDeps.repairAliases(
+                entry = File(runDir, com.mineserve.mobile.server.BdsRuntime.ENTRY_NAME),
+                runDir = runDir,
+                guestRunDir = "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/run/$dirName",
+                // 容器里那几份系统库也要算进来：老版本声明依赖 libcurl.so.4，
+                // 而它可能只有容器里有（PRoot 默认搜索路径里本来就有 /usr/lib/x86_64-linux-gnu）
+                searchDirs = listOf(
+                    "/usr/lib/x86_64-linux-gnu",
+                    "/lib/x86_64-linux-gnu",
+                    "/usr/lib"
+                ).map { guest ->
+                    com.mineserve.mobile.server.BdsElfDeps.LibDir(File(rootfsHost, guest.trimStart('/')), guest)
+                } + listOf(
+                    com.mineserve.mobile.server.BdsElfDeps.LibDir(
+                        serverDir,
+                        GUEST_SERVER_DIR
+                    )
+                )
+            )
+        }.getOrDefault(emptyList())
+        aliases.forEach { (alias, real) ->
+            emitLog("[bds] 兼容别名：$alias → $real（包内 SONAME 与文件名不一致）")
+        }
+
+        // 启动前把「还缺哪些系统库」说清楚：缺库的最终现象是 box64 一句
+        // `Error loading needed libs`，用户完全看不出缺的是哪一个。
+        val missingDeps = runCatching {
+            com.mineserve.mobile.server.BdsElfDeps.missingNeeded(
+                File(runDir, com.mineserve.mobile.server.BdsRuntime.ENTRY_NAME),
+                listOf(
+                    runDir,
+                    serverDir,
+                    com.mineserve.mobile.server.BdsRuntime.x86LibDir(prefix)
+                )
+            )
+        }.getOrDefault(emptyList())
+        if (missingDeps.isNotEmpty()) {
+            // 这些库由「BDS 运行环境」初始化时联网补齐（x86libs/），不再让用户进容器
+            // 手动 apt —— arm64 容器里 apt 装出来的同名库 box64 用不了（wrong ELF class）。
+            emitLog(
+                "[bds] 注意：该版本还需 x86_64 运行库 ${missingDeps.joinToString()}；" +
+                    "回到「BDS 运行环境」点「重新初始化」会自动联网补齐"
+            )
+        }
+
         val guestBox64 = "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/box64"
         val guestEntry = "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/run/$dirName/" +
             com.mineserve.mobile.server.BdsRuntime.ENTRY_NAME
@@ -4434,6 +4490,11 @@ class TermuxRuntime(context: Context) {
         //    被翻译程序找库的顺序，正是这里要的语义。
         //  - 顺序：内置 x86 库 → 服务器目录（老版本 BDS 把 libCrypto/libssl 放在
         //    服务端目录里）→ 运行目录（符号链接那一层）。
+        // 顺序：内置 x86 库 → 服务器目录（老版本 BDS 把 libCrypto/libssl 放在
+        // 服务端目录里）→ 运行目录（符号链接那一层）→ 容器系统库。
+        // 最后两段是给老版本兜底的：1.21 之前的包不保证把所有依赖都带全
+        // （例如需要系统 libssl3 / libstdc++6），容器里有就用，没有就由上面
+        // 那条「还缺哪些系统库」的日志点名。放在最后才不会顶掉我们自己的 glibc。
         val guestLibs = "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/x86libs"
         // BOX64_RCFILE：box64 默认只读 /etc/box64.box64rc 与 ~/.box64rc，
         // 我们解包出来的那份在 bind 目录里，必须显式指路，否则分支调优全部不生效。
@@ -4442,7 +4503,8 @@ class TermuxRuntime(context: Context) {
             "export BOX64_RCFILE='${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/${rcFile.name}'; "
         } else ""
         val libExport = "export BOX64_LD_LIBRARY_PATH='$guestLibs:$GUEST_SERVER_DIR:" +
-            "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/run/$dirName'; "
+            "${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}/run/$dirName" +
+            ":/usr/lib/x86_64-linux-gnu:/lib/x86_64-linux-gnu'; "
         val command = libExport +
             "export BOX64_NOBANNER=1; " +
             rcExport +

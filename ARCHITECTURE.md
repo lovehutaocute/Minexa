@@ -298,6 +298,65 @@ runtime/, native/                 bootstrap/运行时工作目录
 界面入口在「服务器管理 → BDS 核心版本」（仅 BDS 核心显示）：当前 / 最新稳定 / Preview 三行 + 更新按钮，
 更新前弹确认框逐条列出「会备份什么、会保留什么」。
 
+### BDS 版本矩阵与历史版本（1.5.0）
+
+官方 links 接口只给「当前稳定版 + 当前 Preview」两条，装不了旧版本，也没有任何摘要。
+`data/BdsVersions.kt` 因此把三份来源合并成一张清单：
+
+| 来源 | 提供什么 | 局限 |
+|---|---|---|
+| 内置 `assets/bds/bds-versions.json` | 123 条历史构建（`1.7.0.13` → `1.21.100.6`），`{v,c,u}` 三元组 | 只随 APK 更新，永远落后于官方 |
+| 官方 `download/links` | 当前稳定版与 Preview 的权威直链 | 只有两条，无摘要 |
+| 远端清单（EndstoneMC 维护） | 历史版本 + SHA-256 摘要 | 依赖第三方，可能缺条目或写错构建号 |
+
+`merge()` 按版本号合并：官方条目优先（链路权威），远端补齐历史与摘要，内置兜底离线可用。
+版本比较用数字段（`compare`），同版判定只比前三段、预览版整串比（`sameRelease`）——
+`1.21.100.6` 与 `1.21.100.62` 不是同一版，而 `1.26.61.1` 的补零变体是。
+`candidates()` 会为一个版本生成多个直链候选（含构建号补零/去零变体），逐个试而不是只赌一条。
+摘要不在主清单里时按需拉该版本的 `metadata.json` 补齐（`resolve`）。目录缓存 30 分钟。
+`tools/fix-bds-catalog.py` 是维护脚本，用来探测并修正清单里写错的构建号。
+
+界面侧 `ui/screens/BdsVersionDialog.kt` 提供搜索、稳定/预览筛选、已安装标记、每条的校验等级徽标，
+以及**降级二次确认** —— 降级会丢新版世界，不能当普通重装处理。
+
+### 安装包完整性：三档校验（`data/BdsPackageIntegrity.kt`）
+
+一个 93MB 的 zip 从第三方 CDN 下来，必须能回答「这是不是官方那个包」。校验分三档，取当前能拿到的最高一档：
+
+| 档 | 判据 | 用在哪 |
+|---|---|---|
+| `ManifestSha256` | 清单里给了该版本的 SHA-256 | 最新稳定版、远端清单覆盖的历史版 |
+| `PinnedSha256` | 本地固定摘要表（`BdsDigestStore`） | 已验证过的版本，换源重下时仍可判真 |
+| `Structural` | zip 可读 + 全条目 CRC + 含 `bedrock_server` + 体积下限 | 只有直链、没有任何摘要时 |
+
+`server/BdsPackageDownload.kt` 把「版本条目」变成「已校验的 zip」：候选直链逐个试，
+**每个源下载完立刻校验**，通过才 `rename` 到最终路径，失败换下一条候选；
+单源预算 15 分钟、总预算 20 分钟。半截文件永远不会落在目标路径上。
+
+### 跨版本解压与 ELF 依赖自愈
+
+BDS 的安装包布局并不稳定：有的版本把所有文件放在顶层，有的套一层目录，有的带调试符号 `.debug`，
+有的自带 `server.properties` 模板。`server/BdsCompatibility.kt` **读 zip 中央目录生成安装计划**
+（`plan()`）而不是按版本号写死：识别顶层目录、动态库集合、调试符号、是否自带配置，
+拒绝 Windows 包与非法路径（`..` / 绝对路径），解压时剥离前缀（`extract()`）；
+包里没有 `server.properties` 时写入官方默认模板（`propertiesTemplate()`）。
+落地后 `verifyInstalled()` 复检三件事：体积下限、主程序 ELF 架构、同目录每个 `.so` 架构与主程序一致。
+
+`server/BdsElfDeps.kt` 直接解析 ELF64 小端头的 `PT_DYNAMIC`，取出 `DT_NEEDED` 与 `DT_SONAME`：
+
+- `repairAliases()` 按 SONAME 补软链。典型故障是包里写 `libcurl.so.4`、系统里只有
+  `libcurl-gnutls.so.4`（或反之），文件名对不上就 `Error loading needed libs`；
+- `missingNeeded()` 在启动前把所有缺失的 `DT_NEEDED` 一次列出来，而不是让 box64 报第一条就退出。
+
+`server/BdsCompatLibs.kt` 负责历史版本的 x86_64 兼容库：从 6 个根库（`libcurl` / `libstdc++` /
+`libssl1.1` / `libcrypto1.1` / `libz` / `libnsl`）出发，按 `SONAME_TO_PKG`（41 条 soname → Ubuntu focal amd64 包）
+做**依赖闭包**，走 `Packages.gz` 索引查真实文件名（不写死版本号），下载后硬校验 SHA-256，
+只从 `data.tar.*` 里取需要的 `.so`。`libnsl.so.1` 在 focal 里已删除，单独从 old-releases 取 glibc 2.21 的那份。
+
+这一整套改动把 BDS 环境的代次推到 `gen=2`：老安装的 `runtime.ready` 里记的是 gen=1，
+`BdsEnvironmentManager` 会判定 `staleGeneration` 并提示「重新初始化」——
+文案是「重新初始化」而不是「首次安装」，因为容器和 box64 都还在，只是缺兼容库。
+
 ### 多源下载（`data/DownloadSources.kt`）
 
 原项目有五套各自的「多源」写法，且都不校验内容。现在统一成 `MultiSourceDownload`：
@@ -424,6 +483,30 @@ PowerNukkitX 另有一条 Maven Central 回退路径：它的历史版本（`Pow
 
 CurseForge 整合包没有实现直接导入，因为它的元数据/API 流程并不等同于自包含的 `.mrpack`。
 
+## UI 结构与导航
+
+导航不是 `NavHost`，而是 `ui/NavStack.kt` 里的一套自建栈 —— 因为目标 SDK 是 28、没有引入
+navigation-compose，而且需要「二级页隐藏底栏、返回时恢复列表滚动位置」这种细粒度控制。
+
+| 层级 | 内容 | 行为 |
+|---|---|---|
+| 一级 | 底部 7 个 Tab：概览 / 下载 / 服务器管理 / 玩家 / 文件 / 终端 / 设置，外加一个「更多」 | 底栏常驻；Tab 之间切换不压栈 |
+| 二级 | `SubPage` 共 20 项（网络、备份、诊断、保活、崩溃报告、MCP、FTP、自动化、属性、插件、世界、图标、环境管理等） | 压入 `List<NavEntry>`，隐藏底栏、左上角浮出返回键 |
+
+关键规则：
+
+- 栈用 `listSaver` 持久化，进程被回收后重建仍停在原页；
+- 同一页同一参数不重复压栈（避免「点两次返回要按三下」）；
+- 系统返回键与返回按钮共用 `goBack()`，不会出现两个返回语义；
+- `SubPage.More` 视为 root level，从任何 Tab 都能直达且不隐藏底栏 —— 它本来就是给「找不到入口」的人准备的。
+
+1.5.0 重做了两页，都是信息架构问题而不是视觉问题：
+
+- **设置页**从一张平铺列表改成四组：通用 / 下载与更新 / 运行与保活 / 关于与支持。
+  APT 源这类次要配置收进折叠区，外部链接收敛为底部三个图标；此前 20 多项平铺，用户找不到「自动备份」在哪。
+- **终端页**给了独立的深浅色（默认深色，与全局主题解耦）、会话标签、标题栏溢出菜单、空状态，
+  并把输入行改为自绘命令行 —— 原先复用的 `TextField` 在长命令 + 中文输入法下会把提示符挤出行外。
+
 ## 后台运行与状态
 
 `McForegroundService` 管理前台通知、可选 CPU/Wi-Fi 唤醒锁和可选的可拖动状态悬浮条。服务返回 `START_STICKY`；`BootReceiver`、周期 WorkManager 和 `onTaskRemoved` 的非精确闹钟尝试提供额外恢复路径。这些都只能尽力保活，无法覆盖 Android/厂商的省电策略。
@@ -444,7 +527,7 @@ Java 与 PHP 运行时的安装状态都通过探测可执行文件是否存在�
 
 终端输出作为 Flow 共享给 Compose 控制台，并保存到 `logs/latest.log`。发生异常退出时，`CrashReportManager` 生成应用报告：先按关键词（Watchdog、`Current Thread: Server thread`、`Exception in thread`、`Caused by:`、`OutOfMemoryError` 等）成块提取关键片段并保留其后的缩进栈行，再补上最近 800 行日志作为上下文，两者按原顺序去重输出。这样 Paper Watchdog 转储的数百行线程栈不会被单纯截尾丢掉。界面会扫描所有已安装核心的原生 `crash-reports/`，并由 `CrashReportAnalyzer` 在本地执行启发式分析；不会上传崩溃报告。
 
-Minecraft 通过手机的普通网络套接字监听。局域网连接使用手机 LAN IP 和服务端口。隧道侧支持自建 frp / bore 与托管平台 SakuraFrp / ME Frp，四者仅作为隧道客户端；公网可达性仍取决于所选隧道或用户配置的网络映射，应用不会绕过运营商 CGNAT 或 NAT。
+Minecraft 通过手机的普通网络套接字监听。局域网连接使用手机 LAN IP 和服务端口。隧道侧支持自建 frp 与托管平台 SakuraFrp / ME Frp，三者仅作为隧道客户端；bore 后端（`BoreBackend`，纯 Kotlin 协议实现）仍在 `TunnelManager` 注册表里，但网络页没有入口，属于「代码在、用户不可达」；公网可达性仍取决于所选隧道或用户配置的网络映射，应用不会绕过运营商 CGNAT 或 NAT。
 
 ## 关键类
 
@@ -470,6 +553,15 @@ Minecraft 通过手机的普通网络套接字监听。局域网连接使用手�
 | `CrashReportManager` / `CrashReportAnalyzer` | 崩溃捕获、汇总、本地诊断 |
 | `McForegroundService` / `StatusOverlay` | 前台寿命、唤醒锁、状态显示 |
 | `McpServerManager` / `McpToolCatalog` | 内嵌 MCP 服务器与工具清单 |
-| `TunnelManager` | frp、bore、SakuraFrp、ME Frp 四家隧道后端的分派 |
+| `TunnelManager` | frp / bore / SakuraFrp / ME Frp 四个后端的分派 + STUN、EasyTier 两条独立通道（bore 无 UI 入口） |
 | `WidgetUpdater` / `WidgetActionReceiver` | 桌面组件刷新与组件按钮动作分发 |
 | `ScheduleManager` | 每日定时开/停服闹钟 |
+| `AutomationTask` / `AutomationScheduler` / `AutomationRunner` | 周期任务（间隔 / 每 N 天 / 每周 / cron）的定义、闹钟排期与执行 |
+| `FtpServerManager` | Apache FTPServer 实例的启停与配置应用 |
+| `ServerStorage` | 服务器根目录唯一真相（`/storage/emulated/0/Minexa/Minecraftserver`）与目录定位 |
+| `LegacyServerMigration` | 旧私有目录迁移：逐文件容错复制、逐文件比对、可忽略不可读文件 |
+| `BdsEnvironmentManager` | BDS 环境状态机（容器 → box64 → 兼容库 → 实测）与 `runtime.ready` 代次判据 |
+| `BdsVersions` / `BdsPackageDownload` | BDS 版本清单三路合并、候选直链与已校验包 |
+| `BdsPackageIntegrity` / `BdsDigestStore` | 三档完整性校验与本地摘要表 |
+| `BdsCompatibility` / `BdsElfDeps` / `BdsCompatLibs` | 按包结构生成安装计划、ELF 依赖解析与别名、历史版本 x86_64 兼容库闭包 |
+| `NavStack` | 自建页面返回栈（一级 Tab / 二级 `SubPage`） |

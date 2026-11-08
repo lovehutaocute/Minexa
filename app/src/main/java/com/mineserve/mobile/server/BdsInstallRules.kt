@@ -86,4 +86,33 @@ internal object BdsInstallRules {
         }
         return removed
     }
+
+    /**
+     * 清掉「新版本安装包里没有」的旧动态库。
+     *
+     * 这条是换版兼容的必需步骤，不是清理洁癖：官方包的形态在 1.21 变过一次 ——
+     * ≤1.16 的包自带一批 `.so`（动态链接），1.21+ 是一个静态链接的单文件。
+     * 从老版本升到新版本时，目录里会留下一堆旧的 `.so`；[BdsSupport.checkLaunch]
+     * 会读到它们、判定「库与主程序架构不一致」或干脆让 loader 抢先加载错版本，
+     * 结果是刚装完就起不来。反过来从新版本降到老版本同样会残留。
+     *
+     * 只删 `.so` / `.so.*`，且只删**不在 [keep] 里**的；用户自己的文件、
+     * 世界、插件、配置一律不碰。
+     *
+     * @return 被删掉的文件（回滚时无法恢复，但它们本来就不该存在）
+     */
+    fun pruneStaleLibs(serverDir: File, keep: Set<String>): List<File> {
+        val removed = mutableListOf<File>()
+        serverDir.listFiles { f ->
+            f.isFile && isSharedLib(f.name) && f.name !in keep
+        }?.forEach { file ->
+            if (runCatching { file.delete() }.getOrDefault(false)) removed += file
+        }
+        return removed
+    }
+
+    private fun isSharedLib(name: String): Boolean {
+        val lower = name.lowercase()
+        return lower.endsWith(".so") || lower.contains(".so.")
+    }
 }

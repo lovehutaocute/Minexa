@@ -1753,6 +1753,15 @@
     <string name="net_dash_frp_address">آدرس عمومی FRP</string>
     <string name="net_dash_stun_address">آدرس عمومی STUN</string>
 
+    <!-- برچسب‌های گروه در صفحه تنظیمات (هم‌مقیاس با eyebrow در HeaderBlock) -->
+    <string name="set_group_general">عمومی</string>
+    <string name="set_group_download">دانلود و به‌روزرسانی</string>
+    <string name="set_group_runtime">اجرا و زنده‌نگه‌داشتن</string>
+    <string name="set_group_about">درباره و پشتیبانی</string>
+    <string name="set_link_github">GitHub</string>
+    <string name="set_link_email">ایمیل</string>
+    <string name="set_link_qq">گروه QQ</string>
+
     <string name="set_language_title">زبان</string>
     <string name="set_language_hint">زبان رابط برنامه را انتخاب کنید. بلافاصله اعمال می‌شود و در اجرای بعدی هم حفظ می‌گردد.</string>
     <string name="set_language_change">تغییر</string>
@@ -1815,6 +1824,9 @@
     <!-- Terminal screen -->
     <string name="tm_send">ارسال</string>
     <string name="tm_title">ترمینال</string>
+    <string name="tm_empty">هنوز خروجی‌ای وجود ندارد.\nپس از اجرای سرور، گزارش‌ها به‌صورت زنده اینجا نمایش داده می‌شوند.</string>
+    <string name="tm_theme_light">ترمینال روشن</string>
+    <string name="tm_theme_hint">برای استفاده از ترمینال تیره (پیش‌فرض) خاموش کنید</string>
     <string name="tm_settings">تنظیمات ترمینال</string>
     <string name="tm_clear_session">پاک‌کردن نشست جاری</string>
     <string name="tm_resume_scroll">از سرگیری پیمایش خودکار</string>
@@ -2050,7 +2062,7 @@
     <string name="mt_legacy_dir">پوشهٔ نسخهٔ قدیمی (منبع انتقال): %1$s</string>
     <string name="dl_desc_bds">سرور رسمی Bedrock با فایل اجرایی بومی، بدون نیاز به Java</string>
     <string name="dl_bds_platform_warning">نسخهٔ رسمی BDS فقط برای Linux x86_64 منتشر می‌شود و این دستگاه arm64 است، پس به کانتینر PRoot و ترجمهٔ box64 نیاز دارد. نخست محیط BDS را در صفحهٔ «وابستگی‌ها و محیط» مقداردهی کنید (حدود ۳۲ مگابایت دانلود؛ box64 داخل برنامه است و به اینترنت نیاز ندارد)، سپس سرور را اجرا کنید. راه‌اندازی ترجمه‌شده کند است و حدود نصف سرعت بومی کار می‌کند؛ طبیعی است.</string>
-    <string name="dl_bds_version_note">نسخهٔ BDS انتخابی نیست: هنگام دانلود آخرین ساخت Linux از سرویس رسمی گرفته می‌شود و شمارهٔ واقعی در پوشهٔ سرور نوشته می‌شود.</string>
+    <string name="dl_bds_version_note">هر نسخهٔ تاریخی BDS قابل انتخاب است: فهرست نسخه‌ها شامل آرشیو همراه برنامه، سرویس رسمی و مخزن راه‌دور است. هر دانلود پیش از نصب با SHA-256 (یا بررسی ساختاری برای ساخت‌های قدیمی‌تر) تأیید می‌شود و شمارهٔ واقعی در bds-version.txt پوشهٔ سرور نوشته می‌شود.</string>
 
     <!-- 旧版目录迁移 -->
     <string name="legacy_migrate_title">%1$d سرور نسخهٔ قدیمی یافت شد</string>
@@ -2079,6 +2091,7 @@
     <string name="bds_env_status_failed">مقداردهی ناموفق</string>
     <string name="bds_env_stage_container">دانلود و باز کردن کانتینر Ubuntu</string>
     <string name="bds_env_stage_box64">دانلود و نصب box64</string>
+    <string name="bds_env_stage_compat">دانلود کتابخانه‌های اجرایی نسخه‌های قدیمی</string>
     <string name="bds_env_stage_verify">آزمایش box64 داخل کانتینر</string>
     <string name="bds_env_component_container">کانتینر PRoot</string>
     <string name="bds_env_component_box64">box64</string>
@@ -2097,6 +2110,7 @@
     <string name="bds_env_probe_ok">اتصال به سرویس‌های Minecraft سالم است؛ اگر BDS باز هم خطا داد گزارش کنسول را بفرستید</string>
     <string name="bds_env_remove_confirm">فقط box64 و نشانهٔ آماده‌بودن حذف می‌شوند؛ کانتینر PRoot می‌ماند چون ممکن است Java از آن استفاده کند. ادامه می‌دهید؟</string>
     <string name="bds_env_ready_hint">محیط آماده است: در صفحهٔ نمای کلی سرور BDS را انتخاب و مستقیماً اجرا کنید. نیازی به مقداردهی مجدد نیست.</string>
+    <string name="bds_env_upgrade_hint">محیط اجرا ارتقا یافته است (کتابخانه‌های سازگاری موردنیاز BDS ۱٫۱۸ و قدیمی‌تر اضافه شده‌اند) و باید یک بار دیگر مقداردهی شود. فایل‌های کانتینر و کتابخانه‌های موجود دوباره استفاده می‌شوند و چیزی دوباره دانلود نمی‌شود.</string>
     <string name="bds_env_missing_hint">مقداردهی نخست فقط کانتینر PRoot را دانلود می‌کند (حدود ۳۲ مگابایت، شش آینه با تغییر خودکار)؛ box64 همراه برنامه است. کل فضا حدود ۳۸۰ مگابایت است (کانتینر + box64 + کپی ۲۴۴ مگابایتی).</string>
     <string name="bds_env_need_bootstrap">محیط Termux هنوز مقداردهی نشده است. ابتدا در برگهٔ وابستگی‌ها نصب را کامل کنید، سپس محیط BDS را مقداردهی کنید</string>
     <string name="bds_env_source">منبع: %1$s</string>
@@ -2149,6 +2163,30 @@
     <string name="bds_update_rolled_back">به وضعیت پیش از به‌روزرسانی بازگردانده شد</string>
     <string name="bds_update_failed_title">به‌روزرسانی ناموفق</string>
     <string name="bds_update_close">بستن</string>
+    <string name="bds_update_retry">دانلود مجدد</string>
+    <string name="bds_update_integrity">بررسی بستهٔ نصب: %1$s تأیید شد</string>
+
+    <!-- BDS historical versions -->
+    <string name="bds_version_history">تاریخچهٔ نسخه‌ها</string>
+    <string name="bds_version_count">%1$d نسخه</string>
+    <string name="bds_version_offline">فهرست آفلاین</string>
+    <string name="bds_version_refresh">تازه‌سازی</string>
+    <string name="bds_version_close">بستن</string>
+    <string name="bds_version_search">جست‌وجوی نسخه، مثلاً 1.20</string>
+    <string name="bds_version_filter_all">همه</string>
+    <string name="bds_version_filter_stable">پایدار</string>
+    <string name="bds_version_note">نسخه‌های تاریخی از فهرست آرشیوی همراه برنامه و مخزن نسخهٔ راه‌دور می‌آیند: نسخه‌هایی که «SHA-256» دارند خلاصهٔ رسمی منتشرشده را پیش از نصب بایت‌به‌بایت مقایسه می‌کنند؛ نسخه‌های قدیمی‌تر که «بررسی ساختاری» دارند خلاصهٔ منتشرشده ندارند، بنابراین یکپارچگی آرشیو و ساختار فایل بررسی و خلاصهٔ همین بار روی دستگاه ثبت می‌شود تا دانلود بعدی همان نسخه با آن مطابق باشد.</string>
+    <string name="bds_version_empty">نسخهٔ مطابقی نیست</string>
+    <string name="bds_version_installed">نصب‌شده</string>
+    <string name="bds_version_install">نصب</string>
+    <string name="bds_version_digest_sha">SHA-256</string>
+    <string name="bds_version_digest_structural">بررسی ساختاری</string>
+    <string name="bds_version_downgrade_title">بازگشت به نسخهٔ قدیمی‌تر</string>
+    <string name="bds_version_downgrade_msg">هسته از %1$s به %2$s بازمی‌گردد.\n\n· ممکن است دنیای بازی با نسخهٔ جدید ارتقا یافته باشد و هستهٔ قدیمی نتواند آن را بخواند؛ پیش از بازگشت به‌طور خودکار پشتیبان گرفته می‌شود، اما نجات دنیا به نوع تغییرات ارتقا بستگی دارد\n· هستهٔ قدیمی با نام bedrock_server.old-%1$s نگه داشته می‌شود و هر زمان می‌توان بازگرداند\n· کلاینت هم باید به %2$s تغییر کند\n\nبا این حال بازگردم؟</string>
+    <string name="bds_version_downgrade_ok">بازگردان</string>
+    <string name="bds_version_list_failed">بارگذاری فهرست نسخه‌ها ناموفق بود</string>
+    <string name="bds_version_list_empty">نسخهٔ قابل نصبی وجود ندارد</string>
+    <string name="bds_version_resolve_failed">آماده‌سازی نسخهٔ %1$s ممکن نشد: %2$s</string>
 
     <!-- صفحهٔ دانلود هسته (چیدمان برگهٔ مونتاژ) -->
     <string name="dl2_subtitle">هسته و نسخه را انتخاب کنید، نام بگذارید و در پوشهٔ مشترک نصب کنید</string>
@@ -2326,5 +2364,6 @@
     <string name="prop_opt_log_verbose">جزئی</string>
     <string name="prop_opt_zlib">zlib</string>
     <string name="prop_opt_snappy">Snappy</string>
+    <string name="manual_entry_desc">راهنمای کاربر</string>
 
 </resources>

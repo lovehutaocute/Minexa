@@ -203,7 +203,14 @@ fun BdsEnvironmentModule(
         // ── 就绪 / 未初始化提示 ──
         Spacer(Modifier.height(McSpacing.Row))
         Text(
-            stringResource(if (status.installed) R.string.bds_env_ready_hint else R.string.bds_env_missing_hint),
+            stringResource(
+                when {
+                    status.installed -> R.string.bds_env_ready_hint
+                    // 升级用户：说清「重新初始化」，并保证「不会白下」这句安抚
+                    status.upgradeRequired -> R.string.bds_env_upgrade_hint
+                    else -> R.string.bds_env_missing_hint
+                }
+            ),
             color = if (status.installed) Mint else Muted,
             fontSize = 11.sp,
             lineHeight = 16.sp
@@ -245,7 +252,8 @@ fun BdsEnvironmentModule(
                         Text(
                             stringResource(
                                 when {
-                                    status.installed || status.error != null -> R.string.bds_env_reinit
+                                    status.installed || status.upgradeRequired || status.error != null ->
+                                        R.string.bds_env_reinit
                                     else -> R.string.bds_env_init
                                 }
                             ),
@@ -304,6 +312,7 @@ private fun stageLabel(stage: BdsEnvStage?): String = stringResource(
     when (stage) {
         BdsEnvStage.Container -> R.string.bds_env_stage_container
         BdsEnvStage.Box64 -> R.string.bds_env_stage_box64
+        BdsEnvStage.Compat -> R.string.bds_env_stage_compat
         BdsEnvStage.Verify -> R.string.bds_env_stage_verify
         null -> R.string.bds_env_status_installing
     }

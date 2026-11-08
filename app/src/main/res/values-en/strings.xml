@@ -1411,6 +1411,15 @@
     <string name="net_dash_stun_address">STUN public address</string>
 
     <!-- Settings: language -->
+    <!-- Settings: group labels (same spec as HeaderBlock eyebrow) -->
+    <string name="set_group_general">General</string>
+    <string name="set_group_download">Downloads &amp; updates</string>
+    <string name="set_group_runtime">Runtime &amp; keep-alive</string>
+    <string name="set_group_about">About &amp; support</string>
+    <string name="set_link_github">GitHub</string>
+    <string name="set_link_email">Email</string>
+    <string name="set_link_qq">QQ group</string>
+
     <string name="set_language_title">Language</string>
     <string name="set_language_hint">Choose the app interface language. It applies immediately and is kept for the next launch.</string>
     <string name="set_language_change">Change</string>
@@ -1843,6 +1852,9 @@
     <!-- Terminal screen -->
     <string name="tm_send">Send</string>
     <string name="tm_title">Terminal</string>
+    <string name="tm_empty">No output yet.\nLogs will stream in here once the server starts.</string>
+    <string name="tm_theme_light">Light terminal</string>
+    <string name="tm_theme_hint">Turn off to use the dark terminal (default)</string>
     <string name="tm_settings">Terminal settings</string>
     <string name="tm_clear_session">Clear this session</string>
     <string name="tm_resume_scroll">Resume auto-scroll</string>
@@ -2078,7 +2090,7 @@
     <string name="mt_legacy_dir">Legacy folder (migration source): %1$s</string>
     <string name="dl_desc_bds">Official Bedrock Dedicated Server: a native binary, no Java required</string>
     <string name="dl_bds_platform_warning">Official BDS ships only a Linux x86_64 build while this device is arm64, so it needs a PRoot container plus box64 translation. Initialize the BDS runtime on the "Dependencies &amp; environment" page first (about 32MB download; box64 is bundled in the app and needs no network), then start the server. Translated startup is slow and runs at roughly half native speed; that is expected.</string>
-    <string name="dl_bds_version_note">No version to pick: the download always uses the latest Linux build from the official endpoint, and the real version is written into the server folder.</string>
+    <string name="dl_bds_version_note">Any historical BDS version can be picked: the version sheet lists the bundled archive list, the official endpoint and the remote registry. Each download is verified with SHA-256 (or structural checks for older builds) before install, and the real version is written into bds-version.txt in the server folder.</string>
 
     <!-- 旧版目录迁移 -->
     <string name="legacy_migrate_title">%1$d legacy server(s) found</string>
@@ -2107,6 +2119,7 @@
     <string name="bds_env_status_failed">Initialization failed</string>
     <string name="bds_env_stage_container">Downloading and unpacking the Ubuntu container</string>
     <string name="bds_env_stage_box64">Downloading and installing box64</string>
+    <string name="bds_env_stage_compat">Downloading runtime libraries for older versions</string>
     <string name="bds_env_stage_verify">Testing box64 inside the container</string>
     <string name="bds_env_component_container">PRoot container</string>
     <string name="bds_env_component_box64">box64</string>
@@ -2125,6 +2138,7 @@
     <string name="bds_env_probe_ok">Connection to Minecraft services looks fine; if BDS still fails, send me the console log</string>
     <string name="bds_env_remove_confirm">Only box64 and the ready marker are deleted; the PRoot container is kept because the Java runtime may still use it. Continue?</string>
     <string name="bds_env_ready_hint">Runtime ready: select the BDS server on the overview page and start it directly. No re-initialization needed.</string>
+    <string name="bds_env_upgrade_hint">The runtime environment was upgraded (it now ships the compatibility libraries that BDS 1.18 and older need), so it must be initialized once more. Existing container files and libraries are reused — nothing is downloaded twice.</string>
     <string name="bds_env_missing_hint">First initialization only downloads the PRoot container (about 32MB, six mirrors with automatic failover); box64 ships inside the app. Total disk use is about 380MB (container + box64 + a 244MB runtime copy).</string>
     <string name="bds_env_need_bootstrap">The Termux runtime is not initialized yet. Finish installing dependencies on the Dependencies tab before initializing the BDS runtime</string>
     <string name="bds_env_source">Source: %1$s</string>
@@ -2177,6 +2191,30 @@
     <string name="bds_update_rolled_back">Rolled back to the previous state</string>
     <string name="bds_update_failed_title">Update failed</string>
     <string name="bds_update_close">Close</string>
+    <string name="bds_update_retry">Download again</string>
+    <string name="bds_update_integrity">Package verified: %1$s</string>
+
+    <!-- BDS historical versions -->
+    <string name="bds_version_history">Version history</string>
+    <string name="bds_version_count">%1$d versions</string>
+    <string name="bds_version_offline">offline list</string>
+    <string name="bds_version_refresh">Refresh</string>
+    <string name="bds_version_close">Close</string>
+    <string name="bds_version_search">Search a version, e.g. 1.20</string>
+    <string name="bds_version_filter_all">All</string>
+    <string name="bds_version_filter_stable">Release</string>
+    <string name="bds_version_note">Historical builds come from a bundled archive list plus a remote version registry. Entries marked SHA-256 publish an official digest and are compared byte by byte before install; older entries marked \"structural\" have no published digest, so the archive integrity and file layout are verified instead and the digest is pinned locally — later downloads of the same version must match it.</string>
+    <string name="bds_version_empty">No matching version</string>
+    <string name="bds_version_installed">Installed</string>
+    <string name="bds_version_install">Install</string>
+    <string name="bds_version_digest_sha">SHA-256</string>
+    <string name="bds_version_digest_structural">Structural</string>
+    <string name="bds_version_downgrade_title">Downgrade to an older version</string>
+    <string name="bds_version_downgrade_msg">The core will go from %1$s back to %2$s.\n\n· Worlds may already have been upgraded by the newer version; the older core might not load them. A backup is taken automatically, but whether it can save the world depends on what the upgrade changed\n· The old core is kept as bedrock_server.old-%1$s and can be restored at any time\n· Clients must switch to %2$s as well\n\nDowngrade anyway?</string>
+    <string name="bds_version_downgrade_ok">Downgrade</string>
+    <string name="bds_version_list_failed">Failed to load the version list</string>
+    <string name="bds_version_list_empty">No installable version</string>
+    <string name="bds_version_resolve_failed">Cannot prepare version %1$s: %2$s</string>
 
     <!-- Core download page (assembly sheet layout) -->
     <string name="dl2_subtitle">Pick a core and a version, name it, and assemble it into the shared folder</string>
@@ -2354,5 +2392,6 @@
     <string name="prop_opt_log_verbose">Verbose</string>
     <string name="prop_opt_zlib">zlib</string>
     <string name="prop_opt_snappy">Snappy</string>
+    <string name="manual_entry_desc">User manual</string>
 
 </resources>

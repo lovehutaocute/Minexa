@@ -17,7 +17,10 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
+import android.content.Intent
+import android.net.Uri
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Construction
@@ -142,6 +145,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
+ * 在线说明书站点（punycode 形式，避免部分系统解析中文域名失败）。
+ */
+private const val MANUAL_URL = "https://manual.xn--fjqu03a.top/"
+
+/** 用系统浏览器打开外链；无可用浏览器时静默失败（与 QQ 群入口同一策略）。 */
+private fun openUrl(context: android.content.Context, url: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+    } catch (_: Exception) {
+        // 无可用应用时静默
+    }
+}
+
+/**
  * 概览页：完全对齐参考界面 hero + 安装步骤 + 核心选择 + 启停按钮
  * 插件与端口字段拆到对应 Tab，但概览页提供入口按钮（参考界面把插件/端口也放在首页）
  */
@@ -162,6 +179,8 @@ fun DashboardScreen(
     var showQqDialog by remember { mutableStateOf(false) }
     // Snackbar 文案需在 Composable 上下文取值（onClick 内不可调用 @Composable）
     val mirrorSwitchMsg = stringResource(R.string.mirror_switch_requested)
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val manualDesc = stringResource(R.string.manual_entry_desc)
 
     // 收集 errorFlow 和 messageFlow，显示 Snackbar
     LaunchedEffect(Unit) {
@@ -193,6 +212,19 @@ fun DashboardScreen(
                     title = stringResource(R.string.s340),
                     trailing = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
+                            // 说明书入口：点击用系统浏览器打开在线说明书站点
+                            IconButton(
+                                onClick = { openUrl(context, MANUAL_URL) },
+                                modifier = Modifier.size(McIcon.TouchCompact)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Outlined.MenuBook,
+                                    contentDescription = manualDesc,
+                                    tint = Indigo,
+                                    modifier = Modifier.size(McIcon.Display)
+                                )
+                            }
+                            Spacer(Modifier.width(2.dp))
                             // QQ 群入口：企鹅图标，点开弹窗显示群号 / 复制 / 加群
                             IconButton(
                                 onClick = { showQqDialog = true },

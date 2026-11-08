@@ -303,6 +303,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
         VersionSheet(
             versions = availableVersions,
             hints = versionHints,
+            bdsCore = config.selectedCore == ServerCore.Bds,
             selected = config.mcVersion,
             usesCoreVersion = usesCoreVersion,
             loading = isLoadingVersions,
@@ -960,39 +961,50 @@ private fun VersionLaunchPanel(
                     overflow = TextOverflow.Ellipsis
                 )
                 if (core.isBedrock && version.isNotBlank()) {
-                    Text(
-                        stringResource(
-                            R.string.dl_supported_game_colon,
-                            hints[version] ?: stringResource(R.string.dl_unknown_official)
-                        ),
-                        color = if (hints[version] == null) Muted else warnInk(),
-                        fontSize = 9.sp,
-                        maxLines = 1
-                    )
+                    val hint = hints[version]
+                    when {
+                        // BDS 的 hint 只有「Preview」一种含义，除此之外不该编一个
+                        // 「支持的客户端版本」出来 —— 它的版本号不是游戏版本号。
+                        isBds && hint != null -> Text(
+                            hint,
+                            color = warnInk(),
+                            fontSize = 9.sp,
+                            maxLines = 1
+                        )
+                        isBds -> Unit
+                        else -> Text(
+                            stringResource(
+                                R.string.dl_supported_game_colon,
+                                hint ?: stringResource(R.string.dl_unknown_official)
+                            ),
+                            color = if (hint == null) Muted else warnInk(),
+                            fontSize = 9.sp,
+                            maxLines = 1
+                        )
+                    }
                 }
             }
-            // BDS 没有「可选版本」这回事：官方接口只提供当前最新 Linux 构建的直链
-            if (!isBds) {
-                Spacer(Modifier.width(8.dp))
-                // 未选版本时这个按钮是唯一的下一步：用实心主色把它从「次要操作」提为主操作
-                val pickFirst = version.isBlank() && !loadingVersions
-                Box(
-                    modifier = Modifier
-                        .height(30.dp)
-                        .clip(RoundedCornerShape(16.dp))
-                        .background(if (pickFirst) Indigo else Color.Transparent)
-                        .border(1.dp, if (pickFirst) Indigo else Line, RoundedCornerShape(16.dp))
-                        .clickable { onOpenVersionSheet() }
-                        .padding(horizontal = 11.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        stringResource(if (pickFirst) R.string.dl_select_version else R.string.dl2_change),
-                        color = if (pickFirst) Color.White else Indigo,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                }
+            Spacer(Modifier.width(8.dp))
+            // 未选版本时这个按钮是唯一的下一步：用实心主色把它从「次要操作」提为主操作
+            // BDS 同样需要它：历史版本（1.7.0 ~ 最新）全部列在版本抽屉里，
+            // 之前这里对 BDS 直接隐藏，等于把「只能装最新版」写死在界面上。
+            val pickFirst = version.isBlank() && !loadingVersions
+            Box(
+                modifier = Modifier
+                    .height(30.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(if (pickFirst) Indigo else Color.Transparent)
+                    .border(1.dp, if (pickFirst) Indigo else Line, RoundedCornerShape(16.dp))
+                    .clickable { onOpenVersionSheet() }
+                    .padding(horizontal = 11.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    stringResource(if (pickFirst) R.string.dl_select_version else R.string.dl2_change),
+                    color = if (pickFirst) Color.White else Indigo,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         }
         if (loadingVersions) {
@@ -1009,7 +1021,9 @@ private fun VersionLaunchPanel(
                 color = Muted,
                 fontSize = 9.5.sp,
                 lineHeight = 14.sp,
-                maxLines = 2,
+                // 这条说明现在讲的是「历史版本 + 校验」，比原来那句「无需选择」长一倍，
+                // 2 行会被截断成半句
+                maxLines = 3,
                 overflow = TextOverflow.Ellipsis
             )
         }
@@ -1369,6 +1383,7 @@ private fun RowAction(
 private fun VersionSheet(
     versions: List<String>,
     hints: Map<String, String?>,
+    bdsCore: Boolean,
     selected: String,
     usesCoreVersion: Boolean,
     loading: Boolean,
@@ -1451,7 +1466,8 @@ private fun VersionSheet(
                 val hint = hints[selected]
                 if (hint != null) {
                     Text(
-                        stringResource(R.string.dl_supported_game_colon, hint),
+                        // BDS 的 hint 是通道（Preview），不是「支持的客户端版本」
+                        if (bdsCore) hint else stringResource(R.string.dl_supported_game_colon, hint),
                         color = warnInk(),
                         fontSize = 9.5.sp
                     )
