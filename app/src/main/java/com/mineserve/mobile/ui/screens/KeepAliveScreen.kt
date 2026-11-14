@@ -62,6 +62,9 @@ import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 /**
  * 后台保活设置页：开机自启 / 周期保活 / 崩溃自动重启 等开关，每项带功能说明。
@@ -73,6 +76,10 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
     var bootAuto by remember { mutableStateOf(vm.isBootAutoStart()) }
     var keepAlive by remember { mutableStateOf(vm.isKeepAliveEnabled()) }
     var serviceRunning by remember { mutableStateOf(McForegroundService.isRunning) }
+    // 系统限制诊断：跟服务状态一起每 5 秒刷新，用户在系统设置里改完返回立刻能看到变化。
+    var batteryExempt by remember { mutableStateOf(isBatteryExempt(context)) }
+    var exactAlarmOk by remember { mutableStateOf(isExactAlarmAllowed(context)) }
+    var standbyBucket by remember { mutableStateOf(appStandbyBucket(context)) }
     // 服务按钮防重复状态
     var serviceBusy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -82,6 +89,12 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
         while (true) {
             val running = McForegroundService.isRunning
             if (serviceRunning != running) serviceRunning = running
+            val exempt = isBatteryExempt(context)
+            if (batteryExempt != exempt) batteryExempt = exempt
+            val exact = isExactAlarmAllowed(context)
+            if (exactAlarmOk != exact) exactAlarmOk = exact
+            val bucket = appStandbyBucket(context)
+            if (standbyBucket != bucket) standbyBucket = bucket
             delay(5000)
         }
     }
@@ -123,10 +136,9 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                             vm.startKeepAliveService()
                         },
                         enabled = !serviceBusy,
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                         shape = RoundedCornerShape(16.dp),
-                        modifier = Modifier.weight(1f)
-                    ) { Text(stringResource(R.string.s546), color = Color.White, fontSize = 12.sp) }
+                        modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp))) { Text(stringResource(R.string.s546), color = Color.White, fontSize = 12.sp) }
                     OutlinedButton(
                         onClick = {
                             serviceBusy = true
@@ -138,6 +150,32 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                         modifier = Modifier.weight(1f)
                     ) { Text(stringResource(R.string.s547), color = Coral, fontSize = 12.sp) }
                 }
+            }
+
+            // 系统限制诊断：这三项任一项不达标，前台服务都会被系统/厂商策略清理
+            // （用户反馈的「开保活 10 分钟就没了」绝大多数就是这里没配好）。
+            McCard(title = stringResource(R.string.kax_diag_title)) {
+                DiagRow(
+                    label = stringResource(R.string.kax_diag_battery),
+                    ok = batteryExempt,
+                    value = if (batteryExempt) stringResource(R.string.kax_diag_ok)
+                    else stringResource(R.string.kax_diag_warn)
+                )
+                Spacer(Modifier.height(6.dp))
+                DiagRow(
+                    label = stringResource(R.string.kax_diag_bucket),
+                    ok = standbyBucketOk(standbyBucket),
+                    value = bucketLabel(standbyBucket)
+                )
+                Spacer(Modifier.height(6.dp))
+                DiagRow(
+                    label = stringResource(R.string.kax_diag_alarm),
+                    ok = exactAlarmOk,
+                    value = if (exactAlarmOk) stringResource(R.string.kax_diag_ok)
+                    else stringResource(R.string.kax_diag_warn)
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(stringResource(R.string.kax_diag_hint), color = Muted, fontSize = 10.sp, lineHeight = 14.sp)
             }
 
             // 保活开关
@@ -161,6 +199,22 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                     subtitle = stringResource(R.string.s553),
                     checked = config.autoRestartOnCrash,
                     onChange = { vm.setAutoRestart(it) }
+                )
+                // 以下两项原先在「设置 → 运行与保活」分组里，功能与文案原样搬过来，
+                // 与其它保活开关同卡展示（同一组配置不该散落在两个页面）。
+                Spacer(Modifier.height(8.dp))
+                KeepAliveToggle(
+                    title = stringResource(R.string.s1014),
+                    subtitle = stringResource(R.string.s1015),
+                    checked = config.keepWifiLock,
+                    onChange = { vm.setKeepWifiLock(it) }
+                )
+                Spacer(Modifier.height(8.dp))
+                KeepAliveToggle(
+                    title = stringResource(R.string.s1016),
+                    subtitle = stringResource(R.string.s1017),
+                    checked = config.keepCpuWakelock,
+                    onChange = { vm.setKeepCpuWakelock(it) }
                 )
                 Spacer(Modifier.height(8.dp))
                 KeepAliveToggle(
@@ -193,10 +247,9 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                         Toast.makeText(context, context.getString(R.string.ui_battery_btn), Toast.LENGTH_SHORT).show()
                         requestIgnoreBatteryOptimizations(context)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(stringResource(R.string.ui_battery_btn), color = Color.White, fontSize = 12.sp) }
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp))) { Text(stringResource(R.string.ui_battery_btn), color = Color.White, fontSize = 12.sp) }
             }
             McCard(title = stringResource(R.string.ui_autostart_title)) {
                 Text(stringResource(R.string.ui_autostart_hint), color = Muted, fontSize = 11.sp)
@@ -206,10 +259,9 @@ fun KeepAliveScreen(vm: McViewModel, onBack: () -> Unit) {
                         Toast.makeText(context, context.getString(R.string.ui_autostart_btn), Toast.LENGTH_SHORT).show()
                         openManufacturerAutostart(context)
                     },
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                     shape = RoundedCornerShape(16.dp),
-                    modifier = Modifier.fillMaxWidth()
-                ) { Text(stringResource(R.string.ui_autostart_btn), color = Color.White, fontSize = 12.sp) }
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp))) { Text(stringResource(R.string.ui_autostart_btn), color = Color.White, fontSize = 12.sp) }
             }
 
             // 说明
@@ -245,6 +297,75 @@ private fun KeepAliveToggle(
     }
 }
 
+/** 诊断行：左侧名称，右侧状态；`ok=null` 表示系统不支持、不做评判。 */
+@Composable
+private fun DiagRow(label: String, ok: Boolean?, value: String) {
+    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Text(label, fontSize = 12.sp, modifier = Modifier.weight(1f))
+        Text(
+            value,
+            color = when (ok) {
+                true -> Mint
+                false -> Coral
+                null -> Muted
+            },
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+/** `UsageStatsManager.STANDBY_BUCKET_EXEMPTED` 在部分 SDK 上不可见，直接取字面值 5。 */
+private const val STANDBY_BUCKET_EXEMPTED = 5
+
+@Composable
+private fun bucketLabel(bucket: Int): String = when (bucket) {
+    android.app.usage.UsageStatsManager.STANDBY_BUCKET_ACTIVE,
+    STANDBY_BUCKET_EXEMPTED ->
+        stringResource(R.string.kax_bucket_active)
+
+    android.app.usage.UsageStatsManager.STANDBY_BUCKET_WORKING_SET,
+    android.app.usage.UsageStatsManager.STANDBY_BUCKET_FREQUENT ->
+        stringResource(R.string.kax_bucket_normal)
+
+    android.app.usage.UsageStatsManager.STANDBY_BUCKET_RARE ->
+        stringResource(R.string.kax_bucket_rare)
+
+    android.app.usage.UsageStatsManager.STANDBY_BUCKET_RESTRICTED ->
+        stringResource(R.string.kax_bucket_restricted)
+
+    else -> stringResource(R.string.kax_diag_unknown)
+}
+
+/** 「极少使用 / 受限」两个分组下系统会主动冻结应用，是保活失效的典型状态。 */private fun standbyBucketOk(bucket: Int): Boolean? = when (bucket) {
+    -1 -> null
+    android.app.usage.UsageStatsManager.STANDBY_BUCKET_RARE,
+    android.app.usage.UsageStatsManager.STANDBY_BUCKET_RESTRICTED -> false
+
+    else -> true
+}
+
+private fun isBatteryExempt(context: Context): Boolean = runCatching {
+    (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+        .isIgnoringBatteryOptimizations(context.packageName)
+}.getOrDefault(false)
+
+private fun isExactAlarmAllowed(context: Context): Boolean {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
+    return runCatching {
+        (context.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager).canScheduleExactAlarms()
+    }.getOrDefault(false)
+}
+
+/** 本应用的待机分组（API 28+ 免授权可读），-1 表示系统不支持。 */
+private fun appStandbyBucket(context: Context): Int {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return -1
+    return runCatching {
+        (context.getSystemService(Context.USAGE_STATS_SERVICE) as android.app.usage.UsageStatsManager)
+            .appStandbyBucket
+    }.getOrDefault(-1)
+}
+
 /** 引导关闭电池优化（Android 12+ 优先跳专项页，失败兜底应用详情） */
 private fun requestIgnoreBatteryOptimizations(context: Context) {
     try {
@@ -271,31 +392,91 @@ private fun requestIgnoreBatteryOptimizations(context: Context) {
     }
 }
 
-/** 按厂商跳转自启动设置页（小米/华为/荣耀/OPPO/vivo，其余走应用详情） */
+/**
+ * 按厂商跳转自启动设置页。
+ *
+ * 三个必须做对的点（都踩过）：
+ * 1. **每个厂商给多个候选**。同一个品牌不同 ROM 版本 / 不同机型的管理页
+ *    Activity 名会变（OPPO 的 coloros→oplus、荣耀 MagicOS 从华为包名独立出去），
+ *    只写一个等于把一半用户丢进兜底。
+ * 2. **先 resolveActivity 再 startActivity**。Android 11+ 有包可见性限制，
+ *    没在 `<queries>` 里声明的包名 `resolveActivity` 恒为 null；直接
+ *    startActivity 会抛 ActivityNotFoundException 并被 catch 吞掉，
+ *    用户看到的是「点了按钮跳到应用详情页」，完全不知道发生了什么。
+ * 3. **失败要落到应用详情页**，那是所有 ROM 都有的页面，用户至少能自己找到
+ *    「自启动 / 后台运行 / 电池」开关。
+ */
 private fun openManufacturerAutostart(context: Context) {
     val m = (Build.MANUFACTURER ?: "").lowercase()
-    val intent = when {
-        m.contains("xiaomi") -> Intent().setComponent(
-            ComponentName("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity")
+    val brand = (Build.BRAND ?: "").lowercase()
+    fun component(pkg: String, cls: String) = Intent().setComponent(ComponentName(pkg, cls))
+
+    val candidates: List<Intent> = when {
+        m.contains("xiaomi") || m.contains("redmi") || brand.contains("poco") -> listOf(
+            component("com.miui.securitycenter", "com.miui.permcenter.autostart.AutoStartManagementActivity"),
+            Intent("miui.intent.action.OP_AUTO_START"),
+            Intent("miui.intent.action.APP_PERM_EDITOR").putExtra("extra_pkgname", context.packageName)
         )
-        m.contains("huawei") || m.contains("honor") -> Intent().setComponent(
-            ComponentName("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity")
+        m.contains("huawei") || m.contains("honor") || brand.contains("hihonor") -> listOf(
+            component("com.huawei.systemmanager", "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
+            component("com.huawei.systemmanager", "com.huawei.systemmanager.optimize.process.ProtectActivity"),
+            component("com.hihonor.systemmanager", "com.hihonor.systemmanager.startupmgr.ui.StartupNormalAppListActivity"),
+            component("com.hihonor.systemmanager", "com.hihonor.systemmanager.optimize.process.ProtectActivity")
         )
-        m.contains("oppo") || m.contains("realme") -> Intent().setComponent(
-            ComponentName("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity")
+        m.contains("oppo") || m.contains("realme") || m.contains("oneplus") -> listOf(
+            component("com.coloros.safecenter", "com.coloros.safecenter.permission.startup.StartupAppListActivity"),
+            component("com.coloros.safecenter", "com.coloros.safecenter.startupapp.StartupAppListActivity"),
+            component("com.oplus.safecenter", "com.oplus.safecenter.permission.startup.StartupAppListActivity"),
+            component("com.oplus.safecenter", "com.oplus.safecenter.startupapp.StartupAppListActivity")
         )
-        m.contains("vivo") -> Intent().setComponent(
-            ComponentName("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity")
+        m.contains("vivo") || m.contains("iqoo") -> listOf(
+            component("com.vivo.permissionmanager", "com.vivo.permissionmanager.activity.BgStartUpManagerActivity"),
+            component("com.iqoo.secure", "com.iqoo.secure.ui.phoneoptimize.BgStartUpManager"),
+            component("com.vivo.abe", "com.vivo.applicationbehaviorengine.ui.ExcessivePowerManagerActivity")
         )
-        else -> Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName))
+        m.contains("meizu") || m.contains("mblu") -> listOf(
+            component("com.meizu.safe", "com.meizu.safe.permission.SecurePermissionActivity"),
+            component("com.meizu.safe", "com.meizu.safe.security.SHOW_APPSEC")
+        )
+        m.contains("samsung") -> listOf(
+            component("com.samsung.android.lool", "com.samsung.android.sm.ui.battery.BatteryActivity"),
+            component("com.samsung.android.sm", "com.samsung.android.sm.ui.battery.BatteryActivity")
+        )
+        m.contains("asus") -> listOf(
+            component("com.asus.mobilemanager", "com.asus.mobilemanager.entry.FunctionActivity")
+        )
+        m.contains("nokia") -> listOf(
+            component("com.evenwell.powersaving.g3", "com.evenwell.powersaving.g3.exception.PowerSaverExceptionActivity")
+        )
+        else -> emptyList()
     }
+
+    // resolveActivity 必须传 MATCH_DEFAULT_ONLY 以外的 flag 才能看到非默认组件，
+    // 这些系统管理页通常没有 CATEGORY_DEFAULT。
+    val flags = android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS
+    val resolved = candidates.firstOrNull { intent ->
+        runCatching { intent.resolveActivity(context.packageManager) != null }
+            .getOrDefault(false) ||
+            // 显式 component 的 intent 用 resolveActivity 有时拿不到（厂商把 Activity
+            // 设为不导出），再退一步用 packageManager 直接查组件是否存在。
+            runCatching {
+                intent.component?.let {
+                    context.packageManager.getActivityInfo(it, flags)
+                    true
+                } ?: false
+            }.getOrDefault(false)
+    }
+
+    val target = resolved
+        ?: Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName))
     try {
-        context.startActivity(intent)
+        context.startActivity(target.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
     } catch (_: Exception) {
-        try {
+        runCatching {
             context.startActivity(
                 Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + context.packageName))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             )
-        } catch (_: Exception) {}
+        }
     }
 }

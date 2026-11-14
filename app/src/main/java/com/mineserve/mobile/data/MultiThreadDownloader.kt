@@ -319,6 +319,10 @@ object MultiThreadDownloader {
             part.parentFile?.mkdirs()
             val output = RandomAccessFile(part, "rw")
             try {
+                // "rw" 不会截断已有文件。进程在上次下载中被杀会留下 xxx.part<start>，
+                // 只要本次分片比上次短，part.length() 就会大于期望长度 → 长度校验失败
+                // → 整个源被判失败、回退单流全量重下（等于白烧一轮流量）。
+                output.setLength(0)
                 val buf = ByteArray(BUFFER)
                 conn.inputStream.use { input ->
                     while (true) {
@@ -362,29 +366,48 @@ object MultiThreadDownloader {
         return Triple(rangeStart, rangeEnd, rangeTotal)
     }
 
-    /** 顺序合并分片到目标文件 */
+    /**
+     * 顺序合并分片到目标文件。
+     *
+     * 先合并到 `xxx.merge` 再 rename 到 [target]：直接对 target 写的话，任何一步失败
+     * （分片缺失 / 长度不符 / 进程被杀）都会在 target 上留下「长度正确但内容错乱」
+     * 或半截的文件，把调用方（如 `PluginManager.downloadTo`）原来可用的旧版本覆盖掉
+     * —— 而失败路径只删 `.part`、不删 target。
+     */
     private fun mergeRanges(target: File, ranges: List<Pair<Long, Long>>) {
-        FileOutputStream(target).use { out ->
-            ranges.forEach { (start, _) ->
-                val part = partFile(target, start)
-                if (!part.exists()) {
-                    throw RuntimeException("分片缺失: ${part.name}")
-                }
-                // 分片自身长度也要对：写盘途中异常退出可能留下短分片，
-                // 只靠合并后的总长度检查会漏掉「某片短、另一片长」相互抵消的情况。
-                val expectedLen = (ranges.first { it.first == start }.second - start + 1)
-                if (part.length() != expectedLen) {
-                    throw RuntimeException("分片长度不符: ${part.name} ${part.length()}/$expectedLen 字节")
-                }
-                part.inputStream().use { input ->
-                    val buf = ByteArray(BUFFER)
-                    while (true) {
-                        val read = input.read(buf)
-                        if (read <= 0) break
-                        out.write(buf, 0, read)
+        val merged = File(target.parentFile, "${target.name}.merge")
+        try {
+            FileOutputStream(merged).use { out ->
+                for ((start, end) in ranges) {
+                    val part = partFile(target, start)
+                    if (!part.exists()) {
+                        throw RuntimeException("分片缺失: ${part.name}")
+                    }
+                    // 分片自身长度也要对：写盘途中异常退出可能留下短分片，
+                    // 只靠合并后的总长度检查会漏掉「某片短、另一片长」相互抵消的情况。
+                    val expectedLen = end - start + 1
+                    if (part.length() != expectedLen) {
+                        throw RuntimeException("分片长度不符: ${part.name} ${part.length()}/$expectedLen 字节")
+                    }
+                    part.inputStream().use { input ->
+                        val buf = ByteArray(BUFFER)
+                        while (true) {
+                            val read = input.read(buf)
+                            if (read <= 0) break
+                            out.write(buf, 0, read)
+                        }
                     }
                 }
             }
+            // 某些 FUSE 实现的 rename 不能覆盖已存在文件，先删再试一次
+            if (!merged.renameTo(target)) {
+                target.delete()
+                if (!merged.renameTo(target)) {
+                    throw RuntimeException("合并结果无法落盘: ${merged.name}")
+                }
+            }
+        } finally {
+            if (merged.exists()) merged.delete()
         }
     }
 

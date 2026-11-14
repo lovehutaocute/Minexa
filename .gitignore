@@ -43,3 +43,6 @@ perf-diagnostics/
 
 app/.cxx*/
 
+# 本地 AI 会话记忆（public 仓库不该带）
+.workbuddy/
+

@@ -209,6 +209,61 @@ class CrashReportAnalyzerTest {
         assertTrue(analysis.findings.any { it.label == "核心文件损坏" })
     }
 
+    /**
+     * 2026-11 用户案例：Termux JDK 的 cacerts 损坏，JVM 内所有 HTTPS 握手失败，
+     * Forge/Fabric 安装器「下载失败」退出。日志头部恰好有 fontconfig 字样，
+     * 旧版把 Possible 级的「字体运行库缺失」当成主结论，用户补字体库自然无效。
+     * cacerts 规则（Identified）必须压过启发式命中坐上主结论。
+     */
+    @Test
+    fun `trustAnchors 证书库损坏优先于 fontconfig 启发式归因`() {
+        val log = """
+            Downloading Minecraft Server
+            fontconfig error: Cannot load default config file
+            Exception in thread "main" java.lang.RuntimeException: Failed to setup fabric server
+            Caused by: java.io.IOException: Request to https://launchermeta.mojang.com/mc/game/version_manifest_v2.json using DIRECT failed
+            Caused by: javax.net.ssl.SSLException: [internal_error] Unexpected error: java.security.InvalidAlgorithmParameterException: the trustAnchors parameter must be non-empty
+        """.trimIndent()
+        val analysis = CrashReportAnalyzer.analyze(log)
+        assertEquals("Java 证书库缺失或损坏", analysis.primaryLabel)
+        assertEquals(CrashReportAnalyzer.Level.Identified, analysis.findings.first().level)
+        // 建议要指向重装 Java，而不是误导用户去补字体库
+        assertTrue(
+            "建议应指向重装 Java 运行时，实际：${analysis.findings.first().suggestion}",
+            analysis.findings.first().suggestion.contains("重新安装")
+        )
+        assertTrue(
+            "fontconfig 启发式命中仍应保留在后续卡片里",
+            analysis.findings.any { it.label == "字体运行库缺失" }
+        )
+    }
+
+    @Test
+    fun `PKIX 证书链错误也命中证书库规则`() {
+        val analysis = CrashReportAnalyzer.analyze(
+            "sun.security.validator.ValidatorException: PKIX path building failed: unable to find valid certification path to requested target"
+        )
+        assertTrue(analysis.findings.any { it.label == "Java 证书库缺失或损坏" })
+    }
+
+    /**
+     * 级别排序后，Possible 级别的杂音命中不应出现在 Identified 结论之前；
+     * 同级别内保持规则表顺序（稳定排序）。
+     */
+    @Test
+    fun `确定性归因排在启发式命中之前`() {
+        // 端口占用（Identified）+ fontconfig 字样（Possible）同时出现
+        val analysis = CrashReportAnalyzer.analyze(
+            "java.net.BindException: Address already in use\nfontconfig head is null"
+        )
+        assertEquals("端口无法监听", analysis.primaryLabel)
+        assertTrue(
+            "Identified 应全部排在 Possible 之前，实际：${analysis.findings.map { it.level }}",
+            analysis.findings.indexOfFirst { it.level == CrashReportAnalyzer.Level.Possible } >
+                analysis.findings.indexOfLast { it.level == CrashReportAnalyzer.Level.Identified }
+        )
+    }
+
     @Test
     fun `没有命中任何规则时给出兜底归因`() {
         val analysis = CrashReportAnalyzer.analyze("这是一段完全无关的普通输出")

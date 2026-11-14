@@ -34,7 +34,6 @@ import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -79,7 +78,9 @@ import com.mineserve.mobile.ui.theme.LocalTerminalPalette
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.TerminalPalette
+import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 终端页的深浅色偏好。
@@ -152,6 +153,7 @@ private fun TerminalPane(
     // 不用 first() 硬取（否则整棵组合树会抛异常）。
     val active = sessions.firstOrNull { it.id == activeId } ?: sessions.firstOrNull() ?: return
     val mcLines by vm.terminalConsoleLines.collectAsState()
+    val serverProps by vm.serverProperties.collectAsState()
     val context = LocalContext.current
     val pal = LocalTerminalPalette.current
     var input by remember(activeId) { mutableStateOf("") }
@@ -167,6 +169,9 @@ private fun TerminalPane(
     LaunchedEffect(Unit) {
         vm.setLogTranslationEnabled(translateLogs && isChineseUi)
         vm.loadRecentTerminalLog()
+        // 「allow-cheats=false 时玩家命令会静默失效」这条提示要读 server.properties，
+        // 而属性只在属性页/网络页加载过，直接进控制台会读到空表、提示永不出现。
+        vm.loadServerProperties()
     }
     // Keep the full session history for copy/export, but cap Compose nodes on low-end devices.
     val renderedLines = remember(rawLines) { rawLines.takeLast(MAX_RENDERED_LINES) }
@@ -184,11 +189,28 @@ private fun TerminalPane(
         userScrolledUp = false
         if (renderedLines.isNotEmpty()) listState.scrollToItem(renderedLines.lastIndex)
     }
-    // 新日志到达时，若用户未手动上滑，自动滚动到底部
-    LaunchedEffect(rawLines.lastOrNull()) {
-        if (renderedLines.isNotEmpty() && !userScrolledUp && !autoScrollPaused) {
-            listState.scrollToItem(renderedLines.lastIndex, Int.MAX_VALUE)
-        }
+    // 新日志到达时，若用户未手动上滑，自动滚动到底部。
+    //
+    // 不用 `LaunchedEffect(rawLines.lastOrNull())`：那是以「最后一行文本」为 key，
+    // 服务端刷日志（BDS 启动阶段一秒几十行）就等于每秒触发几十次
+    // `scrollToItem`，全部排在主线程 —— 这是启动后/切控制台瞬间卡住（ANR）的
+    // 主要嫌疑之一。
+    //
+    // key 必须包含 rawLines 本身：它是 ImmutableList，每次更新都是**新实例**，
+    // 而 `snapshotFlow { rawLines.size }` 里的 size 不是快照状态 —— 闭包持有首次
+    // 组合时的那个列表，不换 key 就只在启动时发射一次，日志再多也不跟随。
+    // 按批次换 key 正好实现「一次更新滚一次」，与上面的意图一致。
+    LaunchedEffect(listState, autoScrollPaused, rawLines) {
+        snapshotFlow { rawLines.size }
+            .conflate()
+            .collect {
+                if (!userScrolledUp && !autoScrollPaused) {
+                    // 等一帧再滚：避免和同帧的列表更新抢主线程
+                    withFrameNanos { }
+                    val last = (renderedLines.size - 1).coerceAtLeast(0)
+                    if (renderedLines.isNotEmpty()) listState.scrollToItem(last, Int.MAX_VALUE)
+                }
+            }
     }
 
     LaunchedEffect(autoScrollPaused) {
@@ -207,6 +229,10 @@ private fun TerminalPane(
             pendingDangerousCommand = command
         } else if (active.type == TerminalSessionType.Termux) {
             vm.executeTerminalCommand(active.id, command)
+        } else if (command.trim() == "save-all") {
+            // 快捷条上的「保存世界」对基岩版要发 hold + resume：
+            // BDS 没有 save-all，只发 hold 会让世界从此不再落盘（真机实测）。
+            vm.saveWorld()
         } else {
             vm.sendCommand(command)
         }
@@ -274,6 +300,17 @@ private fun TerminalPane(
             )
             if (active.type == TerminalSessionType.Minecraft) {
                 QuickCommandRow(onSend = sendCommand, pal = pal)
+                // allow-cheats=false 时，**玩家在游戏里**发命令会「发出去什么都没有」，
+                // 连一句报错都没有（控制台自己不受影响，所以容易误判成客户端问题）。
+                // 这个开关在属性页深处，用户不会联想到，就在这里点明。
+                if (serverProps["allow-cheats"]?.equals("false", ignoreCase = true) == true) {
+                    Text(
+                        stringResource(R.string.tc_allow_cheats_off_hint),
+                        color = pal.logWarning,
+                        fontSize = 10.sp,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp)
+                    )
+                }
             }
             if (renderedLines.isEmpty()) {
                 EmptyTerminalState(pal = pal, modifier = Modifier.weight(1f))
@@ -312,7 +349,7 @@ private fun TerminalPane(
         // tm_localize 是「主标题\n副说明」两段式文案：整串丢进一个 Text 会让
         // 标题和说明同字号同颜色，扫一眼分不出哪句是开关的名字。
         val localizeParts = stringResource(R.string.tm_localize).split('\n', limit = 2)
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showSettings = false },
             shape = McShape.Dialog,
             title = { Text(stringResource(R.string.tm_settings), fontWeight = FontWeight.Bold) },
@@ -348,7 +385,7 @@ private fun TerminalPane(
         )
     }
     pendingDangerousCommand?.let { command ->
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { pendingDangerousCommand = null },
             shape = McShape.Dialog,
             title = { Text(stringResource(R.string.tm_danger_title), color = pal.logError) },
@@ -402,15 +439,15 @@ private fun TerminalSwitchRow(
 }
 
 /**
- * 顶部标题栏。
+ * 顶部操作栏。
  *
- * 与其它页面共用「eyebrow（10sp 加宽小字）+ 标题（18sp Bold）」这套层级。
- * 标题位置放当前会话名 —— 终端里「我在哪条会话」比「这是终端页」更需要一眼看到
- * （底栏图标已经说明了后者）。
+ * 2026-11-13 起标题文字下线（原先放当前会话名），只留右侧动作按钮，下方一条细线与内容分隔。
+ * [sessionName] 因此不再显示，保留参数只为不改动调用点 —— 会话归属由下方的会话标签行表达。
  *
  * 操作分两档：高频的「暂停滚动 / 复制」留在外面，低频的「新建 / 清空 / 设置」
  * 收进溢出菜单。改造前 5 个图标平铺，既挤又有两个（清空、新建）误触代价高。
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun TerminalTopBar(
     sessionName: String,
@@ -427,8 +464,8 @@ private fun TerminalTopBar(
     Column(
         Modifier
             .fillMaxWidth()
-            .background(pal.bar)
     ) {
+        // 标题栏文字（会话名）已下线，只留右侧动作按钮；无底色、无分隔线
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -436,24 +473,7 @@ private fun TerminalTopBar(
                 .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    stringResource(R.string.tm_title),
-                    color = pal.muted,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.6.sp
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    sessionName,
-                    color = pal.ink,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            Spacer(Modifier.weight(1f))
             TerminalIconAction(
                 icon = if (autoScrollPaused) Icons.Outlined.PlayArrow else Icons.Outlined.Pause,
                 description = stringResource(
@@ -504,7 +524,6 @@ private fun TerminalTopBar(
                 }
             }
         }
-        HorizontalDivider(color = pal.line)
     }
 }
 

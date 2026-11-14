@@ -35,6 +35,9 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
 import androidx.compose.ui.res.stringResource
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 @Composable
 fun WidgetSettingsScreen(onBack: () -> Unit) {
@@ -91,8 +94,8 @@ fun WidgetSettingsScreen(onBack: () -> Unit) {
                         refreshed = true
                         WidgetUpdater.refresh(context)
                     },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                     shape = McShape.Control
                 ) {
                     Text(stringResource(R.string.widget_settings_refresh))

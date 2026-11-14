@@ -49,7 +49,6 @@ import androidx.compose.material.icons.outlined.Sort
 import androidx.compose.material.icons.outlined.Upload
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -85,6 +84,7 @@ import com.mineserve.mobile.R
 import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.components.StoragePermissionCard
 import com.mineserve.mobile.ui.components.rememberStoragePermissionRequest
@@ -100,6 +100,9 @@ import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import java.io.File
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.AppDialog
 
 /** 列表排序维度：目录永远排在最前，此项只决定同级项目的顺序。 */
 private enum class FileSort { Name, Time, Size }
@@ -200,6 +203,8 @@ fun FileManagerScreen(vm: McViewModel) {
     }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用
         contentWindowInsets = WindowInsets(0.dp)
@@ -469,7 +474,7 @@ fun FileManagerScreen(vm: McViewModel) {
     // ── 删除确认（单条 / 批量共用）──────────────────────────────────
     if (pendingDelete.isNotEmpty()) {
         val batch = pendingDelete.size > 1
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { pendingDelete = emptyList() },
             title = {
                 Text(
@@ -573,7 +578,7 @@ fun FileManagerScreen(vm: McViewModel) {
 
     // ── 属性 ──────────────────────────────────────────────────────
     detailTarget?.let { entry ->
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { detailTarget = null },
             title = { Text(entry.name, fontWeight = FontWeight.Bold, fontSize = 15.sp) },
             text = {
@@ -682,7 +687,7 @@ private fun NameInputDialog(
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = { Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp) },
         text = {
@@ -691,8 +696,7 @@ private fun NameInputDialog(
                 onValueChange = onValueChange,
                 label = { Text(label, fontSize = 12.sp) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth()
-            )
+                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
         },
         confirmButton = {
             TextButton(onClick = { onConfirm(value.trim()) }) {

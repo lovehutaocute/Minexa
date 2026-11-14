@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import com.mineserve.mobile.data.DownloadMirror
 import com.mineserve.mobile.data.DownloadPrefs
+import com.mineserve.mobile.data.FileOps
 import com.mineserve.mobile.data.MultiThreadDownloader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -50,14 +51,13 @@ class BootstrapInstaller(private val context: Context) {
     var onSpeed: ((Long, Long) -> Unit)? = null
 
     /**
-     * 下载源列表：直接派生自 [DownloadMirror]（去掉 Auto）。
+     * 下载源列表：直接派生自 [DownloadMirror]（去掉 Auto 与已失效项）。
      *
      * 以前这里维护着一份与 [DownloadMirror] 平行的硬编码副本，两边一旦不同步，
      * 设置里选的源就与实际下载用的源对不上。现在以枚举为唯一事实来源：
      * 枚举顺序 = Auto 模式尝试顺序（镜像在前、GitHub 直连最后）。
      */
-    private val mirrorEntries: List<DownloadMirror> =
-        DownloadMirror.entries.filter { it != DownloadMirror.Auto }
+    private val mirrorEntries: List<DownloadMirror> = DownloadMirror.active
 
     /** 镜像源名称列表（公开供 UI 显示名称），顺序与 [mirrorEntries] 一一对应 */
     val mirrorSources: List<String> get() = mirrorEntries.map { it.displayName }
@@ -191,21 +191,29 @@ class BootstrapInstaller(private val context: Context) {
     fun deleteBootstrap(force: Boolean = false) {
         log(if (force) "开始强制删除 Termux 环境..." else "开始删除 Termux 运行环境...")
 
-        /** 递归删除并重试（文件被占用/句柄未释放时多次尝试） */
+        /**
+         * 递归删除并重试（文件被占用/句柄未释放时多次尝试）。
+         *
+         * 走 [com.mineserve.mobile.data.FileOps] 而不是 `File.deleteRecursively()`：
+         * Kotlin 的实现内部 `FileTreeWalk` 有 `assert(rootDir.isDirectory)`，抛的是
+         * **AssertionError（Error 不是 Exception）**，`catch (Exception)` 拦不住，
+         * 直接把 App 崩掉 —— 2026-11-13 的实机崩溃就出在这一类调用上。
+         * 而「重试删除」这个函数存在的意义恰恰是扛住删除失败，它自己绝不能成为崩溃点。
+         */
         fun deleteRetry(f: File, retries: Int = 4): Boolean {
-            if (!f.exists()) return true
+            if (!FileOps.existsNoFollow(f)) return true
             repeat(retries) {
-                if (f.exists()) {
-                    try { f.deleteRecursively() } catch (_: Exception) {}
+                if (FileOps.existsNoFollow(f)) {
+                    FileOps.deleteRecursively(f)
                     // 目录残留时逐个文件删（更激进）
-                    if (f.exists()) {
-                        try { f.walkBottomUp().forEach { it.delete() } } catch (_: Exception) {}
+                    if (FileOps.existsNoFollow(f)) {
+                        try { f.walkBottomUp().forEach { it.delete() } } catch (_: Throwable) {}
                     }
                 }
-                if (!f.exists()) return true
-                try { Thread.sleep(200) } catch (_: Exception) {}
+                if (!FileOps.existsNoFollow(f)) return true
+                try { Thread.sleep(200) } catch (_: Throwable) {}
             }
-            return !f.exists()
+            return !FileOps.existsNoFollow(f)
         }
 
         readyFile.delete()
@@ -397,56 +405,83 @@ class BootstrapInstaller(private val context: Context) {
         var fileCount = 0
         val entryNames = mutableListOf<String>()
 
-        FileInputStream(zipFile).buffered().use { fis ->
-            ZipInputStream(fis).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    val entryName = entry.name.removePrefix("./")
-                    entryNames.add(entryName)
-                    val outFile = File(destDir, entryName)
+        // destDir 的 canonicalPath 在循环外算一次：它在循环里每 entry 都算一遍
+        // 时是实打实的 syscall（2000+ 次），而且结果永远相同。
+        val canonicalDest = destDir.canonicalPath + File.separator
 
-                    // 防 zip-slip / path traversal
-                    val canonicalDest = destDir.canonicalPath + File.separator
-                    val canonicalEntry = outFile.canonicalPath
-                    if (!canonicalEntry.startsWith(canonicalDest)) {
-                        Log.w(TAG, "skip unsafe path: $entryName")
+        // 写盘并行化。ZipInputStream 只能顺序读（无随机访问），但**读**和**写**
+        // 是两个独立的等待：顺序读 30MB 压缩流的同时，把解压出的 entry 交给
+        // 固定线程池写盘，能把「2000 多个小文件逐个 open/write/close」的
+        // 串行 IO 等待摊到多核上。实测这条链路是初始化里除下载外最长的
+        // 一段（内部存储上约 15–30s）。
+        val pool = java.util.concurrent.Executors.newFixedThreadPool(EXTRACT_THREADS)
+        val inflight = java.util.concurrent.Semaphore(EXTRACT_THREADS * 4)
+        val writeError = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        try {
+            FileInputStream(zipFile).buffered(BUFFER_SIZE).use { fis ->
+                ZipInputStream(fis).use { zis ->
+                    var entry = zis.nextEntry
+                    while (entry != null) {
+                        val entryName = entry.name.removePrefix("./")
+                        entryNames.add(entryName)
+                        val outFile = File(destDir, entryName)
+
+                        // 防 zip-slip / path traversal
+                        val canonicalEntry = outFile.canonicalPath
+                        if (!canonicalEntry.startsWith(canonicalDest)) {
+                            Log.w(TAG, "skip unsafe path: $entryName")
+                            entry = zis.nextEntry
+                            continue
+                        }
+
+                        if (entry.isDirectory) {
+                            // 如果路径上已有同名文件（符号链接被提取为文件），先删除
+                            if (outFile.exists() && !outFile.isDirectory) outFile.delete()
+                            outFile.mkdirs()
+                        } else {
+                            // 如果父路径是文件（符号链接被提取为文件），逐级删除
+                            var parent = outFile.parentFile
+                            while (parent != null && parent.exists() && !parent.isDirectory) {
+                                parent.delete()
+                                parent = parent.parentFile
+                            }
+                            outFile.parentFile?.mkdirs()
+                            // 流是顺序的，必须先完整读出本 entry 才能继续 nextEntry，
+                            // 因此数据先落内存（单 entry 最大约 1.5MB，在途受 inflight 限制）。
+                            val payload = zis.readBytes()
+                            val needExec = entryName.startsWith("bin/") ||
+                                entryName.startsWith("libexec/") ||
+                                entryName.endsWith("/bash") ||
+                                entryName.endsWith("/sh") ||
+                                entryName.endsWith("/apt-get") ||
+                                entryName.endsWith("/tmux") ||
+                                entryName.endsWith("/java") ||
+                                entryName.endsWith("/wget") ||
+                                entryName.endsWith("/curl")
+                            fileCount++
+                            inflight.acquire()
+                            pool.execute {
+                                try {
+                                    FileOutputStream(outFile).use { out -> out.write(payload) }
+                                    if (needExec) outFile.setExecutable(true, false)
+                                } catch (t: Throwable) {
+                                    writeError.compareAndSet(null, t)
+                                } finally {
+                                    inflight.release()
+                                }
+                            }
+                        }
                         entry = zis.nextEntry
-                        continue
                     }
-
-                    if (entry.isDirectory) {
-                        // 如果路径上已有同名文件（符号链接被提取为文件），先删除
-                        if (outFile.exists() && !outFile.isDirectory) outFile.delete()
-                        outFile.mkdirs()
-                    } else {
-                        // 如果父路径是文件（符号链接被提取为文件），逐级删除
-                        var parent = outFile.parentFile
-                        while (parent != null && parent.exists() && !parent.isDirectory) {
-                            parent.delete()
-                            parent = parent.parentFile
-                        }
-                        outFile.parentFile?.mkdirs()
-                        FileOutputStream(outFile).use { out ->
-                            zis.copyTo(out)
-                        }
-                        // 设置可执行权限
-                        if (entryName.startsWith("bin/") ||
-                            entryName.startsWith("libexec/") ||
-                            entryName.endsWith("/bash") ||
-                            entryName.endsWith("/sh") ||
-                            entryName.endsWith("/apt-get") ||
-                            entryName.endsWith("/tmux") ||
-                            entryName.endsWith("/java") ||
-                            entryName.endsWith("/wget") ||
-                            entryName.endsWith("/curl")) {
-                            outFile.setExecutable(true, false)
-                        }
-                        fileCount++
-                    }
-                    entry = zis.nextEntry
                 }
             }
+            // 等所有写任务落盘：不等待就开始建软链会读到「还没写完」的文件
+            pool.shutdown()
+            pool.awaitTermination(10, java.util.concurrent.TimeUnit.MINUTES)
+        } finally {
+            pool.shutdownNow()
         }
+        writeError.get()?.let { throw RuntimeException("解压写盘失败: ${it.message}", it) }
         Log.i(TAG, "extracted $fileCount files from ${zipFile.name} → ${destDir.absolutePath}")
         log("ZIP 提取完成: $fileCount 个文件, ${entryNames.size} 个条目")
         log("前20个条目: ${entryNames.take(20).joinToString(", ")}")
@@ -521,6 +556,57 @@ class BootstrapInstaller(private val context: Context) {
 
     // ── 下载 bootstrap rootfs ─────────────────────────────────────
 
+    /**
+     * 按「实测可用性 + 延迟」重排镜像顺序，用于真正的下载。
+     *
+     * 旧行为是严格串行：一个源连不上要等满 [PROBE_TIMEOUT_MS]，五个源最坏
+     * 40 秒才轮到能用的那个。这里并行发起探测（各源互相独立），全部返回后
+     * 把「可用」的按延迟从低到高排前面，不可用的排后面 —— 最坏耗时从
+     * 「源数 × 超时」降到「单次超时」，且第一个尝试的通常就是最快的。
+     *
+     * 用户在设置里指定了源时不推翻他的选择：那个源永远排第一，其余照旧竞速。
+     */
+    private fun racingOrder(): List<Int> {
+        val base = orderedMirrorIndices()
+        if (base.size <= 1) return base
+        val preferFirst = preferredMirror != DownloadMirror.Auto
+        val head = if (preferFirst) listOf(base.first()) else emptyList()
+        val rest = if (preferFirst) base.drop(1) else base
+        if (rest.isEmpty()) return base
+
+        // 每源一个线程并行探测：probeMirror 自带 PROBE_TIMEOUT_MS 超时，
+        // 这里用普通线程而不是协程，是因为本函数在 bootstrap 的同步
+        // 下载路径上（调用方已经在 IO 线程），再套 runBlocking 只会多一层调度。
+        val latency = java.util.concurrent.ConcurrentHashMap<Int, Long>()
+        val workers = rest.map { idx ->
+            Thread {
+                val startedAt = android.os.SystemClock.elapsedRealtime()
+                if (probeMirror(idx)) {
+                    latency[idx] = android.os.SystemClock.elapsedRealtime() - startedAt
+                }
+            }.apply {
+                isDaemon = true
+                name = "bootstrap-probe-$idx"
+                start()
+            }
+        }
+        // 多等 2s 兜底：某个线程卡在 DNS 之类的不可中断调用上时不能把初始化拖死
+        workers.forEach { w -> runCatching { w.join(PROBE_TIMEOUT_MS + 2_000L) } }
+
+        log(
+            "下载源探测：" + rest.joinToString("，") { idx ->
+                val ms = latency[idx]
+                "${mirrorSources[idx]}=${if (ms != null) "${ms}ms" else "不可用"}"
+            }
+        )
+        // 可用的按延迟升序排前面，不可用的保持原顺序殿后（下载仍会逐个试）
+        val usableIdx = latency.entries
+            .sortedBy { entry -> entry.value }
+            .map { entry -> entry.key }
+        val unusableIdx = rest.filter { idx -> !latency.containsKey(idx) }
+        return head + usableIdx + unusableIdx
+    }
+
     // 各架构对应的 SHA256（来自 GitHub release 页面，硬编码避免下载校验文件 404）
     private val bootstrapSha256 = mapOf(
         "aarch64" to "1f48f4d05da9fab3ce74fb1d9b137fdbc745ba1f7a6f9e8f743fd89b7047d17b",
@@ -543,7 +629,7 @@ class BootstrapInstaller(private val context: Context) {
         Log.i(TAG, "[下载] 开始 downloadBootstrap, 共 ${mirrorEntries.size} 个镜像源, arch=$arch, 线程=${Thread.currentThread().name}")
         var lastError: Exception? = null
         val failures = mutableListOf<String>()
-        for (idx in orderedMirrorIndices()) {
+        for (idx in racingOrder()) {
             _currentMirrorIndex.value = idx
             val mirror = mirrorEntries[idx].baseUrl
             val url = "$mirror/$version/$fileName"
@@ -1088,27 +1174,27 @@ esac
         val sslCertsDir = File(rootDir, "etc/ssl/certs").apply { mkdirs() }
         val tlsDir = File(rootDir, "etc/tls").apply { mkdirs() }
         val caBundle = File(sslCertsDir, "ca-certificates.crt")
-        val androidCaDir = File("/system/etc/security/cacerts")
-        if (androidCaDir.isDirectory) {
-            log("合并 Android 系统 CA 证书...")
-            try {
-                val sb = StringBuilder()
-                androidCaDir.listFiles()?.sortedBy { it.name }?.forEach { certFile ->
-                    try {
-                        val content = certFile.readText()
-                        if (content.contains("BEGIN CERTIFICATE")) {
-                            sb.append(content)
-                            if (!content.endsWith("\n")) sb.append("\n")
-                        }
-                    } catch (_: Exception) { }
-                }
-                caBundle.writeText(sb.toString())
-                log("CA 证书合并完成: ${sb.length} 字节")
-            } catch (e: Exception) {
-                log("CA 证书合并失败: ${e.message}")
+        // 这一段以前是「把 /system/etc/security/cacerts 的内容**覆盖写**进 rootfs」。
+        // 在定制 ROM 上那是个真实事故源：目录存在但读不出证书（SELinux 限制、
+        // 或 Android 14+ 已把根证书挪进 APEX 而 /system 只剩空目录）时，
+        // 覆盖写会把 rootfs 自带的 CA 一起清成 0 字节 —— 之后 apt 的 https 源
+        // 全部报 "No system certificates available"，用户怎么重装都救不回来。
+        // 现在改成「合并 + 保留」：取不到系统证书时原样保留自带的那份。
+        val existingCa = runCatching {
+            if (caBundle.exists() && caBundle.length() > 0) caBundle.readText() else ""
+        }.getOrDefault("")
+        val systemCerts = collectSystemCaCerts()
+        if (systemCerts.isNotEmpty()) {
+            log("合并系统 CA 证书 ${systemCerts.size} 份...")
+            val merged = mergeCaBundles(existingCa, systemCerts)
+            if (merged.isNotEmpty()) {
+                caBundle.writeText(merged)
+                log("CA 证书合并完成: ${merged.length} 字节")
             }
+        } else if (existingCa.contains("BEGIN CERTIFICATE")) {
+            log("未取到系统 CA 证书（该 ROM 无 /system/etc/security/cacerts），保留 rootfs 自带 CA ${existingCa.length} 字节")
         } else {
-            log("警告: Android CA 证书目录不存在: ${androidCaDir.absolutePath}")
+            log("警告: 系统 CA 与 rootfs 自带 CA 均不可用 —— apt 的 https 源会失败，请改用 http 源或手动补证书")
         }
         // 创建 etc/tls/ca-certificates.crt 符号链接（部分 SSL 库查找此路径）
         val tlsCaBundle = File(tlsDir, "ca-certificates.crt")
@@ -1137,6 +1223,59 @@ esac
 
         // 创建 tmp 目录
         File(rootDir, "tmp").mkdirs()
+    }
+
+    /**
+     * 从所有已知的系统根证书目录收集 PEM 文本。
+     *
+     * Android 14 起系统根证书搬进了 APEX（`/apex/com.android.conscrypt/cacerts`），
+     * 旧路径 `/system/etc/security/cacerts` 在部分 ROM 上会变成空目录或不可读；
+     * 国产 ROM 还常见把可信任第三方根证书单独放在 `_google` / `product` 目录。
+     * 四个路径都试一遍，取到多少算多少（调用方只要求「非空」）。
+     */
+    private fun collectSystemCaCerts(): List<String> {
+        val dirs = listOf(
+            "/system/etc/security/cacerts",
+            "/apex/com.android.conscrypt/cacerts",
+            "/system/etc/security/cacerts_google",
+            "/product/etc/security/cacerts"
+        )
+        val out = mutableListOf<String>()
+        for (dirPath in dirs) {
+            val dir = File(dirPath)
+            if (!dir.isDirectory) continue
+            val files = runCatching { dir.listFiles() }.getOrNull() ?: continue
+            for (f in files) {
+                if (!f.isFile) continue
+                val text = runCatching { f.readText() }.getOrNull() ?: continue
+                if (text.contains("BEGIN CERTIFICATE")) out += text
+            }
+        }
+        return out
+    }
+
+    /** 按证书块合并两份 PEM 集合，靠块内容去重（同一张根证书常在多个目录里重复）。 */
+    private fun mergeCaBundles(existing: String, incoming: List<String>): String {
+        val seen = HashSet<String>()
+        val sb = StringBuilder()
+        fun append(text: String) {
+            var from = 0
+            while (true) {
+                val begin = text.indexOf("-----BEGIN CERTIFICATE-----", from)
+                if (begin < 0) return
+                val endMark = "-----END CERTIFICATE-----"
+                val end = text.indexOf(endMark, begin)
+                if (end < 0) return
+                val block = text.substring(begin, end + endMark.length)
+                if (seen.add(block)) {
+                    sb.append(block).append('\n')
+                }
+                from = end + endMark.length
+            }
+        }
+        append(existing)
+        incoming.forEach(::append)
+        return sb.toString()
     }
 
     // ── HTTP 下载工具 ──────────────────────────────────────────────
@@ -1263,8 +1402,23 @@ esac
         /** Termux bootstrap 版本目录名（GitHub release tag 的 URL 编码形式）。 */
         private const val BOOTSTRAP_VERSION = "bootstrap-2026.05.24-r1%2Bapt.android-7"
 
+        /**
+         * 某个 GitHub 镜像上 bootstrap 包的探测地址（界面测速用）。
+         *
+         * 固定用 aarch64 包：所有 ABL 变体同尺寸同级，探测只关心「这个反代能不能
+         * 把 GitHub Release 拉下来」，与被测设备架构无关。
+         */
+        fun probeUrl(mirror: DownloadMirror): String =
+            "${mirror.baseUrl}/$BOOTSTRAP_VERSION/bootstrap-aarch64.zip"
+
         /** 探测单个下载源的连接 / 读取超时（毫秒）。 */
         private const val PROBE_TIMEOUT_MS = 8_000
+
+        /** 解压写盘线程数。内部存储（f2fs/ext4）上 4 路足以吃满 IO 队列，
+         *  再往上加只会让「小文件元数据竞争」反过来拖慢。 */
+        private const val EXTRACT_THREADS = 4
+
+        private const val BUFFER_SIZE = 128 * 1024
 
         private const val USER_AGENT = "Minexa/1.0 (Android)"
     }

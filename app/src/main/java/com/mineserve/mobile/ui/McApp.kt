@@ -36,6 +36,9 @@ import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.data.NetworkState
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.SkinBackdrop
+import com.mineserve.mobile.ui.components.skinTileOverlay
 import com.mineserve.mobile.ui.screens.BackupScreen
 import com.mineserve.mobile.ui.screens.DashboardScreen
 import com.mineserve.mobile.ui.screens.DiagnosticsScreen
@@ -61,16 +64,19 @@ import com.mineserve.mobile.ui.screens.EnvManagerScreen
 import com.mineserve.mobile.ui.screens.FtpScreen
 import com.mineserve.mobile.ui.screens.MoreScreen
 import com.mineserve.mobile.ui.screens.AutomationScreen
+import com.mineserve.mobile.ui.screens.ThemeScreen
 import com.mineserve.mobile.ui.screens.McpScreen
 import com.mineserve.mobile.ui.screens.WidgetSettingsScreen
 import com.mineserve.mobile.ui.screens.CrashReportsScreen
 import com.mineserve.mobile.ui.screens.CrashReportDialog
+import com.mineserve.mobile.ui.screens.AddonsScreen
 import com.mineserve.mobile.ui.screens.WorldsScreen
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.ui.theme.frostedGlass
 
 /**
  * 应用根布局：底部 Tab（一级页面）+ 二级页面返回栈。
@@ -88,7 +94,9 @@ fun McApp() {
     val vm: McViewModel = viewModel(factory = McViewModel.Factory)
     val currentCrashContent by vm.currentCrashContent.collectAsState()
     val currentCrashAnalysis by vm.currentCrashAnalysis.collectAsState()
-    val lastRunLog by vm.lastRunLog.collectAsState()
+    val currentCrashInsight by vm.currentCrashInsight.collectAsState()
+    val currentCrashLog by vm.currentCrashLog.collectAsState()
+    val trustStoreRepair by vm.trustStoreRepair.collectAsState()
 
     // ── 导航状态 ────────────────────────────────────────────────
     var tab by rememberSaveable { mutableStateOf(McTab.Dashboard) }
@@ -232,18 +240,50 @@ fun McApp() {
     // 页面状态容器：每个页面一个 key，离开组合时 Compose 会把它的
     // rememberSaveable（滚动位置、列表位置、选中项）存起来，回来时原样恢复。
     val pageStates = rememberSaveableStateHolder()
+    // 背景几何：SkinBackdrop 写入，毛玻璃面板在绘制阶段读取（见 Glass.kt）
+    val backdropState = remember { com.mineserve.mobile.ui.theme.BackdropState() }
+
+    androidx.compose.foundation.layout.Box(Modifier.fillMaxSize()) {
+    androidx.compose.runtime.CompositionLocalProvider(
+        com.mineserve.mobile.ui.theme.LocalBackdropState provides backdropState
+    ) {
+    // 背景铺在 Scaffold 之外：底栏也要能「透过自身看到背景」，否则导航栏的毛玻璃
+    // 背后是 Scaffold 的容器色，什么也模糊不到。
+    com.mineserve.mobile.ui.components.SkinBackdrop()
 
     Scaffold(
         // 全屏展示：内容延伸到状态栏，顶部状态栏区域由各页面首个组件（HeaderBlock/返回栏）
         // 以白色背景覆盖，不再显示系统状态栏灰色条
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
         contentWindowInsets = WindowInsets(0.dp),
         bottomBar = {
             // 二级及更深页面不显示底部导航栏：Scaffold 因此不再下发底部 padding，
             // 内容区自然铺满到屏幕底部（原先预留的那一条高度直接还给内容）。
             if (!deepLevel) {
+                // 主题包带背景图时底栏半透明，让整屏插画一直铺到导航条后面；
+                // 没有背景图就保持原样不透明（半透明叠纯色底没有意义）。
+                // 毛玻璃开启时改为「模糊背景 + 薄雾」：底栏真正磨砂化，而不是单纯降透明度。
+                val skin = com.mineserve.mobile.ui.theme.LocalSkin.current
+                val glass = com.mineserve.mobile.ui.theme.LocalGlassEnabled.current
+                // 底栏贴图（v2 `assets.navbar`）：有图就让容器色退位，图铺满整条（含手势条）。
+                val navTile = com.mineserve.mobile.ui.components.skinTile(SkinTileSlots.NAVBAR) != null
                 NavigationBar(
-                    modifier = Modifier.navigationBarsPadding(),
-                    containerColor = MaterialTheme.colorScheme.surface
+                    // frostedGlass 要在 navigationBarsPadding 之前：否则玻璃只盖住内容区，
+                    // 手势条那一条会露出来。贴图同理，放在 padding 之前才能铺到手势条下面。
+                    modifier = Modifier
+                        .frostedGlass(androidx.compose.ui.graphics.RectangleShape, glass)
+                        .skinTileOverlay(
+                            SkinTileSlots.NAVBAR,
+                            androidx.compose.ui.graphics.RectangleShape
+                        )
+                        .navigationBarsPadding(),
+                    containerColor = when {
+                        navTile -> androidx.compose.ui.graphics.Color.Transparent
+                        glass -> androidx.compose.ui.graphics.Color.Transparent
+                        skin.assets.background != null ->
+                            skin.scheme.surface.copy(alpha = skin.metrics.navSurfaceAlpha.coerceIn(0.6f, 1f))
+                        else -> skin.scheme.surface
+                    }
                 ) {
                     McTab.values().forEach { t ->
                         NavigationBarItem(
@@ -255,7 +295,9 @@ fun McApp() {
                             colors = NavigationBarItemDefaults.colors(
                                 selectedIconColor = Indigo,
                                 selectedTextColor = Indigo,
-                                indicatorColor = IndigoSoft,
+                                // 选中指示器底色由主题包 ext.navActiveStart 决定，
+                                // 默认值就是 primaryContainer（与改造前完全相同）。
+                                indicatorColor = skin.ext.navActiveStart,
                                 unselectedIconColor = Muted,
                                 unselectedTextColor = Muted
                             )
@@ -266,7 +308,7 @@ fun McApp() {
                         onClick = { navigate(SubPage.More) },
                         icon = { Icon(Icons.Outlined.MoreVert, contentDescription = stringResource(R.string.mcapp_more)) },
                         label = { Text(stringResource(R.string.mcapp_more), fontSize = 10.sp) },
-                        colors = NavigationBarItemDefaults.colors(selectedIconColor = Indigo, selectedTextColor = Indigo, indicatorColor = IndigoSoft, unselectedIconColor = Muted, unselectedTextColor = Muted)
+                        colors = NavigationBarItemDefaults.colors(selectedIconColor = Indigo, selectedTextColor = Indigo, indicatorColor = skin.ext.navActiveStart, unselectedIconColor = Muted, unselectedTextColor = Muted)
                     )
                 }
             }
@@ -275,12 +317,13 @@ fun McApp() {
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(MaterialTheme.colorScheme.background)
                 .padding(padding)
                 // 底部导航栏已经让位，但系统导航条（手势横条）仍在，这里只避让它，
                 // 不再额外留出任何「给底栏预留」的空白。
                 .then(if (deepLevel) Modifier.navigationBarsPadding() else Modifier)
         ) {
+            // 整屏背景由主题包决定（有图铺图、无图纯色），所有页面都压在它上面画。
+            // 背景层已移到 Scaffold 之外（底栏也要能模糊它），这里不再重复绘制。
             val pageKey = when {
                 showLogs -> "page:logs"
                 current != null -> "page:${current.key}"
@@ -309,6 +352,7 @@ fun McApp() {
                         McTab.ServerManagement -> ServerManagementScreen(
                             vm = vm,
                             onPlugins = { navigate(SubPage.Plugins) },
+                            onAddons = { navigate(SubPage.Addons) },
                             onProperties = { navigate(SubPage.Properties) },
                             onIcon = { navigate(SubPage.ServerIcon) },
                             onWorlds = { navigate(SubPage.WorldManage) }
@@ -346,16 +390,42 @@ fun McApp() {
         val crashAnalysis = currentCrashAnalysis
         if (crashContent != null && crashAnalysis != null) {
             CrashReportDialog(
-                crashContent,
-                crashAnalysis,
-                lastRunLog,
+                content = crashContent!!,
+                analysis = crashAnalysis!!,
+                insight = currentCrashInsight,
+                logView = currentCrashLog,
                 onDismiss = { vm.clearCrashContent() },
                 onGoToJavaInstall = {
                     vm.clearCrashContent()
                     navigate(SubPage.EnvManager, "0")
-                }
+                },
+                onFixAction = { action ->
+                    if (action.startsWith("action:")) {
+                        // App 内可执行动作：**不关弹窗**，就地执行并展示进度/结果
+                        // （用户点「一键修复」后需要立刻看到修没修好）。
+                        if (action == "action:repair-truststore") vm.repairJavaTrustStore()
+                    } else {
+                        // 页面跳转类动作：关弹窗并跳到对应页面。
+                        vm.clearCrashContent()
+                        when {
+                            action.startsWith("goto:env") -> navigate(SubPage.EnvManager, "0")
+                            action.startsWith("goto:diagnostics") -> navigate(SubPage.Diagnostics, "")
+                            action.startsWith("goto:backup") -> navigate(SubPage.Backup, "")
+                            action.startsWith("goto:settings/keepalive") -> navigate(SubPage.KeepAlive, "")
+                            action.startsWith("goto:settings") -> tab = McTab.Settings
+                            action.startsWith("goto:server") -> navigate(SubPage.Properties, "")
+                            action.startsWith("goto:core") -> tab = McTab.Download
+                            else -> Unit
+                        }
+                    }
+                },
+                onFeedback = { vm.recordCrashFeedback(it) },
+                repairState = trustStoreRepair,
+                onRepairTrustStore = { vm.repairJavaTrustStore() }
             )
         }
+    }
+    }
     }
 }
 
@@ -390,6 +460,7 @@ private fun SubPageContent(
         )
         SubPage.Backup -> BackupScreen(vm = vm, onBack = onBack)
         SubPage.WorldManage -> WorldsScreen(vm = vm, onBack = onBack)
+        SubPage.Addons -> AddonsScreen(vm = vm, onBack = onBack)
         SubPage.DownloadHelp -> DownloadHelpScreen(vm = vm, onBack = onBack)
         SubPage.MtGuide -> MtGuideScreen(onBack = onBack)
         SubPage.KeepAlive -> KeepAliveScreen(vm = vm, onBack = onBack)
@@ -415,16 +486,17 @@ private fun SubPageContent(
         SubPage.Mcp -> McpScreen(vm = vm, onBack = onBack)
         SubPage.Ftp -> FtpScreen(vm = vm, onBack = onBack)
         SubPage.Automation -> AutomationScreen(vm = vm, onBack = onBack)
+        SubPage.Theme -> ThemeScreen(onBack = onBack)
         SubPage.More -> MoreScreen(
             onNetwork = { onNavigate(SubPage.Network, "") },
             onBackup = { onNavigate(SubPage.Backup, "") },
             onDiagnostics = { onNavigate(SubPage.Diagnostics, "") },
             onKeepAlive = { onNavigate(SubPage.KeepAlive, "") },
-            onHelp = { onNavigate(SubPage.DownloadHelp, "") },
             onCrashReports = { onNavigate(SubPage.CrashReports, "") },
             onWidgetSettings = { onNavigate(SubPage.WidgetSettings, "") },
             onMcp = { onNavigate(SubPage.Mcp, "") },
             onFtp = { onNavigate(SubPage.Ftp, "") },
+            onTheme = { onNavigate(SubPage.Theme, "") },
             onAutomation = { onNavigate(SubPage.Automation, "") }
         )
     }

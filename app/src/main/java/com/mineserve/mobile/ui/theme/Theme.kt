@@ -3,117 +3,77 @@ package com.mineserve.mobile.ui.theme
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.LocalOverscrollConfiguration
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Shapes
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.remember
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
+import com.mineserve.mobile.data.skin.SkinRuntime
 
 /**
- * 全局形状：让走默认形状的组件（Card / OutlinedTextField / AlertDialog / Chip）
- * 自动落在项目的圆角体系上，而不是 Material3 的内置默认值。
- * - extraSmall 是 OutlinedTextField 的默认形状：原先 4dp 的尖角输入框与 12dp 的按钮
- *   明显不是一套语言，统一到 10dp；
- * - medium 是 Card 的默认形状，与 McCard 的 12dp 保持一致；
- * - large 是 AlertDialog 的默认形状，统一到 20dp（原先 28dp 偏大）。
+ * 全局主题入口：把「当前主题包」解析成 Material3 配色 + 形状，并下发给整棵树。
+ *
+ * 三件事必须按顺序发生：
+ * 1. [SkinRuntime.resolve] 取到本次深浅色下的令牌（图片也在这里解码，只解一次）；
+ * 2. [SkinPalette.install] 把结果装进全局桥，供 `Color.kt` 里 700+ 处旧常量读取；
+ * 3. `LocalSkin` + `MaterialTheme` 下发，子内容才开始组合。
+ *
+ * `remember` 的三个键都不能少：少 `runtime` 会导致切主题不刷新，少 `widthPx` 会导致
+ * 转屏后图片糊，少 `darkTheme` 会导致深浅色不跟随。
  */
-private val McShapes = Shapes(
-    extraSmall = McShape.Row,
-    small = McShape.Row,
-    medium = McShape.Card,
-    large = McShape.Dialog,
-    extraLarge = McShape.Dialog
-)
-
-private val McColorScheme = lightColorScheme(
-    primary = Indigo,
-    onPrimary = LightCard,
-    primaryContainer = LightIndigoSoft,
-    onPrimaryContainer = Indigo,
-    secondary = Mint,
-    onSecondary = LightCard,
-    secondaryContainer = LightMintSoft,
-    onSecondaryContainer = Mint,
-    tertiary = Coral,
-    onTertiary = LightCard,
-    tertiaryContainer = LightCoralSoft,
-    onTertiaryContainer = Coral,
-    background = LightBg,
-    onBackground = LightInk,
-    surface = LightCard,
-    onSurface = LightInk,
-    surfaceVariant = LightFieldGray,
-    onSurfaceVariant = LightMuted,
-    outline = LightLine,
-    // 显式给出描边与容器色阶：Line 令牌读的是 outlineVariant，
-    // 不覆盖会落到 M3 默认的 #CAC4D0（明显偏灰），卡片边框会比设计稿重。
-    outlineVariant = LightLine,
-    surfaceTint = Indigo,
-    surfaceContainerLowest = LightContainerLowest,
-    surfaceContainerLow = LightContainerLow,
-    surfaceContainer = LightContainer,
-    surfaceContainerHigh = LightContainerHigh,
-    surfaceContainerHighest = LightContainerHighest,
-    surfaceDim = LightSurfaceDim,
-    surfaceBright = LightSurfaceBright,
-    inverseSurface = LightInk,
-    inverseOnSurface = LightBg,
-    inversePrimary = Color(0xFF9FB0F0),
-    scrim = Color(0xFF000000)
-)
-
-private val McDarkColorScheme = darkColorScheme(
-    primary = Color(0xFF9FB0F0),
-    onPrimary = Color(0xFF1B2447),
-    primaryContainer = DarkIndigoSoft,
-    onPrimaryContainer = Color(0xFFD5DCFA),
-    secondary = MintBright,
-    onSecondary = Color(0xFF06301F),
-    secondaryContainer = DarkMintSoft,
-    onSecondaryContainer = MintBright,
-    tertiary = Color(0xFFFFB4A8),
-    onTertiary = Color(0xFF561E1A),
-    tertiaryContainer = DarkCoralSoft,
-    onTertiaryContainer = Color(0xFFFFB4A8),
-    background = DarkBg,
-    onBackground = DarkInk,
-    surface = DarkCard,
-    onSurface = DarkInk,
-    surfaceVariant = DarkFieldGray,
-    onSurfaceVariant = DarkMuted,
-    outline = DarkLine,
-    outlineVariant = DarkLine,
-    surfaceTint = Color(0xFF9FB0F0),
-    surfaceContainerLowest = DarkContainerLowest,
-    surfaceContainerLow = DarkContainerLow,
-    surfaceContainer = DarkContainer,
-    surfaceContainerHigh = DarkContainerHigh,
-    surfaceContainerHighest = DarkContainerHighest,
-    surfaceDim = DarkSurfaceDim,
-    surfaceBright = DarkSurfaceBright,
-    inverseSurface = DarkInk,
-    inverseOnSurface = DarkBg,
-    inversePrimary = Indigo,
-    scrim = Color(0xFF000000)
-)
-
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MineServeMobileTheme(
     darkTheme: Boolean = isSystemInDarkTheme(),
+    skin: SkinRuntime? = null,
+    /**
+     * 毛玻璃总开关（由 `SkinState.glassEnabled` 算出：手动设置优先，否则跟随主题包）。
+     *
+     * 放在树顶下发而不是各页面各自读仓库：卡片、底栏、按钮全是分散的调用点，
+     * 让它们都去订阅 DataStore 只会出现「一半开着一半没开」的中间态。
+     */
+    glassEnabled: Boolean = false,
     content: @Composable () -> Unit
 ) {
-    MaterialTheme(
-        colorScheme = if (darkTheme) McDarkColorScheme else McColorScheme,
-        typography = McTypography,
-        shapes = McShapes
-    ) {
-        // 终端调色板不在这里下发：终端的深浅色是终端页自己的开关（默认深色），
-        // 与 App 主题无关，由 TerminalScreen 在页面内 provide。
-        CompositionLocalProvider(LocalOverscrollConfiguration provides null) {
-            content()
+    val runtime = skin ?: remember { SkinRuntime.builtin() }
+    val widthPx = LocalContext.current.resources.displayMetrics.widthPixels
+    val resolved = remember(runtime, darkTheme, widthPx) {
+        // 兜底实例（首启 bootstrap 未完成 / 主题目录被删）不能走 resolve()：
+        // 它没有任何令牌，会落到 M3 默认的淡紫。用工程自己的默认配色，冷启动才不会闪一下。
+        if (runtime.isFallback) SkinDefaults.baseline(darkTheme)
+        else runtime.resolve(darkTheme, widthPx)
+    }
+
+    // 在子内容组合之前安装：同一帧内所有 getter 读到的都是新配色。
+    SkinPalette.install(resolved)
+
+    val shapes = remember(resolved.shape) {
+        Shapes(
+            extraSmall = RoundedCornerShape(resolved.shape.controlRadius.dp),
+            small = RoundedCornerShape(resolved.shape.controlRadius.dp),
+            medium = RoundedCornerShape(resolved.shape.cardRadius.dp),
+            large = RoundedCornerShape(resolved.shape.dialogRadius.dp),
+            extraLarge = RoundedCornerShape(resolved.shape.dialogRadius.dp)
+        )
+    }
+
+    CompositionLocalProvider(LocalSkin provides resolved) {
+        MaterialTheme(
+            colorScheme = resolved.scheme,
+            typography = McTypography,
+            shapes = shapes
+        ) {
+            // 终端调色板不在这里下发：终端的深浅色是终端页自己的开关（默认深色），
+            // 与 App 主题无关，由 TerminalScreen 在页面内 provide。
+            CompositionLocalProvider(
+                LocalOverscrollConfiguration provides null,
+                LocalGlassEnabled provides glassEnabled
+            ) {
+                content()
+            }
         }
     }
 }

@@ -1,0 +1,53 @@
+{
+  "_comment": [
+    "Minexa 在线崩溃知识库规则包（L3）模板 / 示例。",
+    "发布方式：按本文件格式扩充后提交为仓库 docs/crash-rules-pack.json；",
+    "App 会从 jsDelivr（国内优先）与 GitHub raw 两个地址拉取，校验通过后缓存到 filesDir/kb/，",
+    "不需要发版即可生效；断网 / 校验失败时自动沿用旧版或退回内置规则。",
+    "硬性约定：id 必须以 kb- 开头（用于区分知识来源），label 非空，且 contains / regex / exitCodes 至少一项。",
+    "字段语义与内置 assets/rules/server_errors.json 完全一致。"
+  ],
+  "version": 3,
+  "minAppVersion": "1.6.0",
+  "updatedAt": "2026-11-12",
+  "classVersions": {},
+  "rules": [
+    {
+      "id": "kb-paper-plugin-api-mismatch",
+      "level": "Possible",
+      "contains": [
+        "Unsupported API version",
+        "is not compatible with this version of Paper"
+      ],
+      "label": "插件与 Paper 版本不兼容",
+      "detail": "Paper 在加载插件时发现其声明的 api-version 高于服务端当前版本，插件会被跳过或直接报错。",
+      "evidence": "检测到 Unsupported API version / not compatible with this version of Paper",
+      "suggest": "把该插件升级到支持当前 Paper 版本的版本；若插件已停更，改用社区维护的分支或移除插件。可在「插件」页逐个启用定位到具体插件。"
+    },
+    {
+      "id": "kb-forge-securejar-manifest",
+      "level": "Identified",
+      "contains": [
+        "Invalid signature file digest for Manifest main attributes",
+        "SecurityException: Invalid signature file"
+      ],
+      "label": "模组 jar 签名与合并包冲突",
+      "detail": "Forge/NeoForge 在合并 classpath 时遇到带签名的 jar（常见于从官方渠道下载后又被修改过的模组），签名校验失败。",
+      "evidence": "检测到 Invalid signature file digest",
+      "suggest": "删除报错模组 jar 中 META-INF 下的 *.SF/*.RSA/*.DSA 后重新打包，或改用未签名的官方构建；不确定时先移除最近加入的模组再逐个加回。"
+    },
+    {
+      "id": "kb-locale-utf8-console",
+      "level": "Possible",
+      "contains": [
+        "Unsupported encoding",
+        "file.encoding=",
+        "Malformed input or unmappable character"
+      ],
+      "label": "控制台编码不匹配",
+      "detail": "服务端按 UTF-8 输出中文，但运行环境 locale 不是 UTF-8，导致日志乱码或插件读取配置时报编码错误。",
+      "evidence": "检测到 Unsupported encoding / Malformed input",
+      "suggest": "在启动参数中加入 -Dfile.encoding=UTF-8，并确认 server.properties 与插件配置以 UTF-8 保存（不要用系统记事本另存的 ANSI）。"
+    }
+  ]
+}

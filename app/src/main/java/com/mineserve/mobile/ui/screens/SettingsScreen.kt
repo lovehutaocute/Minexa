@@ -32,7 +32,6 @@ import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Code
 import androidx.compose.material.icons.outlined.Email
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -80,6 +79,8 @@ import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.ui.components.AppDialog
+import com.mineserve.mobile.ui.components.MirrorSpeedTestDialog
 
 /** 意见反馈邮箱。底部图标与 mailto 共用一处，避免两处写死不同的地址。 */
 private const val FEEDBACK_EMAIL = "167245484@qq.com"
@@ -110,6 +111,7 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
         HeaderBlock(eyebrow = stringResource(R.string.eyebrow_settings), title = stringResource(R.string.s186))
 
         // ── 通用 ──────────────────────────────────────────────────
+        // 「外观」入口已移到「更多」页（2026-11-13），这里不再重复。
         SettingsGroupLabel(stringResource(R.string.set_group_general))
         LanguageCard()
         EventNotifyCard(vm)
@@ -120,31 +122,8 @@ fun SettingsScreen(vm: McViewModel, onNavigate: (SubPage) -> Unit = {}) {
         AptMirrorCard(vm)
         DownloadTuningCard(vm)
 
-        // ── 运行与保活 ─────────────────────────────────────────────
-        SettingsGroupLabel(stringResource(R.string.set_group_runtime))
-        McCard(title = stringResource(R.string.s1013)) {
-            val config by vm.config.collectAsState()
-            SettingToggle(
-                title = stringResource(R.string.s396),
-                subtitle = stringResource(R.string.s397),
-                checked = config.autoRestartOnCrash,
-                onChange = { vm.setAutoRestart(it) }
-            )
-            SettingDivider()
-            SettingToggle(
-                title = stringResource(R.string.s1014),
-                subtitle = stringResource(R.string.s1015),
-                checked = config.keepWifiLock,
-                onChange = { vm.setKeepWifiLock(it) }
-            )
-            SettingDivider()
-            SettingToggle(
-                title = stringResource(R.string.s1016),
-                subtitle = stringResource(R.string.s1017),
-                checked = config.keepCpuWakelock,
-                onChange = { vm.setKeepCpuWakelock(it) }
-            )
-        }
+        // 原「运行与保活」分组（崩溃自动重启 / WiFi 锁 / CPU 唤醒锁）已整体迁到「保活」页，
+        // 与其它保活开关放在同一张卡里，避免同一组配置散落在两个页面。
 
         // ── 关于与支持 ─────────────────────────────────────────────
         SettingsGroupLabel(stringResource(R.string.set_group_about))
@@ -425,20 +404,19 @@ private fun EventNotifyCard(vm: McViewModel) {
 @Composable
 private fun DownloadSourceCard(vm: McViewModel) {
     val config by vm.config.collectAsState()
-    val testing by vm.mirrorTestRunning.collectAsState()
-    val testResult by vm.mirrorTestResult.collectAsState()
+    var showSpeedTest by remember { mutableStateOf(false) }
     McCard(
         title = stringResource(R.string.s1007),
         trailing = {
+            // 闪电 = 镜像测速弹窗（与主界面运行环境卡片上的那颗是同一个实现）。
             IconButton(
-                onClick = { vm.testDownloadSources() },
-                enabled = !testing,
+                onClick = { showSpeedTest = true },
                 modifier = Modifier.size(McIcon.Touch)
             ) {
                 Icon(
                     Icons.Outlined.Bolt,
-                    contentDescription = stringResource(R.string.st_mirror_test),
-                    tint = if (testing) Muted else Indigo,
+                    contentDescription = stringResource(R.string.mirror_speed_title),
+                    tint = Indigo,
                     modifier = Modifier.size(McIcon.Action)
                 )
             }
@@ -454,7 +432,8 @@ private fun DownloadSourceCard(vm: McViewModel) {
         Text(stringResource(R.string.s1009), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            DownloadMirror.values().forEach { mirror ->
+            // Auto + 未失效的具体镜像；已失效项（cdn.gh-proxy.com）不再展示。
+            (listOf(DownloadMirror.Auto) + DownloadMirror.active).forEach { mirror ->
                 SegPill(
                     text = downloadMirrorLabel(mirror),
                     selected = config.downloadMirror == mirror,
@@ -462,15 +441,9 @@ private fun DownloadSourceCard(vm: McViewModel) {
                 )
             }
         }
-        if (testing || testResult != null) {
-            Spacer(Modifier.height(McSpacing.Row))
-            Text(
-                if (testing) stringResource(R.string.st_mirror_test_running) else testResult.orEmpty(),
-                color = Muted,
-                fontSize = 11.sp,
-                lineHeight = 15.sp
-            )
-        }
+    }
+    if (showSpeedTest) {
+        MirrorSpeedTestDialog(vm = vm, onDismiss = { showSpeedTest = false })
     }
 }
 
@@ -500,7 +473,7 @@ private fun AptMirrorCard(vm: McViewModel) {
         Text(stringResource(R.string.s1012), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         Spacer(Modifier.height(6.dp))
         FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            AptMirror.values().filter { it != AptMirror.Official }.forEach { mirror ->
+            AptMirror.active.forEach { mirror ->
                 SegPill(
                     text = aptMirrorLabel(mirror),
                     selected = config.aptMirror == mirror,
@@ -585,9 +558,13 @@ private fun downloadMirrorLabel(mirror: DownloadMirror): String = when (mirror) 
 @Composable
 private fun aptMirrorLabel(mirror: AptMirror): String = when (mirror) {
     AptMirror.Tuna -> stringResource(R.string.mirror_tuna)
+    AptMirror.Huawei -> stringResource(R.string.mirror_huawei)
     AptMirror.Aliyun -> stringResource(R.string.mirror_aliyun)
     AptMirror.Ustc -> stringResource(R.string.mirror_ustc)
     AptMirror.Nju -> stringResource(R.string.mirror_nju)
+    AptMirror.Hust -> stringResource(R.string.mirror_hust)
+    AptMirror.Bfsu -> stringResource(R.string.mirror_bfsu)
+    AptMirror.Zju -> stringResource(R.string.mirror_zju)
     AptMirror.Official -> stringResource(R.string.mirror_official)
 }
 
@@ -638,7 +615,7 @@ private fun LanguageCard() {
     }
 
     if (expanded) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { expanded = false },
             shape = McShape.Dialog,
             title = { Text(stringResource(R.string.set_language_title), fontWeight = FontWeight.Bold) },

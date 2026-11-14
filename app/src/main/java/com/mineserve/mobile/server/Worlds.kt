@@ -1,5 +1,6 @@
 package com.mineserve.mobile.server
 
+import com.mineserve.mobile.data.FileOps
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -36,7 +37,14 @@ object Worlds {
         /** 统计是否因文件数过多而提前停止（此时 sizeBytes 只是下限）。 */
         val sizeTruncated: Boolean,
         /** 是否是 server.properties 当前 level-name 指向的世界。 */
-        val isActive: Boolean
+        val isActive: Boolean,
+        /**
+         * 「已经建了、但服务端还没生成过」的世界（目录还不存在）。
+         *
+         * Java 版新建世界只写 `server.properties`，目录要等服务端下次启动才出现；
+         * 只列真实目录会让用户在建完之后看不到任何东西，也无法在生成前切回去。
+         */
+        val planned: Boolean = false
     ) {
         val sizeText: String get() = formatSize(sizeBytes)
     }
@@ -67,8 +75,13 @@ object Worlds {
     /** 统计目录大小时最多遍历的文件数，避免超大世界长时间占用 IO。 */
     const val SIZE_SCAN_FILE_LIMIT = 20_000
 
-    /** 备份目录的后缀标记：`world.bak.20260728_153000` 这类目录不作为独立世界展示。 */
-    private const val BACKUP_MARKER = ".bak"
+    /**
+     * 备份目录的标记：`world.bak.20260728_153000` 这类目录不作为独立世界展示。
+     *
+     * 用正则而不是 `contains(".bak")`：原目录名里带 `.bak` 的真实世界（例如
+     * `world.bak2`）会被一起过滤掉，在列表里凭空消失、也无法切换和导出。
+     */
+    private val BACKUP_DIR = Regex("""\.bak(\.|$)""")
 
     /**
      * 判断一个目录是否为世界目录（含任一标识）。
@@ -76,6 +89,11 @@ object Worlds {
      * `db` 优先于 `level.dat`：PowerNukkitX 的世界目录**同时**有 `db/` 与 `level.dat`，
      * 若先判 `level.dat` 会把基岩版世界错认成 Java 版。代价是 Java 世界若被插件写了
      * 一个 `db/` 也会判成基岩版——后者没有实际影响（只影响列表上的类型标签）。
+     *
+     * **只看标识文件在基岩布局下不够**：刚建出来还没跑过服务端的 BDS 世界目录里
+     * 只有一个几百字节的 `level.dat`（`db/` 要等服务端生成才出现），会被错判成
+     * Java 版。所以 `worlds/<name>` 这种容器下的世界一律以父布局为准，
+     * 见 [list] 的 `containerBedrock` 参数。
      */
     fun detectKind(dir: File): Kind = when {
         File(dir, DB_DIR).isDirectory -> Kind.Bedrock
@@ -95,24 +113,49 @@ object Worlds {
         if (bedrock) File(serverDir, "worlds") else serverDir
 
     /**
+     * 目录形态兜底：像不像「基岩系的服务端根目录」。
+     *
+     * 只在核心识别失败时用（核心文件被改名、目录刚建还没铺开）。要求同时满足：
+     * 根目录本身不是世界、有 `worlds/` 子目录、且 `worlds/` 里至少有一个含 `db/`
+     * 的世界。「要有基岩世界」这一条是必要的：Java 服务端也可能有个同名 `worlds/`
+     * 目录（放备份或用错布局），光看目录名会把 Java 布局误判成基岩。
+     */
+    fun looksLikeWorldsContainer(serverDir: File): Boolean {
+        if (detectKind(serverDir) != Kind.Unknown) return false
+        val worlds = File(serverDir, "worlds")
+        if (!worlds.isDirectory) return false
+        val hasBedrockWorld = worlds.listFiles { f -> f.isDirectory && File(f, DB_DIR).isDirectory }
+            ?.isNotEmpty() == true
+        return hasBedrockWorld
+    }
+
+    /**
      * 列出 [worldsRoot] 下可直接切换的世界。
      *
      * 维度目录（`X_nether` / `X_the_end` 且 `X` 也在）与备份目录不会单独列出。
+     *
+     * @param containerBedrock 世界根目录本身是基岩布局（`worlds/`）。此时子目录一律按
+     *        [Kind.Bedrock] 记 —— 未生成过的 BDS 世界只有 `level.dat`、没有 `db/`，
+     *        靠标识文件会被误判成 Java 版。
      */
-    fun list(worldsRoot: File, levelName: String): List<WorldInfo> {
+    fun list(
+        worldsRoot: File,
+        levelName: String,
+        containerBedrock: Boolean = false
+    ): List<WorldInfo> {
         val dirs = worldsRoot.listFiles { f -> f.isDirectory } ?: return emptyList()
         val names = dirs.map { it.name }.toSet()
 
         return dirs
-            .filter { isWorld(it) }
-            .filter { !it.name.contains(BACKUP_MARKER) }
+            .filter { containerBedrock || isWorld(it) }
+            .filter { !BACKUP_DIR.containsMatchIn(it.name) }
             .filter { dimensionOwner(it.name, names) == null }
             .map { dir ->
                 val (size, truncated) = sizeOf(includeDimensions(dir, names))
                 WorldInfo(
                     name = dir.name,
                     dir = dir,
-                    kind = detectKind(dir),
+                    kind = if (containerBedrock) Kind.Bedrock else detectKind(dir),
                     sizeBytes = size,
                     sizeTruncated = truncated,
                     isActive = dir.name == levelName
@@ -324,14 +367,14 @@ object Worlds {
             // 解出来不是世界目录：清掉残渣，避免在服务端目录里留下一个空壳。
             // 只清本次真正写过东西的目录，绝不碰导入前就存在的世界。
             if (!imported) {
-                touchedTops.forEach { it.deleteRecursively() }
-                destRoot.deleteRecursively()
+                touchedTops.forEach { FileOps.deleteRecursively(it) }
+                FileOps.deleteRecursively(destRoot)
             }
             imported
         } catch (e: Exception) {
             // 异常时同样只清本次写入过的部分，避免把导入前就存在的维度世界连带删掉。
-            touchedTops.forEach { it.deleteRecursively() }
-            destRoot.deleteRecursively()
+            touchedTops.forEach { FileOps.deleteRecursively(it) }
+            FileOps.deleteRecursively(destRoot)
             false
         }
     }
@@ -436,13 +479,17 @@ object Worlds {
     /**
      * 删除世界（含维度）。返回被删除的目录数量，0 表示什么都没删。
      *
+     * 走 [FileOps.deleteRecursively] 而不是 `File.deleteRecursively()`：后者内部
+     * `FileTreeWalk` 的 `assert(rootDir.isDirectory)` 抛 AssertionError（Error 不是
+     * Exception），而调用方普遍是 `catch (e: Exception)`，拦不住就崩 App。
+     *
      * 调用方负责先做安全备份；本方法只负责删。
      */
     fun deleteWorld(worldDir: File, allNames: Set<String>): Int {
         if (!worldDir.isDirectory) return 0
         var removed = 0
         includeDimensions(worldDir, allNames).forEach { dir ->
-            if (dir.deleteRecursively()) removed++
+            if (FileOps.deleteRecursively(dir)) removed++
         }
         return removed
     }

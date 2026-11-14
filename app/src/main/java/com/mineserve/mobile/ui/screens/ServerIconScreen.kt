@@ -36,6 +36,10 @@ import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import androidx.compose.material3.MaterialTheme
 
 @Composable
 fun ServerIconScreen(vm: McViewModel, onBack: () -> Unit) {
@@ -63,10 +67,10 @@ fun ServerIconScreen(vm: McViewModel, onBack: () -> Unit) {
             bitmap?.let { Image(it.asImageBitmap(), null, Modifier.size(96.dp), contentScale = ContentScale.Crop) }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Button(
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, MaterialTheme.colorScheme.primary),
                     onClick = { launcher.launch("image/*") },
                     shape = McShape.ControlCompact,
-                    modifier = Modifier.weight(1f)
-                ) { Text(stringResource(R.string.ui_server_icon_change)) }
+                    modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact)) { Text(stringResource(R.string.ui_server_icon_change)) }
                 OutlinedButton(
                     onClick = vm::removeServerIcon,
                     shape = McShape.ControlCompact,

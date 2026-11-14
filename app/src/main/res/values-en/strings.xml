@@ -127,6 +127,7 @@
     <string name="s307" formatted="false">File uploaded successfully</string>
     <string name="s308" formatted="false">Upload failed: %1$s</string>
     <string name="s309" formatted="false">Export complete</string>
+    <string name="export_saved_to">Exported to %1$s</string>
     <string name="s310" formatted="false">Server directory does not exist</string>
     <string name="s311" formatted="false">Directory created: %1$s</string>
     <string name="s312" formatted="false">Failed to create directory (may already exist)</string>
@@ -134,7 +135,7 @@
     <string name="s314" formatted="false">Failed to start keep-alive service: %1$s</string>
     <string name="s318" formatted="false">Online</string>
     <string name="s324" formatted="false">Backup &amp; Restore</string>
-    <string name="s327" formatted="false">save-all sent</string>
+    <string name="s327">%1$s sent</string>
     <string name="s328" formatted="false">Save</string>
     <string name="s329" formatted="false">Created: %1$s</string>
     <string name="s330" formatted="false">Creation failed</string>
@@ -155,8 +156,8 @@
     <string name="s356" formatted="false">Downloading and extracting Termux runtime environment, please wait…</string>
     <string name="s357" formatted="false">One-click Install Dependencies</string>
     <string name="s358" formatted="false">View Logs</string>
-    <string name="s359" formatted="false">Downloading JDK / wget / frp via apt</string>
-    <string name="s360" formatted="false">Install openjdk / wget / frp and other dependencies via apt</string>
+    <string name="s359" formatted="false">Downloading JDK / fonts / frp via apt</string>
+    <string name="s360" formatted="false">Install openjdk / fonts / frp and other dependencies via apt</string>
     <string name="s361" formatted="false">Completed</string>
     <string name="s362" formatted="false">In Progress</string>
     <string name="s363" formatted="false">Pending</string>
@@ -204,7 +205,7 @@
     <string name="s414" formatted="false">Return to the \"Overview\" page, tap \"Delete Termux Runtime Environment\"</string>
     <string name="s415" formatted="false">Wait for re-initialization, download speed will improve significantly</string>
     <string name="s416" formatted="false">Solution 2: Switch dependency package download source (apt mirror)</string>
-    <string name="s417" formatted="false">Dependency packages such as JDK, wget, and frp are downloaded from the official Termux source, which may be very slow domestically. Switching to a domestic mirror can greatly improve speed.</string>
+    <string name="s417" formatted="false">Dependency packages such as JDK, fonts, and frp are downloaded from the official Termux source, which may be very slow domestically. Switching to a domestic mirror can greatly improve speed.</string>
     <string name="s418" formatted="false">Find the \"Software Source (apt)\" option</string>
     <string name="s419" formatted="false">Select a domestic mirror (recommended: Tsinghua TUNA or Alibaba Cloud)</string>
     <string name="s420" formatted="false">Return to the \"Overview\" page, delete the runtime environment and re-initialize</string>
@@ -460,13 +461,13 @@
     <string name="s738" formatted="false">Mods</string>
     <string name="s739" formatted="false">A well-established large plugin resource platform, the primary release site for most Bukkit/Spigot plugins, with both free and paid resources (all in English; slow access from China)</string>
     <string name="s741" formatted="false">Paper\'s official platform, aimed at Paper / Velocity / Waterfall, with a clean interface and comprehensive filtering</string>
-    <string name="s742" formatted="false">BuiltByBit (formerly MC-Market)</string>
-    <string name="s744" formatted="false">CurseForge Bukkit section</string>
-    <string name="s746" formatted="false">All</string>
-    <string name="s747" formatted="false">Enabled</string>
-    <string name="s748" formatted="false">Disabled</string>
-    <string name="s749" formatted="false">Plugin Management</string>
-    <string name="s750" formatted="false">Current Server Core</string>
+    <string name="s742" formatted="false">A modern open-source resource platform for plugins, mods and datapacks — fast downloads, filterable by game version and mod loader</string>
+    <string name="s744" formatted="false">A marketplace for commercial paid plugins, also offering free resources and complete server configuration packages</string>
+    <string name="s746" formatted="false">A long-established resource site with slightly fewer plugins than SpigotMC Resources</string>
+    <string name="s747" formatted="false">All</string>
+    <string name="s748" formatted="false">Enabled</string>
+    <string name="s749" formatted="false">Disabled</string>
+    <string name="s750" formatted="false">Plugin Management</string>
     <string name="s751" formatted="false">Current Server Core</string>
     <string name="s752" formatted="false">Plugin list refreshed</string>
     <string name="s753" formatted="false">Please select a server core first</string>
@@ -708,7 +709,7 @@
     <string name="s1007" formatted="false">Download Source Settings</string>
     <string name="s1009" formatted="false">Termux Download Source</string>
     <string name="s1010" formatted="false">APT Software Source</string>
-    <string name="s1011" formatted="false">Affects download speed of apt-installed dependencies (JDK/wget/frp/proot)</string>
+    <string name="s1011" formatted="false">Affects download speed of apt-installed dependencies (JDK/fonts/frp/proot)</string>
     <string name="s1012" formatted="false">APT Mirror</string>
     <string name="st_mirror_test" formatted="false">Try Sources in Order</string>
     <string name="st_mirror_test_running" formatted="false">Testing…</string>
@@ -1059,9 +1060,9 @@
     <string name="env_java_running_block">The server is running; stop it before changing the Java runtime</string>
     <string name="env_java_need">%1$s is required to start the server; please install it first</string>
     <string name="env_java_install_btn">Install Java</string>
-    <string name="env_deps_hint">wget / frp / rclone / proot (required by the server and tunneling)</string>
+    <string name="env_deps_hint">font runtime / frp / proot (required by the server and tunneling)</string>
     <string name="env_deps_none_installed">All dependencies are uninstalled</string>
-    <string name="env_deps_uninstall_confirm">This deletes wget, frp, rclone and proot files (Termux and Java are not affected). Reinstall when needed. This cannot be undone.</string>
+    <string name="env_deps_uninstall_confirm">This deletes font runtime, frp and proot files (Termux and Java are not affected). Reinstall when needed. This cannot be undone.</string>
     <string name="env_deps_need_bootstrap">Dependencies can be installed once the Termux environment is ready</string>
     <string name="env_termux_ready">Environment is ready</string>
     <string name="env_termux_missing">Not initialized</string>
@@ -1553,6 +1554,8 @@
     <string name="msg_server_restored">Server restored: %1$s</string>
     <string name="err_server_restore_fail">Server restore failed</string>
     <string name="err_server_restore_fail_msg">Server restore failed: %1$s</string>
+    <string name="err_restore_zip_missing">Backup file no longer exists: %1$s</string>
+    <string name="err_restore_zip_corrupt">Backup file is corrupt or incomplete: %1$s</string>
     <string name="msg_history_exported">Player activity exported</string>
     <string name="msg_file_saved">File saved</string>
     <string name="msg_core_verify_ok">Core validation passed: %1$s (%2$s)</string>
@@ -1664,6 +1667,56 @@
     <string name="crash_copy">Copy</string>
     <string name="crash_share">Share</string>
     <string name="crash_share_full">Share full log</string>
+    <string name="crash_tab_analysis">Analyze</string>
+    <string name="crash_tab_key_log">Key logs</string>
+    <string name="crash_tab_full_log">Full logs</string>
+    <string name="crash_scope_current">This launch · started %1$s · %2$d lines</string>
+    <string name="crash_scope_fallback">Fallback mode: may include lines from previous launches</string>
+    <string name="crash_scope_truncated">Log exceeds the size limit; showing the tail only</string>
+    <string name="crash_scope_legacy">Legacy report: no session log, may contain earlier content</string>
+    <string name="crash_keylog_empty">No exception stack found in this launch\'s log. Switch to Full logs to see the raw output.</string>
+    <string name="crash_keylog_summary">%1$d segments / %2$d lines (this launch only)</string>
+    <string name="crash_keylog_locate">Locate</string>
+    <string name="crash_keylog_reason_exception">Exception</string>
+    <string name="crash_keylog_reason_watchdog">Watchdog</string>
+    <string name="crash_keylog_reason_severe">Fatal</string>
+    <string name="crash_keylog_reason_tail">Context before crash</string>
+    <string name="crash_full_log_empty">This launch produced no log output.</string>
+    <string name="crash_confidence_label">Confidence: %1$s</string>
+    <string name="crash_confidence_high">high</string>
+    <string name="crash_confidence_medium">medium</string>
+    <string name="crash_confidence_low">low</string>
+    <string name="crash_evidence_title">Evidence (tap to jump)</string>
+    <string name="crash_fixes_title">Suggested fixes</string>
+    <string name="crash_fix_risk">Risk: %1$s</string>
+    <string name="crash_fix_effect">Expected effect: %1$s</string>
+    <string name="crash_fix_go">Fix it</string>
+    <string name="crash_alternatives_title">Other possibilities</string>
+    <string name="crash_similar_title">Similar past crashes</string>
+    <string name="crash_similar_item">%1$s · %2$d%% similar · %3$s</string>
+    <string name="crash_knowledge_title">Knowledge sources</string>
+    <string name="crash_knowledge_l1">Built-in</string>
+    <string name="crash_knowledge_l2">History</string>
+    <string name="crash_knowledge_l3">Online</string>
+    <string name="crash_feedback_prompt">Did this fix the problem?</string>
+    <string name="crash_feedback_yes">Solved</string>
+    <string name="crash_feedback_no">Not solved</string>
+    <string name="crash_feedback_thanks">Recorded. Future analysis will be more accurate.</string>
+    <string name="crash_analysis_pending">Structured analysis unavailable; showing rule-based findings.</string>
+    <string name="crash_unknown_cause">No clear cause</string>
+    <string name="crash_online_enriched">Includes online knowledge</string>
+    <string name="crash_unanalyzed">Not analyzed</string>
+    <string name="crash_knowledge_updated">Knowledge base updated</string>
+    <string name="crash_truststore_title">One-tap fix Java keystore</string>
+    <string name="crash_truststore_desc">Reinstalls the current Java and ca-certificates; if package sources are unreachable it rebuilds cacerts from the local certificate bundle. Stay on this screen while it runs.</string>
+    <string name="crash_truststore_running">Repairing, please wait…</string>
+    <string name="crash_truststore_action">One-tap fix</string>
+    <string name="crash_truststore_retry">Retry repair</string>
+    <string name="crash_truststore_again">Repair again</string>
+    <string name="crash_truststore_done">Fixed</string>
+    <string name="crash_log_search_hint">Search log</string>
+    <string name="crash_log_no_match">No match</string>
+    <string name="crash_log_matches">%1$d matches</string>
     <string name="crash_share_hint">If you need help from others, please do not send them this report\'s summary. Send the full log instead so the problem can be diagnosed accurately.</string>
     <string name="player_history_summary">%1$d player(s), %2$s total online time</string>
     <string name="player_search">Search players</string>
@@ -1839,6 +1892,7 @@
     <string name="wl_reset_body">The world is fully exported as a backup first, then its folder is deleted. The server generates a new map the next time it starts.\n\nThis cannot be undone. Please confirm.</string>
     <string name="wl_reset_confirm">Back up and reset</string>
     <string name="wl_kind_bedrock">Bedrock</string>
+    <string name="wl_pending_generation">pending</string>
     <string name="wl_kind_unknown">Unknown</string>
     <string name="wl_in_use_suffix"> · In use</string>
     <string name="wl_in_use">In use</string>
@@ -1847,6 +1901,148 @@
     <string name="wl_reset">Reset</string>
     <string name="wl_import_default_name">Imported world</string>
     <string name="wl_export_prefix">World</string>
+    <string name="sm_entry_addons">Add-ons</string>
+    <string name="sm_entry_addons_desc">Behavior and resource packs: install, enable, force-deliver</string>
+    <string name="sm_entry_datapacks">Datapacks &amp; resource pack</string>
+    <string name="sm_entry_datapacks_desc">Import world datapacks and set the server resource pack URL</string>
+    <string name="ad_empty_title">No add-ons yet</string>
+    <string name="ad_group_count">%1$d of %2$d enabled</string>
+    <string name="eyebrow_content">Content</string>
+    <string name="plx_title">Extensions</string>
+    <string name="plx_datapack_supported">Datapacks supported</string>
+    <string name="jv_datapacks_installed">Installed datapacks (%1$d)</string>
+    <string name="jv_rp_required_desc">Players who decline cannot join the server</string>
+    <string name="wl_state_generated">Generated</string>
+    <string name="wl_state_pending">Pending</string>
+    <string name="wl_state_unreadable">Unreadable</string>
+    <string name="wl_pending_desc">This world has not been generated yet. Starting the server creates it with the settings below; the seed cannot be changed afterwards.</string>
+    <string name="wl_seed_random">Random</string>
+    <string name="wl_clear_seed_action">Switch to a random seed (only affects worlds that are not generated yet)</string>
+    <string name="wl_version_label">Version</string>
+    <string name="wl_difficulty_label">Difficulty</string>
+    <string name="wl_datapacks_title_short">Datapacks</string>
+    <string name="wl_dim_reset_desc">Delete one dimension so the server regenerates it on the next start. A backup is packed first.</string>
+    <string name="wl_dim_nether">Nether</string>
+    <string name="wl_dim_end">The End</string>
+    <string name="wl_reset_dim_body">All blocks, entities and builds in this dimension are lost and regenerated on the next start. A backup is written to the world export folder first.</string>
+    <string name="wl_rename_note">Only the name changes; the save itself is untouched. If this world is active, level-name is updated too.</string>
+    <string name="wl_create_note_java">The world is generated the next time the server starts. The seed and generator cannot be changed afterwards; to use others you have to delete and recreate the world.</string>
+    <string name="wl_create_fail_not_java">This server is not a Java core; use the Bedrock generation options</string>
+    <string name="wl_jv_created">World "%1$s" created; it is generated on the next server start (generation options only apply to new worlds)</string>
+    <string name="wl_gen_large_biomes">Large biomes</string>
+    <string name="wl_gen_amplified">Amplified</string>
+    <string name="wl_gen_single_biome">Single biome</string>
+    <string name="wl_biome_label">Biome</string>
+    <string name="wl_biome_hint">e.g. minecraft:plains</string>
+    <string name="wl_rename">Rename</string>
+    <string name="wl_renamed">Renamed to "%1$s"</string>
+    <string name="wl_rename_failed">Rename failed: missing directory, duplicate name, or the server is running</string>
+    <string name="wl_reset_dim">Reset dimension</string>
+    <string name="wl_dim_reset_ok">Dimension "%1$s" reset; it regenerates on the next server start</string>
+    <string name="wl_dim_reset_failed">Failed to reset the dimension</string>
+    <string name="wl_backup_failed">Backup failed, nothing was deleted</string>
+    <string name="wl_dimensions">Dimensions</string>
+    <string name="wl_jv_meta_note">Seed and generator are read from the world files; changing them on Java only affects new worlds</string>
+    <string name="jv_title">Datapacks &amp; resource pack</string>
+    <string name="jv_desc">Java has no add-ons: server content comes from world-scoped datapacks, and only one external resource-pack URL is supported. All changes need a restart.</string>
+    <string name="jv_stop_first">Server is running: stop it before changing these</string>
+    <string name="jv_load_failed">Failed to read datapacks / resource pack</string>
+    <string name="jv_datapacks_title">Datapacks</string>
+    <string name="jv_datapacks_desc">zips or folders under world/datapacks that contain pack.mcmeta. Load order equals enable order; later packs override earlier ones.</string>
+    <string name="jv_empty">No datapacks yet. Tap "Import datapack" and pick a zip.</string>
+    <string name="jv_enable">Enable datapack</string>
+    <string name="jv_disable">Disable datapack</string>
+    <string name="jv_enabled">"%1$s" enabled; takes effect after a restart</string>
+    <string name="jv_disabled">"%1$s" disabled; takes effect after a restart</string>
+    <string name="jv_write_failed">Failed to write the world datapack config</string>
+    <string name="jv_import">Import datapack</string>
+    <string name="jv_import_ok">Imported datapack "%1$s"; takes effect after a restart</string>
+    <string name="jv_import_failed">Failed to import the datapack</string>
+    <string name="jv_pack_format">format %1$d</string>
+    <string name="jv_no_meta">Missing pack.mcmeta; the server will ignore it</string>
+    <string name="jv_rp_title">Resource pack</string>
+    <string name="jv_rp_desc">A Java server supports one resource pack, and it must be an external URL — the server does not serve files itself.</string>
+    <string name="jv_rp_url">Download URL</string>
+    <string name="jv_rp_sha1">SHA-1</string>
+    <string name="jv_rp_sha1_hint">Optional, 40 hex chars; without it the archive is not verified</string>
+    <string name="jv_rp_id">Pack ID</string>
+    <string name="jv_rp_prompt">Prompt when declined</string>
+    <string name="jv_rp_required">Kick players who decline</string>
+    <string name="jv_rp_pick_file">SHA-1 from file</string>
+    <string name="jv_rp_save">Save resource pack</string>
+    <string name="jv_rp_saved">Resource pack saved; takes effect after a restart</string>
+    <string name="jv_rp_bad_url">The URL must start with http:// or https://</string>
+    <string name="jv_rp_bad_sha1">SHA-1 must be 40 hex characters</string>
+    <string name="jv_rp_sha1_filled">SHA-1 filled from the selected file</string>
+    <string name="jv_rp_sha1_failed">Failed to compute SHA-1</string>
+    <string name="ad_title">Add-ons</string>
+    <string name="ad_desc">Behavior packs run on the server; resource packs are downloaded by clients. Changes only touch the world config and take effect after a restart.</string>
+    <string name="ad_tab_behavior">Behavior</string>
+    <string name="ad_tab_resource">Resource</string>
+    <string name="ad_scope_world">This world</string>
+    <string name="ad_scope_global">Server-wide</string>
+    <string name="ad_scope_dev">Development</string>
+    <string name="ad_scope_system">Built-in</string>
+    <string name="ad_stop_first">Server is running: stop it before changing add-ons</string>
+    <string name="ad_empty">No add-ons to show yet. Put .mcpack / .mcaddon files into the server\'s behavior_packs or resource_packs folder, then come back.</string>
+    <string name="ad_import_archive">Import archive</string>
+    <string name="ad_import_hint">Supports .mcpack / .mcaddon; an .mcaddon is split into its behavior and resource packs</string>
+    <string name="ad_install_archive">Extract</string>
+    <string name="ad_install_ok">Installed: %1$s</string>
+    <string name="ad_install_skipped">\"%1$s\" is already installed; skipped</string>
+    <string name="ad_install_failed">Failed to install the add-on</string>
+    <string name="ad_archives_title">Archives not extracted</string>
+    <string name="ad_archives_desc">These archives sit inside the pack folder and are ignored by BDS (.mcaddon even raises \"Multiple manifests found\"). Tap Extract; the original moves to .minexa/imported-archives.</string>
+    <string name="ad_tpr_title">Require clients to download resource packs</string>
+    <string name="ad_tpr_desc">Writes texturepack-required in server.properties. When on, players must download every resource pack registered for this world before joining.</string>
+    <string name="ad_tpr_on">Required resource packs enabled; %1$d pack(s) will be sent after a restart</string>
+    <string name="ad_tpr_on_empty">Required resource packs enabled, but no resource pack is registered for this world</string>
+    <string name="ad_tpr_off">Required resource packs disabled; takes effect after a restart</string>
+    <string name="ad_tpr_warn_empty">No resource pack is registered for this world, so this switch has no effect right now.</string>
+    <string name="ad_tpr_warn_orphan">Some registered resource packs are missing on disk; players may get stuck downloading packs.</string>
+    <string name="wl_layers_label">Flat layers (bottom to top)</string>
+    <string name="wl_layers_hint">Empty = default: bedrock, dirt*2, grass_block</string>
+    <string name="wl_layers_preview">Will generate: %1$s</string>
+    <string name="wl_layers_invalid">Invalid layer format. Use block names separated by commas, with * for the count, e.g. bedrock, dirt*2, glass</string>
+    <string name="ad_builtin_collapsed">%1$d built-in packs; tap to expand (not recommended: clients would download hundreds of MB)</string>
+    <string name="ad_orphan_title">Registered but missing</string>
+    <string name="ad_orphan_desc">These entries are in the world config but no matching pack exists on disk; BDS silently ignores them.</string>
+    <string name="ad_enable">Enable add-on</string>
+    <string name="ad_disable">Disable add-on</string>
+    <string name="ad_enabled">"%1$s" enabled; takes effect after a restart</string>
+    <string name="ad_disabled">"%1$s" disabled; takes effect after a restart</string>
+    <string name="ad_write_failed">Failed to write the world add-on config</string>
+    <string name="ad_load_failed">Failed to read add-ons</string>
+    <string name="wl_create">New world</string>
+    <string name="wl_create_title">New world</string>
+    <string name="wl_create_name">World name</string>
+    <string name="wl_create_name_hint">e.g. New World</string>
+    <string name="wl_create_seed">World seed</string>
+    <string name="wl_create_seed_hint">Empty = random; numbers or text</string>
+    <string name="wl_create_seed_preview">Text seed will be stored as %1$d</string>
+    <string name="wl_create_note">The world is generated the next time the server starts. The seed cannot be changed afterwards; to use another seed you have to delete and recreate the world.</string>
+    <string name="wl_create_confirm">Create</string>
+    <string name="wl_create_fail_name">World name cannot be empty</string>
+    <string name="wl_create_fail_taken">A world with this name already exists</string>
+    <string name="wl_create_fail_running">Stop the server before creating a world</string>
+    <string name="wl_create_fail_write">Failed to write server.properties</string>
+    <string name="wl_seed_unset">Not set (random)</string>
+    <string name="wl_gen_chosen">Selected: %1$s</string>
+    <string name="wl_create_fail_leveldat">Could not write the world file, so the world was not created. The generator type can only live in that file — pretending it succeeded would give you a normal world instead</string>
+    <string name="wl_create_fail_biome">Invalid biome id. Use a form like `minecraft:plains` (the `minecraft:` prefix is optional); display names are not accepted</string>
+    <string name="wl_create_fail_unknown_block">Unknown block(s) in the flat layers: %1$s. The server treats those layers as air, so the world would generate with missing layers — not created.</string>
+    <string name="wl_create_fail_layer">Invalid block id in the flat layers. Use a form like `minecraft:grass_block`, with a count of 1–512 per layer</string>
+    <string name="wl_create_fail_not_bedrock">This server is not a Bedrock core; only normal generation is available</string>
+    <string name="wl_created">World "%1$s" created; it will be generated on the next server start</string>
+    <string name="wl_seed_label">Seed</string>
+    <string name="wl_seed_unknown">Not generated yet</string>
+    <string name="wl_seed_cleared">Seed cleared; a new map will use a random seed</string>
+    <string name="wl_seed_clear_failed">Failed to clear the seed: this server type does not support it</string>
+    <string name="wl_gen_label">Generator</string>
+    <string name="wl_gen_normal">Normal</string>
+    <string name="wl_gen_flat">Superflat</string>
+    <string name="wl_gen_void">Void</string>
+    <string name="wl_gen_unknown">Unknown</string>
 
 
     <!-- Terminal screen -->
@@ -1889,6 +2085,7 @@
     <string name="tc_whitelist_off">Whitelist off</string>
     <string name="tc_whitelist_on">Whitelist on</string>
     <string name="tc_save_world">Save world</string>
+    <string name="tc_allow_cheats_off_hint">allow-cheats=false: commands typed by players in-game do nothing at all, not even an error. Enable allow-cheats in the properties page to let players use commands.</string>
     <string name="tc_help">Help</string>
     <string name="tc_stop_server">Stop server</string>
 
@@ -1971,6 +2168,18 @@
     <string name="kax_screen_on_subtitle">Only applies while the main screen is visible; keeps the screen on while the server runs.</string>
     <string name="kax_overlay_title">Status overlay</string>
     <string name="kax_overlay_subtitle">Shows a draggable status dot. Requires the “Display over other apps” permission.</string>
+    <string name="kax_diag_title">System restriction check</string>
+    <string name="kax_diag_battery">Battery optimization</string>
+    <string name="kax_diag_bucket">Standby group</string>
+    <string name="kax_diag_alarm">Exact alarms</string>
+    <string name="kax_diag_ok">OK</string>
+    <string name="kax_diag_warn">Blocked</string>
+    <string name="kax_diag_unknown">Unknown</string>
+    <string name="kax_diag_hint">Any blocked item can let the system kill the foreground service after the screen turns off. If keep-alive only lasted some ten minutes, use the two buttons above to allow battery and autostart first.</string>
+    <string name="kax_bucket_active">Active</string>
+    <string name="kax_bucket_normal">Normal</string>
+    <string name="kax_bucket_rare">Rare</string>
+    <string name="kax_bucket_restricted">Restricted</string>
     <string name="nwx_platform_openfrp">OpenFrp</string>
     <string name="nwx_platform_chmlfrp">ChmlFrp</string>
     <string name="nwx_platform_starry">StarryFrp</string>
@@ -2015,9 +2224,27 @@
     <string name="mirror_ustc">USTC mirror</string>
     <string name="mirror_nju">Nanjing University mirror</string>
     <string name="mirror_official">Tsinghua mirror (legacy)</string>
+    <string name="mirror_huawei">Huawei Cloud mirror</string>
+    <string name="mirror_hust">HUST mirror</string>
+    <string name="mirror_bfsu">BFSU mirror</string>
+    <string name="mirror_zju">ZJU mirror</string>
+
+    <string name="mirror_speed_title">Mirror speed test</string>
+    <string name="mirror_speed_desc">Tests the latency of every download source. Tap one to switch; lower is faster.</string>
+    <string name="mirror_speed_github">GitHub mirrors</string>
+    <string name="mirror_speed_apt">APT sources</string>
+    <string name="mirror_speed_retest">Test again</string>
+    <string name="mirror_speed_testing">Testing…</string>
+    <string name="mirror_speed_close">Close</string>
+    <string name="mirror_speed_fail">Unavailable</string>
+    <string name="mirror_speed_fastest">Fastest</string>
+    <string name="mirror_speed_ms">%1$d ms</string>
+    <string name="mirror_speed_selected">In use</string>
+
+    <string name="setup_start_hint">First run needs the Termux runtime (~50 MB). Tap the button below to download and extract it.</string>
+    <string name="setup_start_init">Start setup</string>
     <string name="step_jdk">JDK 17 runtime</string>
-    <string name="step_wget">Wget download tool</string>
-    <string name="step_rclone">Rclone remote mount</string>
+    <string name="step_fonts">Font runtime</string>
     <string name="step_proot">PRoot compatibility layer</string>
 
     <!-- ── EasyTier mesh networking ───────────────────────────── -->
@@ -2394,4 +2621,34 @@
     <string name="prop_opt_snappy">Snappy</string>
     <string name="manual_entry_desc">User manual</string>
 
+    <!-- Appearance & theme packs -->
+    <string name="theme_appearance">Appearance</string>
+    <string name="theme_settings_entry">Theme</string>
+    <string name="theme_title">Themes</string>
+    <string name="theme_intro">A theme pack (.mctheme) can replace the full-screen background, status-card art, start bar and palette. Applying takes effect immediately.</string>
+    <string name="theme_glass_title">Frosted glass</string>
+    <string name="theme_glass_desc">Cards, the bottom navigation and environment-page buttons use a translucent frosted look. Turn it off for solid fills and lower power use on older devices.</string>
+    <string name="theme_glass_follow">Follow theme</string>
+    <string name="theme_glass_following_on">Following theme: a theme pack is active, glass is on by default</string>
+    <string name="theme_glass_following_off">Following theme: no theme pack, glass is off by default</string>
+    <string name="theme_import">Import theme pack (.mctheme)</string>
+    <string name="theme_importing">Importing…</string>
+    <string name="theme_import_done">Imported “%1$s”</string>
+    <string name="theme_import_failed">Import failed: %1$s</string>
+    <string name="theme_apply">Apply</string>
+    <string name="theme_in_use">In use</string>
+    <string name="theme_export">Export</string>
+    <string name="theme_export_done">Theme pack exported</string>
+    <string name="theme_export_failed">Export failed: %1$s</string>
+    <string name="theme_delete">Delete</string>
+    <string name="theme_delete_title">Delete theme</string>
+    <string name="theme_delete_message">“%1$s” cannot be restored after deletion. Continue?</string>
+    <string name="theme_delete_failed">Delete failed: %1$s</string>
+    <string name="theme_confirm_delete">Delete</string>
+    <string name="theme_builtin">Built-in</string>
+    <string name="theme_broken">Broken</string>
+    <string name="theme_empty_hint">No imported themes yet. A theme pack is a single .mctheme file — just pick it.</string>
+
+    <string name="theme_default">Default colors</string>
+    <string name="theme_default_desc">No theme pack — back to the app built-in palette.</string>
 </resources>

@@ -39,7 +39,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.derivedStateOf
@@ -73,6 +72,9 @@ import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 日志页：只读可视化反馈（不是交互入口）。
@@ -143,11 +145,11 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
     }
 
     Column(modifier = Modifier.fillMaxSize()) {
-        // 与其它子页面统一的返回栏度量：左侧 8dp 承接 40dp 返回键，右侧 16dp 与卡片对齐
+        // 与其它子页面统一的顶栏度量：左侧 8dp 承接 40dp 返回键，右侧 16dp 与卡片对齐。
+        // 标题文字已下线（2026-11-13），只留返回键与设置齿轮；无底色、无分隔线。
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(Card)
                 .padding(start = 8.dp, end = McSpacing.Page, top = 6.dp, bottom = 6.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -159,10 +161,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                     modifier = Modifier.size(McIcon.Item)
                 )
             }
-            Column(modifier = Modifier.weight(1f)) {
-                Text("LOG STREAM", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 0.6.sp)
-                Text(stringResource(R.string.s557), color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            }
+            Spacer(Modifier.weight(1f))
             // 日志设置齿轮按钮（汉化开关）
             IconButton(onClick = { showLogSettings = true }, modifier = Modifier.size(McIcon.Touch)) {
                 Icon(
@@ -294,8 +293,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                 onValueChange = { input = it },
                 placeholder = { Text(stringResource(R.string.s562), fontSize = 12.sp) },
                 singleLine = true,
-                modifier = Modifier.weight(1f)
-            )
+                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
             Spacer(Modifier.height(0.dp))
             IconButton(
                 onClick = {
@@ -384,8 +382,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                         placeholder = { Text(stringResource(R.string.termux_hint), fontSize = 12.sp) },
                         singleLine = true,
                         enabled = !termuxBusy,
-                        modifier = Modifier.weight(1f)
-                    )
+                        modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                     Spacer(Modifier.height(0.dp))
                     IconButton(
                         onClick = {
@@ -414,7 +411,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
 
     // 日志设置弹窗（汉化开关）
     if (showLogSettings) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showLogSettings = false },
             title = { Text(stringResource(R.string.ui_log_localize), fontSize = 15.sp, fontWeight = FontWeight.Bold) },
             text = {

@@ -155,6 +155,10 @@ object BdsPackageDownload {
                 "下载到的安装包已损坏（已中止安装，可重新下载）"
             integrityReason == BdsPackageIntegrity.Reason.Truncated ->
                 "下载不完整（已中止安装，可重新下载）"
+            // 全部 404 = 这个版本号在官方 CDN 上根本没有对应文件（清单里只有版本号、
+            // 构建号又猜不中）。逐条罗列十几条“404”只会盖住结论，必须点名。
+            error.attempts.isNotEmpty() && error.attempts.all { it.reason?.contains("404") == true } ->
+                "官方 CDN 上没有该版本的文件（${error.attempts.size} 条直链全部 404），请换一个版本"
             error.attempts.isNotEmpty() ->
                 "所有下载源都不可用：${error.attempts.joinToString("；") { "${it.label} ${it.reason ?: "失败"}" }}"
             else -> "下载失败：${error.message}"

@@ -20,6 +20,10 @@ import androidx.compose.ui.unit.dp
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McSpacing
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.theme.McShape
+import com.mineserve.mobile.ui.components.AppDialog
 
 @Composable
 fun TextFileEditorScreen(vm: McViewModel, file: McViewModel.TextEditorFile, onBack: () -> Unit) {
@@ -37,10 +41,8 @@ fun TextFileEditorScreen(vm: McViewModel, file: McViewModel.TextEditorFile, onBa
             IconButton(onClick = onBack, modifier = Modifier.size(McIcon.Touch)) {
                 Icon(Icons.AutoMirrored.Outlined.ArrowBack, stringResource(R.string.s404), modifier = Modifier.size(McIcon.Item))
             }
-            Column(Modifier.weight(1f)) {
-                Text(file.name, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(file.path, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            // 标题文字（文件名 / 路径）已下线，只留右侧三个动作按钮
+            Spacer(Modifier.weight(1f))
             IconButton(onClick = { vm.openTextFile(java.io.File(file.path)) }, modifier = Modifier.size(McIcon.Touch)) {
                 Icon(Icons.Outlined.Refresh, stringResource(R.string.tfe_refresh), modifier = Modifier.size(McIcon.Item))
             }
@@ -57,7 +59,7 @@ fun TextFileEditorScreen(vm: McViewModel, file: McViewModel.TextEditorFile, onBa
                 Icon(Icons.Outlined.Save, stringResource(R.string.tfe_save), modifier = Modifier.size(McIcon.Item))
             }
         }
-        OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxSize().padding(12.dp), textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace), minLines = 20)
+        OutlinedTextField(value = text, onValueChange = { text = it }, modifier = Modifier.fillMaxSize().padding(12.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row), textStyle = LocalTextStyle.current.copy(fontFamily = FontFamily.Monospace), minLines = 20)
     }
-    if (confirmRunningSave) AlertDialog(onDismissRequest = { confirmRunningSave = false }, title = { Text(stringResource(R.string.sm_running)) }, text = { Text(stringResource(R.string.tfe_save_running)) }, confirmButton = { TextButton(onClick = { confirmRunningSave = false; vm.saveTextFile(file.path, text) }) { Text(stringResource(R.string.tfe_save)) } }, dismissButton = { TextButton(onClick = { confirmRunningSave = false }) { Text(stringResource(R.string.props_cancel)) } })
+    if (confirmRunningSave) AppDialog(onDismissRequest = { confirmRunningSave = false }, title = { Text(stringResource(R.string.sm_running)) }, text = { Text(stringResource(R.string.tfe_save_running)) }, confirmButton = { TextButton(onClick = { confirmRunningSave = false; vm.saveTextFile(file.path, text) }) { Text(stringResource(R.string.tfe_save)) } }, dismissButton = { TextButton(onClick = { confirmRunningSave = false }) { Text(stringResource(R.string.props_cancel)) } })
 }

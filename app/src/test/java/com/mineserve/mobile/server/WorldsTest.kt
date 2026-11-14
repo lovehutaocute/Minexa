@@ -489,4 +489,42 @@ class WorldsTest {
         assertEquals("1.0 MB", Worlds.formatSize(1024L * 1024))
         assertEquals("1.00 GB", Worlds.formatSize(1024L * 1024 * 1024))
     }
+
+    // ── 世界根目录（BDS 回归） ──────────────────────────────────
+
+    /**
+     * BDS 的世界在 `<服务端目录>/worlds/<level-name>`。
+     *
+     * 之前的判据只认 PowerNukkitX（探 jar），BDS 目录里没有 jar 也没有 pnx.yml，
+     * 于是被判成「非基岩」，世界根取成服务端根目录 —— BDS 的世界列表永远是空的。
+     */
+    @Test
+    fun `基岩布局的世界根在 worlds 子目录`() {
+        val srv = tmp.newFolder("bds")
+        File(srv, "bedrock_server").writeText("elf")
+        File(srv, "worlds/Bedrock level/db").mkdirs()
+
+        assertEquals(File(srv, "worlds"), Worlds.worldsRoot(srv, true))
+        assertEquals(srv, Worlds.worldsRoot(srv, false))
+
+        // 目录形态兜底：有 worlds/ 且根级没有世界标识
+        assertTrue(Worlds.looksLikeWorldsContainer(srv))
+        val listed = Worlds.list(File(srv, "worlds"), "Bedrock level")
+        assertEquals(listOf("Bedrock level"), listed.map { it.name })
+    }
+
+    @Test
+    fun `Java 服务端即使有 worlds 目录也不当基岩布局`() {
+        val srv = tmp.newFolder("java")
+        val worldDir = File(srv, "world").apply { mkdirs() }
+        File(worldDir, "level.dat").writeText("nbt")
+        File(srv, "worlds").mkdirs()
+        assertFalse(Worlds.looksLikeWorldsContainer(srv))
+    }
+
+    @Test
+    fun `没有 worlds 目录时不是基岩布局`() {
+        val srv = tmp.newFolder("plain")
+        assertFalse(Worlds.looksLikeWorldsContainer(srv))
+    }
 }

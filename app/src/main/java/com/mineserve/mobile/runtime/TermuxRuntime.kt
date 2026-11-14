@@ -24,6 +24,7 @@ import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.ServerStorage
 import com.mineserve.mobile.data.StepState
 import com.mineserve.mobile.data.StepStatus
+import com.mineserve.mobile.server.SessionLogReader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.SharedFlow
@@ -187,7 +188,10 @@ class TermuxRuntime(context: Context) {
         val prefix = installer.rootDir
         val rootfs = containerRootfs(profile)
         if (!rootfs.isDirectory) return false
-        if (!profile.readyMarker(prefix).isFile) return false
+        // 版本级标记优先；发行版级标记是兼容老安装的兜底（老版本 APK 只写它）。
+        // 两者都要求容器内实测 java / libjvm 存在，所以兜底不会把「装了别的版本」
+        // 误判成「这个版本已就绪」—— 同一 rootfs 装多个 JDK 是靠文件判定区分的。
+        if (!profile.versionMarker(prefix).isFile && !profile.readyMarker(prefix).isFile) return false
         val hasJava = profile.guestJavaBinaryCandidates
             .map { File(rootfs, it.removePrefix("/")) }
             .any { it.isFile }
@@ -298,6 +302,35 @@ class TermuxRuntime(context: Context) {
         "[repair]", "[jvm]", "[proot]", "错误", "失败", "警告", "异常"
     )
 
+    /**
+     * `mineserve.log` 的滚动上限：超过就留一代 `.1`（只保留一代）。
+     *
+     * 这个文件只增不减（[clearAppLog] 是手动触发的），而崩溃报告恰恰是在内存最紧张的
+     * 时刻去读它。长期使用后可以到几十 MB，滚动把上限钉死在 4MB。
+     */
+    private val APP_LOG_MAX_BYTES = 4L * 1024 * 1024
+
+    /** 常驻的追加写入器：避免每行一次 open/write/close */
+    private var appLogWriter: java.io.Writer? = null
+    private var appLogBytes = 0L
+
+    private fun openAppLogWriter(): java.io.Writer? = runCatching {
+        val file = appLogFile
+        file.parentFile?.mkdirs()
+        rotateAppLogIfNeeded(file)
+        appLogBytes = file.length()
+        // 追加模式必须走 FileOutputStream(file, append=true)：File.bufferedWriter() 没有 append 参数
+        java.io.FileOutputStream(file, true).bufferedWriter(Charsets.UTF_8)
+    }.getOrNull()
+
+    private fun rotateAppLogIfNeeded(file: File) {
+        if (file.length() <= APP_LOG_MAX_BYTES) return
+        val prev = File(file.parentFile, file.name + ".1")
+        runCatching { prev.delete() }
+        // 改名失败（句柄被占/FUSE 抖动）就继续往原文件追加，不影响功能
+        runCatching { file.renameTo(prev) }
+    }
+
     private fun persistAppLog(line: String) {
         // 只留诊断价值高的行；其余（例如进度百分比）不入队
         if (APP_LOG_KEEP_MARKERS.none { line.contains(it) }) return
@@ -321,12 +354,24 @@ class TermuxRuntime(context: Context) {
                     }
                     try {
                         if (line != null) {
-                            val file = appLogFile
-                            file.parentFile?.mkdirs()
-                            // 单条即 flush：崩溃场景下缓冲区里的内容很容易随进程消失
-                            file.appendText(line + "\n")
+                            val writer = appLogWriter ?: openAppLogWriter()?.also { appLogWriter = it }
+                            if (writer != null) {
+                                writer.write(line)
+                                writer.write("\n")
+                                // 单条即 flush：崩溃场景下缓冲区里的内容很容易随进程消失
+                                writer.flush()
+                                appLogBytes += line.length + 1L
+                                if (appLogBytes > APP_LOG_MAX_BYTES) {
+                                    // 到达上限就滚一代；关掉后下次取用时重新打开
+                                    runCatching { writer.close() }
+                                    appLogWriter = null
+                                }
+                            }
                         }
                     } catch (e: Exception) {
+                        // 写失败（存储满/句柄失效）就丢弃当前写入器，下次重开
+                        runCatching { appLogWriter?.close() }
+                        appLogWriter = null
                         Log.w(TAG, "写入 mineserve.log 失败: ${e.message}")
                     }
                 }
@@ -341,8 +386,21 @@ class TermuxRuntime(context: Context) {
     fun readAppLogTail(maxLines: Int = 400): List<String> {
         val file = appLogFile
         if (!file.isFile) return emptyList()
+        // 只回读尾部一段而不是整个文件：崩溃报告是在内存最紧张的时刻调用它，
+        // 而文件可能有几 MB。256KB 足够覆盖 400 行诊断日志。
         return runCatching {
-            file.useLines { lines -> lines.toList().takeLast(maxLines) }
+            val window = 256L * 1024
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val size = raf.length()
+                val from = (size - window).coerceAtLeast(0L)
+                val buf = ByteArray((size - from).toInt())
+                raf.seek(from)
+                raf.readFully(buf)
+                val text = String(buf, Charsets.UTF_8)
+                val lines = text.split('\n')
+                // 从文件中间开始读时首行可能是半截，丢掉
+                (if (from > 0L) lines.drop(1) else lines).takeLast(maxLines)
+            }
         }.getOrDefault(emptyList())
     }
 
@@ -454,20 +512,23 @@ class TermuxRuntime(context: Context) {
         return File(serverDir, MC_CONSOLE_LOG_NAME).takeIf { it.isFile && it.length() > 0L }
     }
 
-    /** 读取最近一次服务端运行从启动到退出产生的完整日志。 */
+    /**
+     * 读取最近一次服务端运行从启动到退出产生的完整日志。
+     *
+     * 一律走 [LaunchSession] 的偏移切片：这是「本次启动」的唯一真相。
+     * 没有会话（例如 App 重启后、旧版本残留）时回退旧的 lastMcLog 偏移逻辑，
+     * 但同样只从记录的起点读，不会从头扫文件。
+     */
     suspend fun readLastMcRunLog(maxBytes: Long = 4L * 1024L * 1024L): String = withContext(Dispatchers.IO) {
+        currentSession?.let { session ->
+            val frozen = session.frozenEndOffset
+            val end = frozen ?: session.logFile.length()
+            return@withContext SessionLogReader.read(session.logFile, session.startOffset, end, maxBytes)
+                ?.text.orEmpty()
+        }
         val file = lastMcLogFile ?: return@withContext ""
         if (!file.isFile) return@withContext ""
-        val start = lastMcLogStartOffset.coerceAtMost(file.length())
-        val end = file.length()
-        val readStart = if (end - start > maxBytes) end - maxBytes else start
-        java.io.RandomAccessFile(file, "r").use { raf ->
-            raf.seek(readStart)
-            val length = (end - readStart).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
-            val bytes = ByteArray(length)
-            raf.readFully(bytes)
-            String(bytes, Charsets.UTF_8)
-        }
+        SessionLogReader.read(file, lastMcLogStartOffset, file.length(), maxBytes)?.text.orEmpty()
     }
 
     /**
@@ -487,8 +548,52 @@ class TermuxRuntime(context: Context) {
         file.createNewFile()
         lastMcLogFile = file
         lastMcLogStartOffset = file.length()
+        // 开启新的日志会话：偏移即「本次启动」的硬边界。
+        // 崩溃弹窗、崩溃报告、MCP 查询全部只读这个区间，历史启动内容一律排除。
+        currentSession = LaunchSession(
+            id = "${System.currentTimeMillis()}-${serverDir.name}",
+            dirName = serverDir.name,
+            logFile = file,
+            startOffset = lastMcLogStartOffset,
+            startedAt = System.currentTimeMillis()
+        )
         return file
     }
+
+    /**
+     * 当前日志会话。
+     *
+     * 只在 [prepareMcLogFile]（每次真正 spawn 服务端前）创建；进程退出后保留，
+     * 供崩溃弹窗与报告读取冻结切片。
+     */
+    @Volatile
+    private var currentSession: LaunchSession? = null
+
+    fun currentLaunchSession(): LaunchSession? = currentSession
+
+    /** 冻结当前会话终点（进程退出时调用；幂等）。返回被冻结的会话。 */
+    fun freezeLaunchSession(): LaunchSession? {
+        val session = currentSession ?: return null
+        val length = runCatching { session.logFile.length() }.getOrDefault(session.startOffset)
+        session.freeze(length)
+        return session
+    }
+
+    /**
+     * 读取会话日志切片。**这是唯一允许的日志读取入口**（崩溃弹窗/报告/MCP 共用）。
+     *
+     * @param maxBytes 超出时保留尾部；崩溃现场永远在尾部。
+     * @return 切片文本；捕获文件不可用时返回空串（调用方决定是否回退 latest.log）
+     */
+    fun readSessionLog(session: LaunchSession, maxBytes: Long = SessionLogReader.DEFAULT_MAX_BYTES): String {
+        val end = session.effectiveEnd(runCatching { session.logFile.length() }.getOrDefault(0L))
+        return SessionLogReader.read(session.logFile, session.startOffset, end, maxBytes)?.text.orEmpty()
+    }
+
+    suspend fun readCurrentSessionLog(maxBytes: Long = SessionLogReader.DEFAULT_MAX_BYTES): String =
+        withContext(Dispatchers.IO) {
+            currentSession?.let { readSessionLog(it, maxBytes) }.orEmpty()
+        }
 
     /**
      * 多核心基础目录 —— **新版统一存储目录**（`/storage/emulated/0/Minexa/Minecraftserver/`）。
@@ -760,8 +865,12 @@ class TermuxRuntime(context: Context) {
         var removed = false
         val rootfs = profile.rootfsDir(installer.rootDir)
         if (rootfs.exists()) removed = rootfs.deleteRecursively() || removed
-        // 标记文件的存在与否不影响「删掉了没有」的语义，单独清掉即可
+        // 标记文件的存在与否不影响「删掉了没有」的语义，单独清掉即可。
+        // 版本级标记也要清：容器没了，留着它们会让诊断页显示「标记存在但 rootfs 缺失」。
         profile.readyMarker(installer.rootDir).delete()
+        distro.availableJavaVersions.forEach { v ->
+            ProotContainerProfile(distro, v).versionMarker(installer.rootDir).delete()
+        }
         // PRoot glue 文件（PROOT_TMP_DIR）也一并回收
         profile.prootTmpDir(installer.rootDir).deleteRecursively()
         // 该发行版的宿主 resolv.conf 与 rootfs 同生共死，否则会留下残骸
@@ -1020,12 +1129,18 @@ class TermuxRuntime(context: Context) {
         }
     }
 
-    /** 直接删除依赖文件（wget/frpc/rclone/proot）。返回删除的组件数。 */
-    fun deleteDependencies(): Int {        val prefix = installer.rootDir
+    /**
+     * 直接删除依赖文件（字体运行库 / frpc / proot）。返回删除的组件数。
+     *
+     * 字体这一项删的是 `fontconfig` 的配置文件与 `ttf-dejavu` 的字体本体 ——
+     * Forge/NeoForge 启动时要靠它渲染控制台与地图图标，缺了会崩在 AWT 初始化。
+     */
+    fun deleteDependencies(): Int {
+        val prefix = installer.rootDir
         val targets = listOf(
-            listOf("bin/wget", "usr/bin/wget", "data/data/com.termux/files/usr/bin/wget"),
+            listOf("etc/fonts/fonts.conf"),
+            listOf("share/fonts/TTF/DejaVuSans.ttf", "usr/share/fonts/TTF/DejaVuSans.ttf"),
             listOf("bin/frpc", "usr/bin/frpc", "data/data/com.termux/files/usr/bin/frpc"),
-            listOf("bin/rclone", "usr/bin/rclone", "data/data/com.termux/files/usr/bin/rclone"),
             listOf("bin/proot", "usr/bin/proot")
         )
         var removed = 0
@@ -1049,11 +1164,24 @@ class TermuxRuntime(context: Context) {
         fun hasExecutable(vararg paths: String) = paths.any { path ->
             File(prefix, path).let { it.isFile && it.canExecute() }
         }
+        // 字体本体：ttf-dejavu 的落点随 deb 解包方式而变（直接解开 → share/fonts，
+        // 走 compat 符号链接 → usr/share/fonts），三者都查。只要求「目录里有 ttf」，
+        // 不钉死文件名 —— 上游换一批字体文件时不该让用户看到「未安装」。
+        fun hasFontFile(): Boolean = listOf(
+            "share/fonts",
+            "usr/share/fonts",
+            "data/data/com.termux/files/usr/share/fonts"
+        ).any { rel ->
+            runCatching {
+                File(prefix, rel).walkTopDown()
+                    .any { it.isFile && it.extension.equals("ttf", ignoreCase = true) }
+            }.getOrDefault(false)
+        }
         return when (step) {
             InstallStep.Jdk -> isJavaInstalled(JavaVersion.Java17)
-            InstallStep.Wget -> hasExecutable("bin/wget", "usr/bin/wget", "data/data/com.termux/files/usr/bin/wget") &&
-                File(prefix, "etc/fonts/fonts.conf").isFile
-            InstallStep.Rclone -> hasExecutable("bin/rclone", "usr/bin/rclone", "data/data/com.termux/files/usr/bin/rclone")
+            // 两步都要：只有 fonts.conf 没有字体文件时，fontconfig 会报
+            // "no fonts available"，Forge 一样崩在 AWT 初始化。
+            InstallStep.Fonts -> File(prefix, "etc/fonts/fonts.conf").isFile && hasFontFile()
             InstallStep.Proot -> hasExecutable("bin/proot", "usr/bin/proot")
         }
     }
@@ -1232,6 +1360,16 @@ class TermuxRuntime(context: Context) {
                 onLog = { emitLog(it) }
             )
         }
+        // 服务端运行中不接受安装（与 deleteJava / uninstallProotJava 的守卫对齐）。
+        //
+        // 两个理由：① apt 会在**同一个** rootfs 上跑，本文件另一处注释已承认
+        // 「apt 在服务端运行时可能把 JVM 弄崩」；② 探针失败会走 installUbuntuBaseRootfs，
+        // 那里是 rootfs.deleteRecursively() —— 正在被 JVM mmap 的运行时被整个删掉，
+        // 服务端当场崩，还可能停在写 region 中途。
+        if (isMcRunning()) {
+            emitLog("[java] 服务端正在运行，请先停止服务器再安装 ${version.displayName}")
+            return@withContext false
+        }
         // PRoot 来源：先确认「这个发行版确实提供这个版本」，再进容器装。
         //
         // 这一步不能省。用户完全可能把发行版设成 focal 而版本选成 Java 21 ——
@@ -1313,7 +1451,10 @@ class TermuxRuntime(context: Context) {
         profile: ProotContainerProfile,
         onProgress: ((Int) -> Unit)? = null
     ): Boolean {
-        val marker = profile.readyMarker(installer.rootDir)
+        // 只清**本版本**的标记：发行版级标记是共用的，删它会把同容器里已装好的
+        // 其它 Java 版本一起判成未安装（例如 focal 装了 8，再装 17 失败 → 8 消失）
+        val marker = profile.versionMarker(installer.rootDir)
+        val legacyMarker = profile.readyMarker(installer.rootDir)
         if (isContainerJavaReady(profile)) {
             emitLog("[proot] ${profile.displayName} 已安装，跳过重复下载")
             onProgress?.invoke(100)
@@ -1356,6 +1497,11 @@ class TermuxRuntime(context: Context) {
             }
             marker.parentFile?.mkdirs()
             marker.writeText("${profile.distro.codename}-arm64-${profile.aptPackage}\n")
+            // 发行版级标记继续写：老版本 APK（以及容器页的旧判定）仍然读它
+            runCatching {
+                legacyMarker.parentFile?.mkdirs()
+                legacyMarker.writeText("${profile.distro.codename}-arm64-${profile.aptPackage}\n")
+            }
             onProgress?.invoke(100)
             emitLog("[proot] ${profile.displayName} 安装并校验完成")
             true
@@ -2064,7 +2210,18 @@ class TermuxRuntime(context: Context) {
             }
         }
         File(installer.rootDir, "bin/java").delete()
-        versionsToRestore.sortedBy { it.ordinal }.all { installJava(it) }
+        // 不能用 `all { installJava(it) }`：它在第一个 false 处短路。Java 8 排在最前
+        // （ordinal 最小），而它的容器重建要下 20MB+ rootfs 再跑 apt，是最容易失败的一步 ——
+        // 一旦失败，后面 11/17/21 的目录已经被上面删掉了却永远不会重装，
+        // 用户点「一键修复」反而把三个版本全丢了。这里逐个装、失败继续、最后汇总。
+        var allOk = true
+        versionsToRestore.sortedBy { it.ordinal }.forEach { version ->
+            if (!installJava(version)) {
+                allOk = false
+                emitLog("[java] ${version.displayName} 重装失败，其余版本继续")
+            }
+        }
+        allOk
     }
 
     private fun javaCandidates(version: JavaVersion): List<String> {
@@ -2315,8 +2472,15 @@ class TermuxRuntime(context: Context) {
     /** 设备内存页大小（16KB 页设备无法执行 4KB 页对齐的旧 ELF） */
     fun pageSize(): String = try {
         val pb = ProcessBuilder("/system/bin/getconf", "PAGE_SIZE").redirectErrorStream(true).start()
-        val out = pb.inputStream.bufferedReader().use { it.readText() }.trim()
-        if (pb.waitFor(2, TimeUnit.SECONDS)) out else "未知"
+        // 必须先等退出再读输出：`readText()` 要读到 EOF 才返回，子进程不退出时
+        // 这里已经无限阻塞，2 秒超时根本轮不到（而本方法恰恰会在 apt 失败诊断路径上被调用）。
+        val exited = pb.waitFor(2, TimeUnit.SECONDS)
+        if (!exited) {
+            pb.destroyForcibly()
+            "未知"
+        } else {
+            pb.inputStream.bufferedReader().use { it.readText() }.trim().ifEmpty { "未知" }
+        }
     } catch (_: Exception) { "未知" }
 
     /**
@@ -2468,10 +2632,19 @@ class TermuxRuntime(context: Context) {
         provisionBundledLibraries()
         // apt-get 偶发 Permission denied（126）：先强制自愈并校验 bin/usr/bin 下的可执行位与 shebang 解释器
         if (!ensureAptWorking()) return false
-        var update = execOnce(
-            "apt-get", "-o", "DPkg::Lock::Timeout=60", "update",
-            "--allow-insecure-repositories", "-y"
-        )
+        // 索引新鲜度：装 JDK、装字体、装 proot 是三次独立的用户操作，
+        // 每次都会把 Packages 索引整份重下一遍（清华源 5–10MB，弱网下几十秒）。
+        // 12 小时内且 apt 源没被改过时索引依然有效，没必要重下。
+        val skippedUpdate = aptIndexFresh()
+        var update = if (skippedUpdate) {
+            emitLog("[apt] 软件包索引仍然有效（12 小时内且未换源），跳过 apt-get update")
+            0
+        } else {
+            execOnce(
+                "apt-get", "-o", "DPkg::Lock::Timeout=60", "update",
+                "--allow-insecure-repositories", "-y"
+            )
+        }
         if (update != 0) {
             // 自愈后重试（dpkg/软件源操作可能刚改动了命令权限）
             emitLog("[apt] 软件源更新失败，正在自愈后重试...")
@@ -2543,11 +2716,80 @@ class TermuxRuntime(context: Context) {
         val missing = packages.filter {
             execOnce("apt-cache", "show", it) != 0
         }
+        if (missing.isNotEmpty() && skippedUpdate) {
+            // 跳过了 update 却查不到包：说明本地索引是陈旧的（上游删了包、或源换了路径），
+            // 这时才付出一次完整的索引下载。
+            emitLog("[apt] 本地索引里没有 ${missing.joinToString()}，强制刷新索引后重试")
+            update = execOnce(
+                "apt-get", "-o", "DPkg::Lock::Timeout=60", "update",
+                "--allow-insecure-repositories", "-y"
+            )
+            if (update == 0) {
+                writeAptIndexStamp()
+                val retryMissing = packages.filter { execOnce("apt-cache", "show", it) != 0 }
+                if (retryMissing.isEmpty()) return true
+                emitLog("[apt] 软件源索引中找不到：${retryMissing.joinToString()}；未继续安装，请切换软件源后重试")
+                return false
+            }
+        }
+        if (update == 0) writeAptIndexStamp()
         if (missing.isNotEmpty()) {
             emitLog("[apt] 软件源索引中找不到：${missing.joinToString()}；未继续安装，请切换软件源后重试")
             return false
         }
         return true
+    }
+
+    /** apt 索引缓存标记：`<更新时间戳>|<sources 摘要>`。 */
+    private fun aptIndexStampFile(): File =
+        File(installer.rootDir, "var/lib/apt/lists/.minexa-index-stamp")
+
+    /**
+     * 本地 apt 索引是否还值得用。
+     *
+     * 三个条件同时成立才算新鲜：标记文件存在、源配置没变（摘要一致）、
+     * 距上次成功 update 不超过 [APT_INDEX_TTL_MS]。
+     * 源摘要参与判断是必须的：用户在设置里换了软件源之后，旧索引指向的
+     * 还是上一个源的包路径，拿它去 install 会解析出错误的包或直接找不到。
+     */
+    private fun aptIndexFresh(): Boolean {
+        val stamp = aptIndexStampFile()
+        if (!stamp.isFile) return false
+        val parts = runCatching { stamp.readText().trim().split('|') }.getOrNull() ?: return false
+        if (parts.size != 2) return false
+        val updatedAt = parts[0].toLongOrNull() ?: return false
+        if (parts[1] != aptSourcesHash()) return false
+        val age = System.currentTimeMillis() - updatedAt
+        return age in 0..APT_INDEX_TTL_MS
+    }
+
+    /** 成功 update 后落盘标记（失败静默：它只是加速提示，不能反过来让安装失败）。 */
+    private fun writeAptIndexStamp() {
+        runCatching {
+            aptIndexStampFile().apply { parentFile?.mkdirs() }
+                .writeText("${System.currentTimeMillis()}|${aptSourcesHash()}")
+        }
+    }
+
+    /** 当前 apt 源配置的摘要（sources.list 本体 + sources.list.d 下的所有 .list）。 */
+    private fun aptSourcesHash(): String {
+        val sb = StringBuilder()
+        val main = File(installer.rootDir, "etc/apt/sources.list")
+        if (main.isFile) sb.append(runCatching { main.readText() }.getOrDefault(""))
+        val dir = File(installer.rootDir, "etc/apt/sources.list.d")
+        runCatching {
+            dir.listFiles()?.sortedBy { it.name }?.forEach { f ->
+                if (f.isFile) sb.append(f.name).append(':').append(f.readText())
+            }
+        }
+        return try {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            digest.digest(sb.toString().toByteArray()).joinToString("") { b ->
+                "%02x".format(b)
+            }.take(16)
+        } catch (_: Exception) {
+            sb.length.toString()
+        }
     }
 
     /**
@@ -2628,7 +2870,7 @@ class TermuxRuntime(context: Context) {
     /**
      * 启动服务端前的幂等环境修复，只处理缺失或损坏的运行时文件。
      */
-    fun autoRepairRuntime(
+    suspend fun autoRepairRuntime(
         javaVersion: JavaVersion,
         needsFonts: Boolean,
         vendor: JavaVendor = JavaVendor.Termux
@@ -2647,7 +2889,9 @@ class TermuxRuntime(context: Context) {
         // 结果是容器缺字体时报告「已就绪」，或往宿主装一堆容器根本用不到的东西。
         if (isProotGuestRuntime(vendor, javaVersion)) {
             val profile = resolveProotProfile(vendor, javaVersion)
-            val ready = isContainerJavaReady(profile) || runBlocking { installProotJava(profile) }
+            // 直接 await，不要 runBlocking：容器安装最长 900s，runBlocking 会新建独立
+            // Job（不继承调用方取消）并占死一个 IO 线程，用户点「停止」要等它整段跑完
+            val ready = isContainerJavaReady(profile) || installProotJava(profile)
             if (!ready) {
                 emitLog("[repair] ${profile.displayName} 运行环境不可用")
                 return 0
@@ -3084,6 +3328,27 @@ class TermuxRuntime(context: Context) {
         }
     }
 
+    /**
+     * 宿主 Termux JDK 的根证书库（cacerts）是否就绪。
+     *
+     * cacerts 缺失/为空/悬空符号链接（ca-certificates 包被清、JDK 覆盖安装中断等）时，
+     * JVM 能启动但**所有 HTTPS 请求都会握手失败**
+     * （`trustAnchors parameter must be non-empty`），表现为 Forge/Fabric 安装器
+     * 下载 libraries、补装字体/依赖等统统「下载失败」，且补字体库无效。
+     * 2026-11 用户案例：崩溃页误诊为「字体运行库缺失」，实际重装 Java 21 才恢复。
+     *
+     * 存在性用 [File.exists]（跟随符号链接）判断：Termux 的 cacerts 常是软链，
+     * 指向的 `/etc/tls/cacerts.pem` 被 rm 后必须判「不就绪」。
+     */
+    fun cacertsReady(version: JavaVersion): Boolean {
+        if (version == JavaVersion.Java8) return true
+        // Java 8 跑在 PRoot 容器里，证书随容器内 ca-certificates 提供，不在这里判
+        return javaCandidates(version).any { path ->
+            val cacerts = File(File(path), "lib/security/cacerts")
+            cacerts.exists() && cacerts.length() > 0
+        }
+    }
+
     /** 用于 compat 归位：任意一个已知 JDK 完整即可避免移动整个 jvm 目录。 */
     private fun jvmRootHasCompleteJava(jvmRoot: File): Boolean =
         JavaVersion.values().filter { it != JavaVersion.Java8 }.any { version ->
@@ -3097,30 +3362,178 @@ class TermuxRuntime(context: Context) {
      * 启动时校验已安装的 JDK：不完整（如杀后台/覆盖安装后 libjli.so 缺失）时，
      * 仅重装对应版本。未安装的 JDK 不会被隐式安装。
      */
-    fun ensureJvmComplete(version: JavaVersion): Int {
+    suspend fun ensureJvmComplete(version: JavaVersion): Int {
         var repaired = 0
-        if (!isJavaInstalled(version) || isJavaComplete(version)) return 0
+        if (!isJavaInstalled(version)) return 0
 
-        installer.onLog?.invoke("[bootstrap] ${version.displayName} 运行环境不完整，正在修复...")
-        if (version == JavaVersion.Java8) {
-            val repairedJava8 = runBlocking { installProotJava(legacyJava8Profile) }
-            if (repairedJava8) repaired++
-            else installer.onLog?.invoke("[bootstrap] Java 8 Ubuntu ARM64 运行时自动修复失败")
-            return repaired
+        if (!isJavaComplete(version)) {
+            installer.onLog?.invoke("[bootstrap] ${version.displayName} 运行环境不完整，正在修复...")
+            if (version == JavaVersion.Java8) {
+                val repairedJava8 = installProotJava(legacyJava8Profile)
+                if (repairedJava8) repaired++
+                else installer.onLog?.invoke("[bootstrap] Java 8 Ubuntu ARM64 运行时自动修复失败")
+                return repaired
+            }
+            if (!prepareAptPackages(version.packageName, "ca-certificates")) return 0
+            val code = execOnce(
+                "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
+                "--allow-unauthenticated", "-y", version.packageName, "ca-certificates"
+            )
+            if (code == 0 && isJavaComplete(version)) {
+                repaired++
+                installer.onLog?.invoke("[bootstrap] ${version.displayName} 运行环境已修复")
+            } else {
+                installer.onLog?.invoke("[bootstrap] 警告: ${version.displayName} 运行环境修复失败")
+            }
+            fixJavaSymlinks()
         }
-        if (!prepareAptPackages(version.packageName)) return 0
-        val code = execOnce(
-            "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
-            "--allow-unauthenticated", "-y", version.packageName
-        )
-        if (code == 0 && isJavaComplete(version)) {
-            repaired++
-            installer.onLog?.invoke("[bootstrap] ${version.displayName} 运行环境已修复")
-        } else {
-            installer.onLog?.invoke("[bootstrap] 警告: ${version.displayName} 运行环境修复失败")
+
+        // JVM 主体完整 ≠ 运行时可用：cacerts（根证书库）缺失/为空/悬空软链时，
+        // JVM 能启动但所有 HTTPS 全部握手失败（`trustAnchors parameter must be
+        // non-empty`），用户看到的是 Forge/Fabric 安装器、字体库补齐等统统
+        // 「下载失败」且修复无效。这里在启动前主动检测，重装 JDK + ca-certificates。
+        if (!cacertsReady(version)) {
+            installer.onLog?.invoke("[bootstrap] ${version.displayName} 根证书库（cacerts）缺失或为空，HTTPS 下载会全部失败，正在重装修复...")
+            if (prepareAptPackages(version.packageName, "ca-certificates")) {
+                val code = execOnce(
+                    "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
+                    "--allow-unauthenticated", "-y", version.packageName, "ca-certificates"
+                )
+                fixJavaSymlinks(version)
+                if (code == 0 && cacertsReady(version)) {
+                    repaired++
+                    installer.onLog?.invoke("[bootstrap] ${version.displayName} 证书库已修复")
+                } else {
+                    installer.onLog?.invoke("[bootstrap] 警告: ${version.displayName} 证书库修复失败，请在「运行环境」中卸载后重新安装该 Java")
+                }
+            }
         }
-        fixJavaSymlinks()
         return repaired
+    }
+
+    /**
+     * 一键修复 Java 根证书库（cacerts）。
+     *
+     * 与 [ensureJvmComplete] 的区别：那个是启动前的「检测到缺失才修」，本方法由用户
+     * 在崩溃弹窗里显式触发，**无论检测结果如何都会执行**，并返回可展示的结果。
+     *
+     * 修复顺序（前一步失败不影响后一步，最大化成功率）：
+     * 1. `apt-get --reinstall` 重装 JDK + ca-certificates（恢复正常状态）
+     * 2. 仍不就绪 → 用本机已有 PEM 证书包原地重建信任库（不依赖网络）
+     */
+    fun repairTrustStore(
+        version: JavaVersion,
+        vendor: JavaVendor = JavaVendor.Termux
+    ): TrustStoreRepair {
+        val steps = mutableListOf<String>()
+        fun note(message: String) {
+            emitLog("[repair] $message")
+            steps += message
+        }
+
+        if (vendor == JavaVendor.Fcl) {
+            return TrustStoreRepair(
+                ok = false,
+                summary = "Pojav JRE 是整包解压的运行时，证书库不能单独修复；请在「运行环境」重新导入 JRE 包，或改用 Termux JDK。",
+                steps = steps
+            )
+        }
+        if (!isReady()) {
+            return TrustStoreRepair(false, "运行环境还没有初始化完成，请先在「运行环境」里初始化后再修复。", steps)
+        }
+
+        if (version == JavaVersion.Java8) {
+            val profile = legacyJava8Profile
+            if (!isContainerJavaReady(profile)) {
+                return TrustStoreRepair(false, "Java 8 容器尚未安装，请先安装 Java 8 运行时。", steps)
+            }
+            note("重装 ${profile.displayName} 容器内的 ca-certificates")
+            val code = runUbuntu(
+                "export DEBIAN_FRONTEND=noninteractive; " +
+                    "apt-get update -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 && " +
+                    "apt-get install -y --reinstall ca-certificates && " +
+                    "for f in /usr/lib/jvm/*/lib/security/cacerts /opt/java*/lib/security/cacerts; do " +
+                    "test -s \"\$f\" && exit 0; done; exit 1",
+                300_000,
+                profile = profile
+            )
+            return if (code == 0) {
+                TrustStoreRepair(true, "Java 8 容器证书库已恢复。", steps)
+            } else {
+                TrustStoreRepair(false, "容器内证书库修复失败（exit=$code），请检查 apt 源与网络后重试。", steps)
+            }
+        }
+
+        val jvmDirs = javaCandidates(version).filter { File(it).isDirectory }
+        if (jvmDirs.isEmpty()) {
+            return TrustStoreRepair(false, "${version.displayName} 没有安装，请先在「运行环境」里安装。", steps)
+        }
+
+        // ── 第 1 步：重装 JDK + ca-certificates ──
+        if (prepareAptPackages(version.packageName, "ca-certificates")) {
+            note("重装 ${version.packageName} 与 ca-certificates")
+            val code = execOnce(
+                "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
+                "--allow-unauthenticated", "-y", version.packageName, "ca-certificates"
+            )
+            note("apt-get --reinstall 退出码 $code")
+            fixJavaSymlinks(version)
+        } else {
+            note("软件源不可用，跳过重装，改用本机证书包重建")
+        }
+        if (cacertsReady(version)) {
+            return TrustStoreRepair(true, "${version.displayName} 证书库已恢复，可以重新安装/启动核心。", steps)
+        }
+
+        // ── 第 2 步：本地 PEM 重建（不依赖网络）──
+        val pem = readLocalCertificatePem()
+        if (pem == null) {
+            return TrustStoreRepair(
+                false,
+                "重装未恢复证书库，且本机没有可用的证书包（ca-certificates 也丢了）。请连网后在「运行环境」里卸载并重新安装 ${version.displayName}。",
+                steps
+            )
+        }
+        val target = File(jvmDirs.first(), "lib/security/cacerts")
+        val imported = TrustStoreRepairer.rebuild(target, pem)
+        note("从本机证书包重建 cacerts：导入 $imported 张证书")
+        return if (imported > 0 && cacertsReady(version)) {
+            TrustStoreRepair(true, "${version.displayName} 证书库已用本机证书包重建（$imported 张），可以重新安装/启动核心。", steps)
+        } else {
+            TrustStoreRepair(
+                false,
+                "证书库修复失败，请在「运行环境」里卸载后重新安装 ${version.displayName}。",
+                steps
+            )
+        }
+    }
+
+    /**
+     * 本机现存的 PEM 证书包（按可靠性排序）；目录形态（Android 系统 cacerts）逐个文件拼起来。
+     * 读不到返回 null。
+     */
+    private fun readLocalCertificatePem(): String? {
+        val prefix = installer.rootDir
+        val sources = listOf(
+            File(prefix, "etc/tls/cacerts.pem"),
+            File(prefix, "etc/ssl/certs/ca-certificates.crt"),
+            File(prefix, "etc/ssl/cert.pem"),
+            File("/system/etc/security/cacerts")
+        )
+        for (src in sources) {
+            val text = runCatching {
+                when {
+                    src.isFile && src.length() > 0 -> src.readText()
+                    src.isDirectory -> src.listFiles()
+                        ?.filter { it.isFile }
+                        ?.sortedBy { it.name }
+                        ?.joinToString("\n") { it.readText() }
+                    else -> null
+                }
+            }.getOrNull() ?: continue
+            if (text.contains("-----BEGIN CERTIFICATE-----")) return text
+        }
+        return null
     }
 
     /**
@@ -3219,13 +3632,16 @@ class TermuxRuntime(context: Context) {
         }
 
         onProgress(BootstrapInstaller.InstallPhase.POST_SETUP, 92)
-        installer.onLog?.invoke("[bootstrap] 安装依赖包（JDK-25/wget）...")
+        installer.onLog?.invoke("[bootstrap] 准备 apt 环境...")
         // 关键时序：必须先修复 rootfs 可执行权限与脚本 shebang——apt-get 是 perl 脚本，
         // shebang 硬编码指向 /data/data/com.termux/... 解释器，不修复则 apt-get 无法执行
         // （退出码 126），JDK 永远装不完，bootstrap 陷入死循环。
         fixRootfsPermissions()
-        if (!prepareAptPackages("wget", "curl")) return false
-        executor.execOnce("apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--allow-unauthenticated", "-y", "wget", "curl")
+        // 这里**不再预装 wget / curl**：应用内所有下载都走 MultiThreadDownloader
+        // （HttpURLConnection + 多线程分段），wget/curl 从未被任何运行时代码执行过，
+        // 只是白占 ~3MB 与一次 apt 往返。调用不带包名，仅做 apt 源自愈与索引更新，
+        // 后续 installJava 的 apt-get install 才需要它。
+        if (!prepareAptPackages()) return false
         executor.execOnce("apt-get", "-o", "DPkg::Lock::Timeout=60", "clean")
 
         // 修复 openjdk 符号链接：dpkg-wrapper 的 configure 是 no-op，
@@ -3642,10 +4058,13 @@ class TermuxRuntime(context: Context) {
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
                 var lineCount = 0
+                var lastFlushAt = System.currentTimeMillis()
                 while (line != null) {
                     executor.emit(line)
                     writer.appendLine(line)
-                    if (++lineCount % 50 == 0) writer.flush()
+                    if (++lineCount >= 20 || System.currentTimeMillis() - lastFlushAt >= 500L) {
+                        writer.flush(); lineCount = 0; lastFlushAt = System.currentTimeMillis()
+                    }
                     line = reader.readLine()
                 }
                 writer.flush()
@@ -3963,7 +4382,7 @@ class TermuxRuntime(context: Context) {
 
         // 已有存活进程就直接复用。「判断是否在跑」与 startMcImpl 末尾的 trackMcProcess
         // 现在被 withLaunchLock 串在同一把锁里，不再有"两边都读到 null 于是双开"的窗口。
-        mcProcess?.let { if (it.isAlive) return it }
+        reuseLiveMcProcess(dirName)?.let { return it }
 
         val prefix = installer.rootDir.absolutePath
         val serverDir = serverDirFor(dirName)
@@ -4091,11 +4510,16 @@ class TermuxRuntime(context: Context) {
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
                 var lineCount = 0
+                var lastFlushAt = System.currentTimeMillis()
                 while (line != null) {
                     executor.emit(line)
                     writer.appendLine(line)
-                    // 批量 flush：每 50 行或退出时写入磁盘，避免每行一次 IO
-                    if (++lineCount % 50 == 0) writer.flush()
+                    // 每 20 行或 500ms 刷一次：原来只在 50 行整数倍时 flush，
+                    // 慢速输出（如 BDS 每分钟一条在线数）会一直卡在缓冲区里，
+                    // 日志文件比界面晚十几分钟才落盘（真机实测）。
+                    if (++lineCount >= 20 || System.currentTimeMillis() - lastFlushAt >= 500L) {
+                        writer.flush(); lineCount = 0; lastFlushAt = System.currentTimeMillis()
+                    }
                     line = reader.readLine()
                 }
                 writer.flush()
@@ -4140,7 +4564,7 @@ class TermuxRuntime(context: Context) {
         onExit: (Int) -> Unit
     ): Process {
         Log.i(TAG, "startPhp: php=$phpBinaryPath phar=$pharPath dirName=$dirName")
-        mcProcess?.let { if (it.isAlive) return it }
+        reuseLiveMcProcess(dirName)?.let { return it }
 
         val prefix = installer.rootDir.absolutePath
         val serverDir = serverDirFor(dirName)
@@ -4174,10 +4598,13 @@ class TermuxRuntime(context: Context) {
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
                 var lineCount = 0
+                var lastFlushAt = System.currentTimeMillis()
                 while (line != null) {
                     executor.emit(line)
                     writer.appendLine(line)
-                    if (++lineCount % 50 == 0) writer.flush()
+                    if (++lineCount >= 20 || System.currentTimeMillis() - lastFlushAt >= 500L) {
+                        writer.flush(); lineCount = 0; lastFlushAt = System.currentTimeMillis()
+                    }
                     line = reader.readLine()
                 }
                 writer.flush()
@@ -4218,7 +4645,7 @@ class TermuxRuntime(context: Context) {
 
     private fun startBdsImpl(dirName: String, version: String, onExit: (Int) -> Unit): Process {
         Log.i(TAG, "startBds: dirName=$dirName version=$version")
-        mcProcess?.let { if (it.isAlive) return it }
+        reuseLiveMcProcess(dirName)?.let { return it }
 
         val serverDir = serverDirFor(dirName)
         val logFile = prepareMcLogFile(serverDir)
@@ -4259,10 +4686,13 @@ class TermuxRuntime(context: Context) {
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
                 var lineCount = 0
+                var lastFlushAt = System.currentTimeMillis()
                 while (line != null) {
                     executor.emit(line)
                     writer.appendLine(line)
-                    if (++lineCount % 50 == 0) writer.flush()
+                    if (++lineCount >= 20 || System.currentTimeMillis() - lastFlushAt >= 500L) {
+                        writer.flush(); lineCount = 0; lastFlushAt = System.currentTimeMillis()
+                    }
                     line = reader.readLine()
                 }
                 writer.flush()
@@ -4597,10 +5027,13 @@ class TermuxRuntime(context: Context) {
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
                 var lineCount = 0
+                var lastFlushAt = System.currentTimeMillis()
                 while (line != null) {
                     executor.emit(line)
                     writer.appendLine(line)
-                    if (++lineCount % 50 == 0) writer.flush()
+                    if (++lineCount >= 20 || System.currentTimeMillis() - lastFlushAt >= 500L) {
+                        writer.flush(); lineCount = 0; lastFlushAt = System.currentTimeMillis()
+                    }
                     line = reader.readLine()
                 }
                 writer.flush()
@@ -4731,7 +5164,11 @@ class TermuxRuntime(context: Context) {
             process.waitFor(120, java.util.concurrent.TimeUnit.SECONDS)
         }.getOrDefault(false)
         if (!finished) {
+            // destroy() 对 proot（ptrace 宿主）常常无效：超时后容器里的 proot 与 tracee
+            // 会继续活着，占着 PROOT_TMP_DIR 胶水文件与 rootfs。用户反复点「网络自检」
+            // 就会累积进程，所以这里必须强杀。
             runCatching { process.destroy() }
+            runCatching { process.destroyForcibly() }
             lines.add("自检超时（120s），已中止")
         }
         reader.join(3000)
@@ -4810,7 +5247,7 @@ class TermuxRuntime(context: Context) {
     ): Process {
         Log.i(TAG, "startMcCustom: command=$command dirName=$dirName vendor=$javaVendor")
 
-        mcProcess?.let { if (it.isAlive) return it }
+        reuseLiveMcProcess(dirName)?.let { return it }
 
         val prefix = installer.rootDir.absolutePath
         val serverDir = serverDirFor(dirName)
@@ -4862,6 +5299,7 @@ class TermuxRuntime(context: Context) {
                 val reader = process.inputStream.bufferedReader()
                 var line = reader.readLine()
                 var lineCount = 0
+                var lastFlushAt = System.currentTimeMillis()
                 var quitGuardArmed = false
                 while (line != null) {
                     executor.emit(line)
@@ -4885,7 +5323,9 @@ class TermuxRuntime(context: Context) {
                             }
                         }, "bds-quit-guard").start()
                     }
-                    if (++lineCount % 50 == 0) writer.flush()
+                    if (++lineCount >= 20 || System.currentTimeMillis() - lastFlushAt >= 500L) {
+                        writer.flush(); lineCount = 0; lastFlushAt = System.currentTimeMillis()
+                    }
                     line = reader.readLine()
                 }
                 writer.flush()
@@ -5152,6 +5592,29 @@ class TermuxRuntime(context: Context) {
     /** 有 MC 进程在跑（不限是哪个实例）。 */
     fun isMcRunning(): Boolean {
         return mcProcess?.isAlive ?: false
+    }
+
+    /**
+     * 复用当前存活的进程，但只允许**同一个服务器目录**。
+     *
+     * 旧实现是 `mcProcess?.let { if (it.isAlive) return it }`：切到 B 再点启动时，
+     * 直接把 A 的 Process 返回给调用方 —— B 从未 spawn（日志文件没准备、onExit
+     * 没注册），调用方却已经把状态标成「B 运行中」，用户点停止停掉的是 A。
+     * [isMcRunningIn] 的存在说明这套语义本就要区分实例。
+     *
+     * @return 可复用的进程；null 表示需要新起一个
+     * @throws IllegalStateException 另一个实例正在运行
+     */
+    private fun reuseLiveMcProcess(dirName: String): Process? {
+        val proc = mcProcess ?: return null
+        if (!proc.isAlive) return null
+        val runningDir = mcServerDir ?: return proc
+        if (runningDir.name != dirName) {
+            throw IllegalStateException(
+                "服务端「${runningDir.name}」正在运行，请先停止它再启动「$dirName」"
+            )
+        }
+        return proc
     }
 
     /**
@@ -5452,16 +5915,27 @@ class TermuxRuntime(context: Context) {
             return false
         }
         entries.filter { it.pid == rootPid || isDescendant(it.pid) }
-            .filter { it.comm == "java" || it.cmdline.substringBefore('\u0000').substringAfterLast('/') == "java" }
-            // 多个 java 后代时优先选「真正在跑服务端」的那个。
+            // 不能只认 `java`：BDS 的进程是 `proot → box64 → bedrock_server`，
+            // 一个都不叫 java，于是内存恒为 0、CPU 空白（真机实测）。
+            .filter { entry ->
+                val base = entry.cmdline.substringBefore('\u0000').substringAfterLast('/')
+                entry.comm == "java" || base == "java" ||
+                    entry.comm == "bedrock_server" || base == "bedrock_server" ||
+                    entry.comm == "box64" || base == "box64"
+            }
+            // 多个后代时优先选「真正在跑服务端」的那个。
             // 来宾链路下 cmdline 里是 `/srv/mineserve` 或 rootfs 内路径，
             // 原先只匹配宿主 installer.rootDir 会让容器场景全部退化成等权，
             // 从而可能选中 installer 那个短命进程而不是服务端。
-            .maxByOrNull {
+            .maxByOrNull { entry ->
+                val base = entry.cmdline.substringBefore('\u0000').substringAfterLast('/')
                 when {
-                    it.cmdline.contains(".jar") -> 3
-                    it.cmdline.contains(GUEST_SERVER_DIR) -> 2
-                    it.cmdline.contains(installer.rootDir.absolutePath) -> 2
+                    // 基岩版：bedrock_server 才是服务端，box64 只是它的转译器
+                    entry.comm == "bedrock_server" || base == "bedrock_server" -> 5
+                    entry.cmdline.contains(".jar") -> 4
+                    entry.comm == "box64" || base == "box64" -> 3
+                    entry.cmdline.contains(GUEST_SERVER_DIR) -> 2
+                    entry.cmdline.contains(installer.rootDir.absolutePath) -> 2
                     else -> 1
                 }
             }
@@ -5657,6 +6131,16 @@ class TermuxRuntime(context: Context) {
 
     companion object {
         private const val TAG = "TermuxRuntime"
+
+        /**
+         * apt 索引缓存有效期（毫秒）。
+         *
+         * Termux 的 Packages 索引更新频率以天计，12 小时足够新鲜；同时它远大于
+         * 「装完 JDK 立刻装字体」这种连续操作的间隔，因此这两个操作只会下载
+         * 一次索引。超过 12 小时就老老实实重新 update 一遍，避免长期不更新
+         * 导致装到已被上游下架的版本。
+         */
+        private const val APT_INDEX_TTL_MS = 12L * 60 * 60 * 1000
 
         /**
          * `-XX:MaxMetaspaceSize` 的下限（MB）。

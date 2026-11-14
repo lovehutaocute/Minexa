@@ -71,12 +71,28 @@ class CommandExecutor(
             "export HOME='$prefix/home'; " +
             "export TMPDIR='$prefix/tmp'; "
         val cmdStr = command.joinToString(" ") { arg ->
-            if (arg.any { it == ' ' || it == '\'' || it == '"' || it == '$' }) {
-                "'${arg.replace("'", "'\\''")}'"
-            } else arg
+            if (isSafeShellWord(arg)) arg else shellQuote(arg)
         }
         return listOf(sh, "-c", envSetup + cmdStr)
     }
+
+    /** 单引号包裹；内部的 `'` 用 `'\''` 转义（POSIX shell 唯一可靠的写法） */
+    private fun shellQuote(arg: String): String = "'" + arg.replace("'", "'\\''") + "'"
+
+    /**
+     * 参数在 shell 里是否「不含任何特殊含义、可以裸拼」。
+     *
+     * 旧实现是 4 字符黑名单（只对含空格 / `'` / `"` / `$` 的参数加引号），
+     * 而 `;` `&` `|` 反引号 `\n` `>` `(` `*` `~` `#` 在 sh 里也有语义 ——
+     * `execOnce("apt", "install", "pkg;id")` 就等于执行了 `id`。
+     * MCP 侧当时就是因为这一点，才在上层自建了包名白名单
+     * （见 McpToolRunner 的 APT_PACKAGE_RE 注释）；但那只是把防御放在调用方，
+     * 任何新增调用点漏校验一次就是任意命令执行。所以这里改成白名单。
+     *
+     * 允许裸拼的字符：字母数字（含中文，shell 里无特殊含义）与 `_ - . / : = + @ % ,`
+     */
+    private fun isSafeShellWord(arg: String): Boolean =
+        arg.isNotEmpty() && arg.all { it.isLetterOrDigit() || it in "_-./:=+@%," }
 
     /** Termux 环境变量 */
     fun termuxEnv(): Map<String, String> {
@@ -201,7 +217,13 @@ class CommandExecutor(
             process.destroy()
             if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
             reader.join(2_000)
-            return ExecResult(124, synchronized(tail) { tail.joinToString("\n") })
+            val timedOutText = synchronized(tail) { tail.joinToString("\n") }
+            // 超时路径同样要更新 lastTail：调用方（installProotJava、verifyBdsBox64）失败后
+            // 读的是 executor.lastTail 做归因，不写就会拿到**上一条**命令的输出，
+            // 于是 15 分钟超时可能被报成「apt-get update 失败」甚至「包状态已损坏，
+            // 请删除该容器」—— 引导用户删掉一个完好的容器。
+            lastTail = timedOutText
+            return ExecResult(124, timedOutText)
         }
         reader.join(2_000)
         val text = synchronized(tail) { tail.joinToString("\n") }

@@ -41,6 +41,9 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 /**
  * 官方 BDS 的运行环境（PRoot 容器 + box64）。
@@ -244,9 +247,10 @@ fun BdsEnvironmentModule(
                     verticalArrangement = Arrangement.spacedBy(McSpacing.Row)
                 ) {
                     Button(
+                        modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
                         onClick = { vm.initializeBdsEnvironment() },
                         enabled = !running,
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                         shape = McShape.ControlCompact
                     ) {
                         Text(

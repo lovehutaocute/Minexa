@@ -29,8 +29,15 @@ class CrashReportManager(private val termux: TermuxRuntime) {
         val sizeText: String,
         val createdTime: Long,
         val createdText: String,
-        val preview: String    // 前 500 字符预览
-    )
+        val preview: String,    // 头部 8 KB 归因预览
+        /** 如果没有 `.json` sidecar，说明是旧版本报告（列表可标注「未分析」） */
+        val hasInsight: Boolean = false,
+        /** 结构化报告的主结论（有 sidecar 时优先用，回退到规则预览归因） */
+        val primaryLabel: String = ""
+    ) {
+        /** crash_yyyyMMdd_HHmmss（去掉 .txt） */
+        val crashId: String get() = fileName.removeSuffix(".txt")
+    }
 
     /** 自建崩溃报告目录（home/crash-logs） */
     private val crashLogsDir: File
@@ -45,13 +52,37 @@ class CrashReportManager(private val termux: TermuxRuntime) {
         File(termux.serverDirFor(dirName), "logs/latest.log")
 
     /**
-     * 收集崩溃日志。
-     * 当 MC 进程异常退出时调用，收集最近的日志写入报告文件。
-     * @param exitCode 进程退出码
-     * @param wasRunningBefore 是否之前在运行（区分正常停止和崩溃）
-     * @return 生成的报告路径，失败返回 null
+     * 崩溃采集结果（会话范围）。
+     *
+     * [sessionLog] 就是「本次启动」的全量日志，直接喂给 `CrashInsightEngine`；
+     * 报告文件与弹窗都从它取内容，**不再回读 latest.log**（除非捕获文件不可用）。
      */
-    fun captureCrash(exitCode: Int, wasRunningBefore: Boolean, dirName: String, allowCleanExit: Boolean = false): String? {
+    data class Capture(
+        val reportPath: String?,
+        val crashId: String,
+        val sessionId: String?,
+        val sessionLog: String,
+        val totalLines: Int,
+        val keyLines: Int,
+        val truncated: Boolean,
+        val fallbackToLatestLog: Boolean,
+        val nativeReportText: String?,
+        val sessionStartedAt: Long,
+        val sessionEndedAt: Long
+    )
+
+    /**
+     * 收集崩溃日志。
+     *
+     * 只使用**本次启动**的会话切片：`[LaunchSession.startOffset, 退出时冻结的 endOffset]`。
+     * 上一次启动留在同一个文件里的内容被偏移天然排除；native 报告也按会话开始时间过滤。
+     */
+    fun captureCrashDetail(
+        exitCode: Int,
+        wasRunningBefore: Boolean,
+        dirName: String,
+        allowCleanExit: Boolean = false
+    ): Capture? {
         // 只在之前在运行且非正常退出时生成报告（正常 stop 命令退出码通常是 0；
         // 启动后快速退出即使 exit=0 也按异常处理）
         if (!wasRunningBefore || (exitCode == 0 && !allowCleanExit)) {
@@ -60,14 +91,36 @@ class CrashReportManager(private val termux: TermuxRuntime) {
 
         val now = Date()
         val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)
-        val reportFile = File(crashLogsDir, "crash_$ts.txt")
+        val crashId = "crash_$ts"
+        val reportFile = File(crashLogsDir, "$crashId.txt")
 
         return try {
+            // 先冻结会话，保证之后读取的内容与「崩溃那一刻」一致（自动重启也不会漂移）。
+            val session = termux.freezeLaunchSession()?.takeIf { it.dirName == dirName }
+            val sessionSlice = session?.let { s ->
+                SessionLogReader.read(
+                    s.logFile,
+                    s.startOffset,
+                    s.effectiveEnd(runCatching { s.logFile.length() }.getOrDefault(0L)),
+                    SESSION_LOG_MAX_BYTES
+                )
+            }
+            var fallback = false
+            var logText = sessionSlice?.text.orEmpty()
+            if (logText.isBlank()) {
+                // 捕获文件不可用（老版本残留 / 核心直写 stdout 被关）：回退 latest.log，
+                // 但必须在报告与 UI 里明示，不能静默混入历史行。
+                fallback = true
+                logText = readLatestLogTailAsText(dirName)
+            }
+            val logLines = if (logText.isBlank()) emptyList() else logText.lines()
+
             val sb = StringBuilder()
             // ── 头部 ──
             sb.appendLine("====================================")
             sb.appendLine("Minexa 崩溃报告")
             sb.appendLine("时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(now)}")
+            sb.appendLine("会话: ${session?.id ?: "unknown"}")
             sb.appendLine("退出码: $exitCode")
             sb.appendLine("进程状态: 异常退出")
             if (exitCode == 137) {
@@ -76,38 +129,7 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             sb.appendLine("====================================")
             sb.appendLine()
 
-            // ── 最近日志 ──
-            // Paper 的 Watchdog 转储一次就有几百行线程栈，单纯取"最后 N 行"会把
-            // 最关键的「Server thread 卡在哪」整段截掉。这里改为：
-            //   1) 先按关键词提取重点段落（Watchdog / Server thread / 异常栈等）完整保留
-            //   2) 再补上最后 N 行作为上下文
-            //   3) 两者去重后按原顺序输出
-            val logFile = latestLogFile(dirName)
-            val logExists = logFile.exists()
-            val tailCount = 800
-            // 单遍流式扫描：latest.log 可达数十至上百 MB，readLines() 会把整份文件载入
-            // List<String> 造成 OOM（且这里运行在崩溃退出的回调线程上）。流式处理只保留
-            // 尾部 tailCount 行与命中的关键片段，同时统计总行数（报告头需要「共 N 行」）。
-            val scan: LogScan = if (logExists) {
-                try {
-                    scanLatestLog(logFile, tailCount)
-                } catch (e: Exception) {
-                    LogScan(1, listOf("(读取 latest.log 失败: ${e.message})"), emptyList())
-                }
-            } else {
-                LogScan(1, listOf("(latest.log 不存在)"), emptyList())
-            }
-            val allLines = scan.tailLines
-
-            // latest.log 是空的 / 不存在时，补上应用侧日志。
-            //
-            // 背景：latest.log 只装「MC 服务端自己输出的内容」。一旦服务端在启动阶段
-            // 就失败（例如启动命令不完整、Java 缺失、核心不匹配），它一个字节都不会输出，
-            // 报告就只剩「共 0 行」——没有任何诊断价值。而真正的原因往往记录在
-            // Minexa 自己的日志里（java 路径解析、启动命令、缺库警告）。
-            //
-            // 因此这里把 app 侧日志作为独立小节补出来，并明确标注状态，
-            // 避免读者再对着一个空文件猜。
+            // ── Minexa 应用日志（启动链路诊断：java 路径、启动命令、缺库警告）──
             val appLogLines = termux.readAppLogTail()
             if (appLogLines.isNotEmpty()) {
                 sb.appendLine("--- Minexa 应用日志 (最后 ${minOf(400, appLogLines.size)} 行，共 ${appLogLines.size} 行) ---")
@@ -115,43 +137,58 @@ class CrashReportManager(private val termux: TermuxRuntime) {
                 sb.appendLine()
             }
 
-            val highlights = scan.highlights
-            if (highlights.isNotEmpty()) {
-                sb.appendLine("--- 关键片段 (Watchdog / 异常栈 / 致命错误) ---")
-                highlights.forEach { sb.appendLine(it) }
+            // ── 关键片段（从本次启动日志里抽取，带行号）──
+            val segments = KeyLogExtractor.extract(logLines)
+            if (segments.isNotEmpty()) {
+                sb.appendLine("--- 关键片段 (异常栈 / Watchdog / 致命错误，共 ${segments.sumOf { it.lineCount }} 行) ---")
+                segments.forEach { seg ->
+                    sb.appendLine("[${reasonLabel(seg.reason)} · 第 ${seg.startLine}-${seg.endLine} 行]")
+                    seg.lines.forEach { sb.appendLine(it) }
+                }
                 sb.appendLine()
             }
 
-            // 明确区分三种状态，不再输出无信息量的「共 0 行」
-            val logState = when {
-                !logExists -> "latest.log 不存在（服务端目录可能还没建好）"
-                scan.totalLines == 0 -> "latest.log 存在但为空 —— 服务端进程从未产生任何输出，" +
-                    "说明它很可能根本没被启动起来；请结合上方「Minexa 应用日志」判断"
-                else -> null
+            // ── 本次启动全量日志 ──
+            val scopeNote = if (fallback) "（回退 latest.log：可能含少量历史行）" else "（仅本次启动，已排除历史日志）"
+            sb.appendLine("--- 本次启动日志 (共 ${logLines.size} 行) $scopeNote ---")
+            if (sessionSlice?.truncated == true) {
+                sb.appendLine("(说明: 日志超出 4MB 上限，仅保留尾部；完整内容见服务器目录日志文件)")
             }
-            sb.appendLine("--- 最近日志 (最后 ${minOf(tailCount, scan.totalLines)} 行，共 ${scan.totalLines} 行) ---")
-            if (logState != null) {
-                sb.appendLine("(说明: $logState)")
+            if (logLines.isEmpty()) {
+                sb.appendLine("(说明: 本次启动没有产生任何输出 —— 进程很可能在写日志前就退出了；请结合上方应用日志判断)")
+            } else {
+                logLines.forEach { sb.appendLine(it) }
             }
-            allLines.forEach { sb.appendLine(it) }
             sb.appendLine()
 
-            // ── MC 原生崩溃报告 ──
+            // ── 本次启动的 MC 原生崩溃报告（按会话开始时间过滤）──
             sb.appendLine("--- MC 原生崩溃报告 ---")
-            val nativeLatest = findLatestNativeCrashReport(dirName)
-            if (nativeLatest != null) {
-                sb.appendLine("(来源: ${nativeLatest.name})")
-                try {
-                    sb.appendLine(nativeLatest.readText())
-                } catch (e: Exception) {
-                    sb.appendLine("(读取原生崩溃报告失败: ${e.message})")
-                }
+            val native = findNativeCrashOfSession(dirName, session?.startedAt ?: 0L)
+            val nativeText = native?.let { runCatching { it.readText() }.getOrNull() }
+            if (native != null && nativeText != null) {
+                sb.appendLine("(来源: ${native.name})")
+                sb.appendLine(nativeText)
             } else {
-                sb.appendLine("(无 MC 原生崩溃报告)")
+                sb.appendLine("(本次启动无 MC 原生崩溃报告)")
             }
 
             reportFile.writeText(sb.toString())
-            reportFile.absolutePath
+            // 会话日志 sidecar：崩溃当时冻结的「本次启动」日志。
+            // App 重启后再打开这份报告，日志视图仍只显示那一次启动的内容。
+            runCatching { sessionLogFile(crashId).writeText(logText) }
+            Capture(
+                reportPath = reportFile.absolutePath,
+                crashId = crashId,
+                sessionId = session?.id,
+                sessionLog = logText,
+                totalLines = logLines.size,
+                keyLines = segments.sumOf { it.lineCount },
+                truncated = sessionSlice?.truncated == true,
+                fallbackToLatestLog = fallback,
+                nativeReportText = nativeText,
+                sessionStartedAt = session?.startedAt ?: now.time,
+                sessionEndedAt = now.time
+            )
         } catch (e: Exception) {
             // 不能静默吞掉：报告生成失败时用户看到的是「没有崩溃报告」，无从判断原因。
             // 历史上就是这里吞掉了 parseNativeFilename 抛出的 ParseException，
@@ -160,6 +197,79 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             null
         }
     }
+
+    /** 兼容旧调用方：只要报告路径。 */
+    fun captureCrash(
+        exitCode: Int,
+        wasRunningBefore: Boolean,
+        dirName: String,
+        allowCleanExit: Boolean = false
+    ): String? = captureCrashDetail(exitCode, wasRunningBefore, dirName, allowCleanExit)?.reportPath
+
+    /** 关键片段的显示标签（报告是纯文本，这里用中文；UI 侧另有本地化映射）。 */
+    private fun reasonLabel(reason: KeyLogExtractor.Reason): String = when (reason) {
+        KeyLogExtractor.Reason.EXCEPTION -> "异常栈"
+        KeyLogExtractor.Reason.WATCHDOG -> "Watchdog"
+        KeyLogExtractor.Reason.SEVERE -> "致命错误"
+        KeyLogExtractor.Reason.CRASH_TAIL -> "崩溃前上下文"
+    }
+
+    /** 会话结束时读取会话日志文本（供 VM 直接构建结构化报告）。 */
+    fun sessionLogText(dirName: String, maxBytes: Long = SESSION_LOG_MAX_BYTES): String {
+        val session = termux.currentLaunchSession()?.takeIf { it.dirName == dirName } ?: return ""
+        return termux.readSessionLog(session, maxBytes)
+    }
+
+    /** 结构化报告 sidecar：`crash-logs/{crashId}.json`。 */
+    fun insightFile(crashId: String): File = File(crashLogsDir, "$crashId.json")
+
+    /** 会话日志 sidecar：`crash-logs/{crashId}.log`（本次启动全量日志，冻结快照）。 */
+    fun sessionLogFile(crashId: String): File = File(crashLogsDir, "$crashId.log")
+
+    fun readSessionLogSidecar(crashId: String): String {
+        val file = sessionLogFile(crashId)
+        if (!file.isFile) return ""
+        return runCatching { file.readText() }.getOrDefault("")
+    }
+
+    fun writeInsight(crashId: String, json: String): Boolean = runCatching {
+        insightFile(crashId).writeText(json)
+        true
+    }.getOrDefault(false)
+
+    fun readInsight(crashId: String): CrashInsight? {
+        val file = insightFile(crashId)
+        if (!file.isFile) return null
+        return CrashInsight.decode(runCatching { file.readText() }.getOrDefault(""))
+    }
+
+    // ── 会话范围下的回退 / 原生报告定位 ─────────────────────────
+
+    /** 捕获文件不可用时：取 latest.log 的最后一段（明确标注为回退模式）。 */
+    private fun readLatestLogTailAsText(dirName: String): String {
+        val logFile = latestLogFile(dirName)
+        if (!logFile.isFile) return ""
+        return runCatching {
+            val scan = scanLatestLog(logFile, TAIL_LINES_FALLBACK)
+            scan.tailLines.joinToString("\n")
+        }.getOrDefault("")
+    }
+
+    /**
+     * 本次启动生成的 MC 原生报告：`lastModified >= 会话开始 - 2s`。
+     * 早于会话开始的报告属于历史启动，一律不打包（旧实现只取「最新文件」）。
+     */
+    private fun findNativeCrashOfSession(dirName: String, sessionStartedAt: Long): File? {
+        val dir = nativeCrashReportsDir(dirName)
+        if (!dir.exists() || !dir.isDirectory) return null
+        val files = dir.listFiles { f -> f.isFile && f.name.endsWith(".txt") } ?: return null
+        val threshold = (sessionStartedAt - 2_000L).coerceAtLeast(0L)
+        return files.filter { it.lastModified() >= threshold }
+            .maxByOrNull { it.lastModified() }
+    }
+
+    private fun readInsightPreview(file: File): String =
+        runCatching { CrashInsight.decode(file.readText())?.primaryCause?.label.orEmpty() }.getOrDefault("")
 
     /** 列出所有崩溃报告，按时间倒序 */
     fun listCrashReports(): List<CrashReport> {
@@ -176,9 +286,12 @@ class CrashReportManager(private val termux: TermuxRuntime) {
         }
     }
 
-    /** 删除崩溃报告 */
+    /** 删除崩溃报告（连同结构化报告与会话日志 sidecar 一起删，避免留下孤儿文件） */
     fun deleteCrashReport(fileName: String): Boolean {
         val file = File(crashLogsDir, fileName)
+        val crashId = fileName.removeSuffix(".txt")
+        runCatching { insightFile(crashId).takeIf { it.isFile }?.delete() }
+        runCatching { sessionLogFile(crashId).takeIf { it.isFile }?.delete() }
         return if (file.exists() && file.isFile) {
             file.delete()
         } else {
@@ -306,6 +419,8 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             ?: return emptyList()
         return files.map { f ->
             val (createdTime, createdText) = parseReportTime(f, isNative)
+            val sidecar = if (isNative) null else File(crashLogsDir, "${f.name.removeSuffix(".txt")}.json")
+            val hasInsight = sidecar?.isFile == true
             CrashReport(
                 fileName = f.name,
                 path = f.absolutePath,
@@ -313,16 +428,25 @@ class CrashReportManager(private val termux: TermuxRuntime) {
                 sizeText = formatSize(f.length()),
                 createdTime = createdTime,
                 createdText = createdText,
-                preview = readPreview(f)
+                preview = readPreview(f),
+                hasInsight = hasInsight,
+                primaryLabel = sidecar?.takeIf { hasInsight }?.let { readInsightPreview(it) }.orEmpty()
             )
         }.sortedByDescending { it.createdTime }
     }
 
-    /** 读取文件前 500 字符作为预览 */
+    /**
+     * 读取文件头部作为归因用预览。
+     *
+     * 曾经只有 500 字符：真实异常链（如 cacerts 损坏时的
+     * `trustAnchors parameter must be non-empty`）往往在第 500 字符之后，
+     * 而恰好在头部的 fontconfig 启发式行会把归因带偏（误诊成「字体运行库缺失」）。
+     * 列表页只用 preview 做归因摘要，不直接展示原文，放大到 8 KB 没有副作用。
+     */
     private fun readPreview(file: File): String {
         return try {
             val text = file.readText()
-            if (text.length <= 500) text else text.substring(0, 500)
+            if (text.length <= 8000) text else text.substring(0, 8000)
         } catch (e: Exception) {
             ""
         }
@@ -357,6 +481,12 @@ class CrashReportManager(private val termux: TermuxRuntime) {
     }
 
     internal companion object {
+        /** 会话日志单次读取上限（超出保留尾部，崩溃现场在尾部）。 */
+        private const val SESSION_LOG_MAX_BYTES = 4L * 1024L * 1024L
+
+        /** 回退 latest.log 时保留的尾部行数。 */
+        private const val TAIL_LINES_FALLBACK = 800
+
         /** 解析 MC 原生报告文件名 crash-yyyy-MM-dd_HH.mm.ss-server.txt */
         fun parseNativeFilename(name: String): Long? {
             if (!name.startsWith("crash-") || !name.endsWith(".txt")) return null

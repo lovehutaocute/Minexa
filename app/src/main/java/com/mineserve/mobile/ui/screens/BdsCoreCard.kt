@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -43,6 +42,10 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 官方 BDS 的核心版本卡片：当前版本 / 最新稳定版 / Preview 版，以及在线更新入口。
@@ -202,9 +205,9 @@ fun BdsCoreCard(vm: McViewModel) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (stable != null && hasStableUpdate) {
                             Button(
+                                modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Row),
                                 onClick = { pendingChannel = BdsChannel.Stable },
-                                colors = ButtonDefaults.buttonColors(containerColor = Indigo)
-                            ) {
+                                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo)) {
                                 Text(stringResource(R.string.bds_core_update_to, stable.version))
                             }
                         }
@@ -240,7 +243,7 @@ fun BdsCoreCard(vm: McViewModel) {
             if (channel == BdsChannel.Stable) R.string.bds_core_stable else R.string.bds_core_preview
         )
         val installed = status.installedVersion ?: stringResource(R.string.bds_core_unknown)
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { pendingChannel = null },
             title = {
                 Text(

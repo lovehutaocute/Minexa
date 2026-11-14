@@ -13,6 +13,7 @@ import com.mineserve.mobile.McApplication
 import com.mineserve.mobile.service.McForegroundService
 import android.net.Uri
 import com.mineserve.mobile.data.McConfig
+import com.mineserve.mobile.data.FileOps
 import com.mineserve.mobile.data.VersionSelection
 import com.mineserve.mobile.data.AutomationTask
 import com.mineserve.mobile.data.AutomationScheduler
@@ -42,6 +43,7 @@ import com.mineserve.mobile.data.LegacyPrivateStore
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.NativeLibraryBundler
+import com.mineserve.mobile.runtime.TrustStoreRepair
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
@@ -59,10 +61,23 @@ import com.mineserve.mobile.data.AppUpdateService
 import com.mineserve.mobile.server.BackupManager
 import com.mineserve.mobile.server.CrashReportManager
 import com.mineserve.mobile.server.CrashReportAnalyzer
+import com.mineserve.mobile.server.CrashCaseStore
+import com.mineserve.mobile.server.CrashInsight
+import com.mineserve.mobile.server.CrashInsightEngine
+import com.mineserve.mobile.server.CrashKnowledgeBase
+import com.mineserve.mobile.server.CrashLogView
+import com.mineserve.mobile.server.EnvInfo
+import com.mineserve.mobile.server.TriggerInfo
 import com.mineserve.mobile.server.SafeTextFile
 import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PlayerManager
 import com.mineserve.mobile.server.BdsEnvironmentManager
+import com.mineserve.mobile.server.BdsPacks
+import com.mineserve.mobile.server.BdsWorldGen
+import com.mineserve.mobile.server.JavaResourcePack
+import com.mineserve.mobile.server.JavaWorldGen
+import com.mineserve.mobile.server.JavaWorlds
+import com.mineserve.mobile.server.WorldGenLedger
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
 import com.mineserve.mobile.server.tunnel.StunDiagnostics
@@ -359,21 +374,37 @@ class McViewModel(
      * 版本清单里 1.21.62+ 的条目只有版本号，直链与 SHA-256 要按需取一次
      * metadata；这一步在弹窗里点「安装」后立刻发生，失败就只报错、不动磁盘。
      */
+    /**
+     * BDS 换版「在途」闸门。
+     *
+     * 不能只靠 `_bdsUpdateState is Running`：那个状态要等 [runBdsSwitch] 内部才置位，
+     * 而 [installBdsVersion] 之前还有一次远端元数据解析（可能数秒）。这期间第二次点击
+     * 看到的仍是 Idle 而放行，两条流程会同时停服、各自备份、各自下载并替换
+     * `bedrock_server` 与动态库，最终目录可能由两个版本的文件拼成。
+     */
+    @Volatile
+    private var bdsSwitchInFlight = false
+
     fun installBdsVersion(version: String) {
         val core = activeBdsCore()
         if (core == null) {
             _errorFlow.tryEmit(str(R.string.bds_update_need_core))
             return
         }
-        if (_bdsUpdateState.value is BdsUpdateProgress.Running) return
+        if (bdsSwitchInFlight || _bdsUpdateState.value is BdsUpdateProgress.Running) return
+        bdsSwitchInFlight = true
         viewModelScope.launch {
-            val entry = withContext(Dispatchers.IO) {
-                BdsVersionCatalogLoader.resolve(app, version)
-            }.getOrElse { e ->
-                _errorFlow.tryEmit(str(R.string.bds_version_resolve_failed, e.message ?: version))
-                return@launch
+            try {
+                val entry = withContext(Dispatchers.IO) {
+                    BdsVersionCatalogLoader.resolve(app, version)
+                }.getOrElse { e ->
+                    _errorFlow.tryEmit(str(R.string.bds_version_resolve_failed, e.message ?: version))
+                    return@launch
+                }
+                runBdsSwitch(core, entry)
+            } finally {
+                bdsSwitchInFlight = false
             }
-            runBdsSwitch(core, entry)
         }
     }
 
@@ -637,6 +668,7 @@ class McViewModel(
         consoleBuffer.clear()
         pendingConsoleBuffer.clear()
         terminalConsoleBuffer.clear()
+        consoleClearGeneration++
         consoleGeneration++
         terminalGeneration++
         consoleUiGeneration = consoleGeneration
@@ -684,7 +716,10 @@ class McViewModel(
         terminalHistoryLoading = true
         viewModelScope.launch {
             try {
-                val generation = consoleGeneration
+                // 用「清除代际」而不是 consoleGeneration：后者每收到一批实时日志都会自增
+                // （见下方刷新循环），服务端在跑时历史补读一返回就必然命中 `!=` 被整段丢弃，
+                // 表现为「App 重启后进终端看不到历史，只有新追加的行」。
+                val clearGen = consoleClearGeneration
                 val mark = consoleClearMark(dirName)
                 val history = withContext(Dispatchers.IO) {
                     val fileLength = runCatching {
@@ -697,7 +732,7 @@ class McViewModel(
                     repo.termuxRuntime.readRecentMcLog(dirName, fromOffset = offset)
                 }
                 // 读盘期间用户可能点了「清除」：此时写回历史等于把清除撤销掉。
-                if (consoleGeneration != generation) return@launch
+                if (consoleClearGeneration != clearGen) return@launch
                 if (history.isNotEmpty()) {
                     val live = consoleBuffer.snapshot()
                     val overlap = (minOf(history.size, live.size) downTo 1).firstOrNull { size ->
@@ -798,10 +833,6 @@ class McViewModel(
 
     /** 更换服务器图标：读取 Uri → 居中裁剪缩放 64×64 → PNG 写入 server-icon.png */
     fun setServerIcon(uri: Uri) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -851,10 +882,6 @@ class McViewModel(
 
     /** 恢复默认：删除 server-icon.png */
     fun removeServerIcon() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -882,6 +909,14 @@ class McViewModel(
     private val terminalConsoleBuffer = LogBuffer<TerminalDisplayLine>(MAX_LOG_LINES)
     @Volatile private var terminalDisplayDirty = false
     private var consoleGeneration = 0L
+
+    /**
+     * 「用户点了清除」的代际，**只在 [clearConsole] 里自增**。
+     *
+     * 与 [consoleGeneration] 分开是必要的：后者每收到一批实时日志都会自增，
+     * 用它判定「读盘期间是否被清除」会让历史补读几乎每次都被丢弃。
+     */
+    @Volatile private var consoleClearGeneration = 0L
     private var terminalGeneration = 0L
     private var consoleUiGeneration = -1L
     private var terminalUiGeneration = -1L
@@ -3522,6 +3557,25 @@ class McViewModel(
         }
     }
 
+    /**
+     * 「保存世界」统一入口。
+     *
+     * 基岩版没有 `save-all`：要发 `save hold` + `save resume` 一对，只发 `hold`
+     * 世界就此不再落盘（真机实测）。
+     */
+    fun saveWorld() {
+        val core = config.value.installedCores
+            .firstOrNull { it.name == config.value.activeCoreName }?.core
+        val commands = core?.consoleSaveCommands ?: listOf("save-all")
+        sendCommand(commands.first())
+        commands.drop(1).forEachIndexed { index, cmd ->
+            viewModelScope.launch {
+                kotlinx.coroutines.delay(800L * (index + 1))
+                sendCommand(cmd)
+            }
+        }
+    }
+
     // ── 插件管理（新版） ──────────────────────────────────────────
 
     /** 插件下载进度（结构复用 DownloadProgress） */
@@ -3570,10 +3624,6 @@ class McViewModel(
 
     /** 扫描当前核心的 plugins 目录 */
     fun refreshInstalledPlugins() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -3591,7 +3641,6 @@ class McViewModel(
 
     /** 扫描当前核心的 mods 目录 */
     fun refreshMods() {
-        if (!isBootstrapped.value) return
         val dirName = activeDirName() ?: return
         viewModelScope.launch {
             try {
@@ -3634,10 +3683,6 @@ class McViewModel(
 
     /** 从本地 Uri 上传模组 */
     fun installModFromUri(uri: Uri) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: return
         viewModelScope.launch {
             try {
@@ -3652,10 +3697,6 @@ class McViewModel(
 
     /** 从精选库下载安装模组（GitHub 动态解析最新版本） */
     fun installCuratedMod(mod: PluginManager.CuratedMod) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -3805,10 +3846,6 @@ class McViewModel(
 
     /** 一键安装 Modrinth 模组（解析指定版本 release 直链并下载到 mods/） */
     fun installModrinthMod(hit: PluginManager.ModrinthHit, mcVersion: String) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -3927,10 +3964,6 @@ class McViewModel(
 
     /** 安装 Modrinth 插件到 plugins/ 目录 */
     fun installModrinthPlugin(hit: PluginManager.ModrinthHit, mcVersion: String) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -3965,10 +3998,6 @@ class McViewModel(
 
     /** 从精选库下载安装插件 */
     fun installCuratedPlugin(curated: PluginManager.CuratedPlugin) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -4016,10 +4045,6 @@ class McViewModel(
 
     /** 从本地 Uri 上传插件 */
     fun installPluginFromUri(uri: Uri) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -4101,10 +4126,6 @@ class McViewModel(
     /** 检测精选插件更新（5 分钟内有缓存不重复请求） */
     fun checkCuratedUpdates() {
         if (_isCheckingUpdates.value) return
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -4140,10 +4161,6 @@ class McViewModel(
 
     /** 从自定义 URL 下载插件 */
     fun installPluginFromUrl(url: String, customFileName: String) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s212))
             return
@@ -4207,7 +4224,6 @@ class McViewModel(
 
     /** 创建 world 目录快照（zip 打包），返回快照文件路径或 null */
     suspend fun createSnapshot(): String? {
-        if (!isBootstrapped.value) return null
         val dirName = activeDirName() ?: return null
         return withContext(Dispatchers.IO) {
             backupManager.backupWorldToExternal(dirName, BackupManager.BackupOrigin.Manual)
@@ -4231,7 +4247,7 @@ class McViewModel(
     }
 
     /** 外部备份整个世界（world+nether+end → 外部目录） */
-    fun backupWorldToExternal() {        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
+    fun backupWorldToExternal() {
         val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
         viewModelScope.launch {
             try {
@@ -4251,7 +4267,6 @@ class McViewModel(
 
     /** 外部备份整个服务器（world+核心+配置+插件 → 外部目录，文件名带核心类型） */
     fun backupServerToExternal() {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
         // 当前服务器核心类型写入文件名（还原时据此识别核心）
         val coreTag = config.value.installedCores
@@ -4356,7 +4371,7 @@ class McViewModel(
     }
 
     /** 从外部 zip 还原世界（zip 内 world/ 前缀） */
-    fun restoreWorldFromExternal(zipName: String) {        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
+    fun restoreWorldFromExternal(zipName: String) {
         val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
         val file = java.io.File(com.mineserve.mobile.server.ExternalBackupStore.rootDir, zipName)
         viewModelScope.launch {
@@ -4372,7 +4387,6 @@ class McViewModel(
 
     /** 请求还原服务器：解析目标目录名与核心类型，存在同名则发冲突事件（UI 弹框） */
     fun requestRestoreServer(zipName: String) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         val (dirName, coreTag) = backupManager.parseServerZipInfo(zipName)
         val target = java.io.File(repo.termuxRuntime.serversDir, dirName)
         if (target.exists()) {
@@ -4396,6 +4410,16 @@ class McViewModel(
         val file = java.io.File(com.mineserve.mobile.server.ExternalBackupStore.rootDir, zipName)
         viewModelScope.launch {
             try {
+                // 静默失败会让用户以为「点了没反应」。这两步是 restoreServerFromExternal
+                // 内部最常见的两个 early-return，先在这里判一次并给出明确原因。
+                if (!file.isFile) {
+                    _errorFlow.tryEmit(str(R.string.err_restore_zip_missing, zipName))
+                    return@launch
+                }
+                if (!withContext(Dispatchers.IO) { backupManager.validateZipFile(file) }) {
+                    _errorFlow.tryEmit(str(R.string.err_restore_zip_corrupt, zipName))
+                    return@launch
+                }
                 val ok = withContext(Dispatchers.IO) {
                     backupManager.restoreServerFromExternal(file, dirName, overwrite)
                 }
@@ -4418,10 +4442,14 @@ class McViewModel(
      */
     private fun registerRestoredCore(dirName: String, coreTag: String? = null) {
         val cfg = config.value
-        if (cfg.installedCores.any { it.dirName == dirName }) {
-            // 已存在：只确保设为当前选中
-            if (cfg.activeCoreName != dirName) {
-                updateConfig { it.copy(activeCoreName = dirName) }
+        cfg.installedCores.firstOrNull { it.dirName == dirName }?.let { existing ->
+            // 已存在：确保设为当前选中。
+            // activeCoreName 对应的是 InstalledCore.**name**（全项目都按
+            // `find { it.name == activeCoreName }` 取，见 WidgetUpdater / McpServers），
+            // 而改名只改 name 不改 dirName —— 这里写成 dirName 会让改过名的核心
+            // 变成一个查不到的值，启动时报「未选择要启动的服务端核心」。
+            if (cfg.activeCoreName != existing.name) {
+                updateConfig { it.copy(activeCoreName = existing.name) }
             }
             return
         }
@@ -4455,7 +4483,6 @@ class McViewModel(
 
     /** 从外部存储文件夹（SAF tree）导入为新的服务器；displayName 为空时自动解析文件夹名 */
     fun importServerFromFolder(uri: android.net.Uri, displayName: String? = null) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         viewModelScope.launch {
             _isImportingServer.value = true
             _importProgress.value = null
@@ -4478,7 +4505,6 @@ class McViewModel(
 
     /** 从外部存储压缩包（zip/tar/tar.gz/tar.xz/tar.bz2/7z）导入为新的服务器；displayName 为空时自动解析 */
     fun importServerFromArchive(uri: android.net.Uri, displayName: String? = null) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         viewModelScope.launch {
             _isImportingServer.value = true
             _importProgress.value = null
@@ -4501,7 +4527,6 @@ class McViewModel(
 
     /** 从单个服务端 JAR 创建标准服务器目录后导入。 */
     fun importServerFromJar(uri: android.net.Uri, displayName: String? = null) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         viewModelScope.launch {
             _isImportingServer.value = true
             _importProgress.value = null
@@ -4577,7 +4602,6 @@ class McViewModel(
 
     /** 加载快照列表 */
     fun loadSnapshots() {
-        if (!isBootstrapped.value) return
         viewModelScope.launch {
             try {
                 _snapshots.value = withContext(Dispatchers.IO) { backupManager.listSnapshots() }
@@ -4589,10 +4613,10 @@ class McViewModel(
 
     /** 删除当前激活核心的世界文件夹（world / world_nether / world_the_end），不可恢复 */
     fun deleteWorldDirs() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
+        // 必须拦住运行中的删除：服务端正持有 region 句柄持续写盘，目录被 unlink 后
+        // 进程会继续写已删除的 inode，停止/崩溃时世界直接消失（不可恢复）。
+        // createWorld / resetWorld / deleteCore 都有这道闸门，这里漏了。
+        if (!requireServerStopped("删除世界目录")) return
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s249))
             return
@@ -4604,7 +4628,7 @@ class McViewModel(
                     var count = 0
                     for (name in listOf("world", "world_nether", "world_the_end")) {
                         val dir = File(base, name)
-                        if (dir.exists() && dir.deleteRecursively()) count++
+                        if (FileOps.existsNoFollow(dir) && FileOps.deleteRecursively(dir)) count++
                     }
                     count
                 }
@@ -4617,10 +4641,6 @@ class McViewModel(
 
     /** 恢复快照（会先停止服务器） */
     fun restoreSnapshot(name: String) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         val dirName = activeDirName() ?: run {
             _errorFlow.tryEmit(str(R.string.s249))
             return
@@ -4757,7 +4777,6 @@ class McViewModel(
      * 启动前先把真源读回来，这条坑就不存在了。
      */
     private suspend fun refreshServerPropertiesNow() {
-        if (!isBootstrapped.value) return
         val dirName = activeDirName() ?: return
         try {
             val pnx = isPowerNukkitXActive()
@@ -4787,10 +4806,6 @@ class McViewModel(
 
     /** 保存 server.properties */
     fun saveServerProperties(props: Map<String, String>) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         // PowerNukkitX 的配置落在 pnx.yml，而服务端退出时会整份回写该文件，
         // 运行期间的修改必然被覆盖；PowerNukkitXConfigManager.write 也会主动拒绝运行中写入。
         // 在这里提前拦截是为了给出明确原因，而不是让用户看到笼统的「保存失败」。
@@ -5062,7 +5077,6 @@ class McViewModel(
 
     /** 刷新玩家数据（OP/白名单/封禁列表） */
     fun refreshPlayers() {
-        if (!isBootstrapped.value) return
         val dirName = activeDirName() ?: return
         // 官方 BDS 的玩家数据文件与 Java 版完全不同：
         //  - OP → permissions.json（permission=operator，只有 xuid）
@@ -5136,8 +5150,14 @@ class McViewModel(
     fun deopPlayer(name: String) {
         if (name.isBlank()) return
         val bds = activeBdsCore() != null
-        val sent = playerManager.deopPlayer(name, activeDirName(), bds)
-        afterCmd(sent, str(R.string.msg_op_cancelled, name))
+        val dirName = activeDirName()
+        // BDS 分支会同步读写 permissions.json（PlayerManager.removeBedrockOperator）；
+        // 公共存储是 FUSE，主线程做文件 IO 会卡顿，慢盘上甚至掉帧。
+        // 与 opPlayerWithLevel 一致，放到 IO 线程。
+        viewModelScope.launch {
+            val sent = withContext(Dispatchers.IO) { playerManager.deopPlayer(name, dirName, bds) }
+            afterCmd(sent, str(R.string.msg_op_cancelled, name))
+        }
     }
 
     fun whitelistAdd(name: String) {
@@ -5295,16 +5315,95 @@ class McViewModel(
     private val _activeWorldName = MutableStateFlow("")
     val activeWorldName: StateFlow<String> = _activeWorldName.asStateFlow()
 
+    /** 当前世界的基岩版元信息（种子 / 生成类型）；Java 系或还没生成时为 null。 */
+    private val _activeWorldMeta = MutableStateFlow<WorldManager.BedrockMeta?>(null)
+    val activeWorldMeta: StateFlow<WorldManager.BedrockMeta?> = _activeWorldMeta.asStateFlow()
+
+    /** 当前世界的 Java 版元信息（种子 / 生成类型 / 难度 / 数据包数）；基岩系为 null。 */
+    private val _activeJavaWorldMeta = MutableStateFlow<JavaWorlds.Meta?>(null)
+    val activeJavaWorldMeta: StateFlow<JavaWorlds.Meta?> = _activeJavaWorldMeta.asStateFlow()
+
+    /**
+     * 当前世界的「建世界时的要求」（种子原文 + 生成方式）。
+     *
+     * 与 [activeWorldMeta] / [activeJavaWorldMeta] 的分工：那两个是**世界真实状态**，
+     * 这个是**用户当时的选择**。世界还没生成时只有后者有值，UI 必须分开展示，
+     * 否则就会出现「种子：尚未生成 / 生成类型：未知」这种什么都没说的组合。
+     */
+    private val _activeWorldPlan = MutableStateFlow<WorldGenLedger.Record?>(null)
+    val activeWorldPlan: StateFlow<WorldGenLedger.Record?> = _activeWorldPlan.asStateFlow()
+
+    /** 当前核心类型（UI 靠它决定显示基岩版还是 Java 版的世界/附加包界面）。 */
+    private val _activeCore = MutableStateFlow<ServerCore?>(null)
+    val activeCore: StateFlow<ServerCore?> = _activeCore.asStateFlow()
+
+    private fun refreshActiveCore() {
+        _activeCore.value = config.value.installedCores
+            .firstOrNull { it.name == config.value.activeCoreName }?.core
+    }
+
+    /** 当前核心是否 Java 版（非 BDS / PNX / PocketMine / Allay）。 */
+    fun isJavaCore(): Boolean {
+        val core = _activeCore.value ?: return false
+        return !core.isBedrock
+    }
+
     /** 加载世界列表（含各世界占用大小）。大小统计较慢，放在 IO 线程。 */
     fun loadWorlds() {
-        if (!isBootstrapped.value) return
         val dirName = activeDirName() ?: return
+        refreshActiveCore()
         viewModelScope.launch {
             _worldsLoading.value = true
             try {
                 val list = withContext(Dispatchers.IO) { worldManager.listWorlds(dirName) }
-                _worlds.value = list
-                _activeWorldName.value = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+                val active = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+                // 已建但还没生成的世界（目录不存在）也要列出来：Java 新建世界只写
+                // properties，不建目录，只列真实目录会让用户「建完什么也看不到」。
+                val planned = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val root = worldManager.worldsRoot(dirName)
+                        val existing = list.map { it.name }.toHashSet()
+                        WorldGenLedger.read(worldManager.serverDir(dirName))
+                            .filterKeys { it !in existing && it.isNotBlank() }
+                            .map { (name, record) ->
+                                Worlds.WorldInfo(
+                                    name = name,
+                                    dir = java.io.File(root, name),
+                                    kind = if (record.kind == WorldGenLedger.Kind.JAVA) Worlds.Kind.Java
+                                    else Worlds.Kind.Bedrock,
+                                    sizeBytes = 0L,
+                                    sizeTruncated = false,
+                                    isActive = name == active,
+                                    planned = true
+                                )
+                            }
+                    }.getOrDefault(emptyList())
+                }
+                _worlds.value = (list + planned).sortedWith(
+                    compareByDescending<Worlds.WorldInfo> { it.isActive }.thenBy { it.name }
+                )
+                _activeWorldName.value = active
+                // 两套 level.dat 格式完全不同（基岩小端 / Java gzip 大端），按核心类型只读一套
+                val javaCore = isJavaCore()
+                _activeWorldMeta.value = withContext(Dispatchers.IO) {
+                    if (javaCore) null
+                    else runCatching { worldManager.readBedrockMeta(dirName, active) }.getOrNull()
+                }
+                _activeJavaWorldMeta.value = withContext(Dispatchers.IO) {
+                    if (!javaCore) null
+                    else runCatching { worldManager.readJavaMeta(dirName, active) }.getOrNull()
+                }
+                // 「用户当时要的」单独一份：世界没生成时只有它有值
+                _activeWorldPlan.value = withContext(Dispatchers.IO) {
+                    runCatching { WorldGenLedger.get(worldManager.serverDir(dirName), active) }.getOrNull()
+                }
+                // 维度也要跟着当前世界刷新，否则切到未生成的世界后仍显示上一个世界的维度
+                if (javaCore) {
+                    _javaDimensions.value = withContext(Dispatchers.IO) {
+                        runCatching { worldManager.javaDimensionDirs(dirName, active) }
+                            .getOrDefault(emptyList())
+                    }
+                }
             } catch (e: Exception) {
                 _errorFlow.tryEmit("读取世界列表失败：${e.message}")
             } finally {
@@ -5319,7 +5418,6 @@ class McViewModel(
      * 服务端运行中时改动不会立刻生效，需要重启，这里明确提示而不是静默写入。
      */
     fun setActiveWorld(name: String) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         val dirName = activeDirName() ?: return
         viewModelScope.launch {
             try {
@@ -5350,24 +5448,593 @@ class McViewModel(
 
     /** 清空 level-seed，让服务端下次生成地图时使用随机种子。 */
     fun clearWorldSeed() {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         val dirName = activeDirName() ?: return
         viewModelScope.launch {
             try {
                 val ok = withContext(Dispatchers.IO) { worldManager.clearLevelSeed(dirName) }
-                if (ok) _messageFlow.tryEmit("已清空世界种子，下次生成地图时使用随机种子")
-                else _errorFlow.tryEmit("清空种子失败：当前服务端类型不支持该设置")
+                if (ok) {
+                    _messageFlow.tryEmit(str(R.string.wl_seed_cleared))
+                    // 必须重载：卡片上的种子来自 level.dat / properties 的快照，
+                    // 不清空这个快照的话界面上还挂着清空前的旧种子（真机实测）。
+                    loadWorlds()
+                } else {
+                    _errorFlow.tryEmit(str(R.string.wl_seed_clear_failed))
+                }
             } catch (e: Exception) {
-                _errorFlow.tryEmit("清空种子失败：${e.message}")
+                _errorFlow.tryEmit("${str(R.string.wl_seed_clear_failed)}：${e.message}")
             }
         }
     }
 
+    /**
+     * 新建一个世界（基岩版）。
+     *
+     * 生成方式（普通/超平坦/虚空）写在**新世界目录的 `level.dat`** 里，不经过
+     * `server.properties`（BDS 没有 `level-type`）。[BdsWorldGen] 只写 5 个字段，
+     * BDS 首次启动就会按它生成地形——实测把原来的"两段式"省掉了。
+     *
+     * 种子允许数字或文本；文本会被 BDS 按 Java `String.hashCode` 转成 int64（实测 1.19~1.26
+     * 一致），这里直接按同一规则算好写进 `level.dat`，UI 也能提前展示"将被保存为 xxx"。
+     */
+    fun createWorld(
+        name: String,
+        seed: String,
+        generator: BdsWorldGen.Generator = BdsWorldGen.Generator.NORMAL,
+        layers: List<BdsWorldGen.Layer> = BdsWorldGen.DEFAULT_FLAT
+    ) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.wl_create))) return
+        // 超平坦层里的方块名先对一遍原版清单：BDS 遇到不认识的方块不会报错，
+        // 只会把那一层当成空气，世界生成出来缺层，而生成参数写过就改不了了。
+        if (generator == BdsWorldGen.Generator.FLAT) {
+            val unknown = com.mineserve.mobile.data.BlockIds
+                .unknownVanilla(app, layers.map { it.block })
+            if (unknown.isNotEmpty()) {
+                _errorFlow.tryEmit(
+                    str(R.string.wl_create_fail_unknown_block, unknown.take(3).joinToString(", "))
+                )
+                return
+            }
+        }
+        viewModelScope.launch {
+            try {
+                val failure = withContext(Dispatchers.IO) {
+                    worldManager.createBedrockWorld(dirName, name, seed, generator, layers)
+                }
+                when (failure) {
+                    null -> {
+                        _messageFlow.tryEmit(str(R.string.wl_created, Worlds.sanitize(name)))
+                        loadWorlds()
+                    }
+                    WorldManager.CreateFailure.BadName ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_name))
+                    WorldManager.CreateFailure.NameTaken ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_taken))
+                    WorldManager.CreateFailure.ServerRunning ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_running))
+                    WorldManager.CreateFailure.WriteFailed ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_write))
+                    WorldManager.CreateFailure.NotBedrock ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_bedrock))
+                    WorldManager.CreateFailure.NotJava ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_java))
+                    WorldManager.CreateFailure.LevelDatFailed ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_leveldat))
+                    WorldManager.CreateFailure.BadBiome ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_biome))
+                    WorldManager.CreateFailure.BadLayer ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_layer))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.wl_create_fail_write)}：${e.message}")
+            }
+        }
+    }
+
+    /** 文本种子会被 BDS 存成这个整数；空输入返回 null（随机）。 */
+    fun previewSeed(raw: String): Long? = worldManager.resolveSeed(raw)
+
+    /** 把用户输入的层配置解析成层列表；格式错误返回 null。 */
+    fun previewLayers(text: String): List<BdsWorldGen.Layer>? = BdsWorldGen.parseLayers(text)
+
+    // ── Java 版：世界 / 数据包 / 资源包 ─────────────────────────
+
+    private val _javaDataPacks = MutableStateFlow<List<JavaWorlds.DataPack>>(emptyList())
+    val javaDataPacks: StateFlow<List<JavaWorlds.DataPack>> = _javaDataPacks.asStateFlow()
+
+    private val _javaAddonsLoading = MutableStateFlow(false)
+    val javaAddonsLoading: StateFlow<Boolean> = _javaAddonsLoading.asStateFlow()
+
+    /** 资源包配置（Java 侧单包模型）；基岩系或读不到时为 null。 */
+    private val _resourcePack = MutableStateFlow<JavaResourcePack.Config?>(null)
+    val resourcePack: StateFlow<JavaResourcePack.Config?> = _resourcePack.asStateFlow()
+
+    /** 资源包配置的静态校验问题（空 = 没有明显问题）。 */
+    private val _resourcePackIssues = MutableStateFlow<List<String>>(emptyList())
+    val resourcePackIssues: StateFlow<List<String>> = _resourcePackIssues.asStateFlow()
+
+    /** 当前世界可单独重置的维度。 */
+    private val _javaDimensions = MutableStateFlow<List<JavaWorlds.DimensionDir>>(emptyList())
+    val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> = _javaDimensions.asStateFlow()
+
+    /**
+     * 只刷新「维度」这一块（数据包 / 资源包不动）。
+     *
+     * 抽出来是因为它必须跟着**当前世界**走：只靠 [loadJavaAddons] 的
+     * `LaunchedEffect(isBootstrapped)` 触发，切世界后维度列表会残留上一个世界的
+     * 下界 / 末地，露出一个点了没反应的「重置维度」按钮（真机实测）。
+     */
+    fun refreshJavaDimensions() {
+        val dirName = activeDirName() ?: return
+        if (!isJavaCore()) return
+        viewModelScope.launch {
+            val world = withContext(Dispatchers.IO) { runCatching { worldManager.readLevelName(dirName) }.getOrNull() }
+                ?: return@launch
+            _javaDimensions.value = withContext(Dispatchers.IO) {
+                runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
+            }
+        }
+    }
+
+    /** 读 Java 侧的世界附加内容（数据包 + 资源包 + 维度）。 */
+    fun loadJavaAddons() {
+        refreshActiveCore()
+        val dirName = activeDirName() ?: return
+        if (!isJavaCore()) return
+        viewModelScope.launch {
+            _javaAddonsLoading.value = true
+            try {
+                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+                _javaDataPacks.value = withContext(Dispatchers.IO) {
+                    runCatching { worldManager.scanJavaDataPacks(dirName, world) }.getOrDefault(emptyList())
+                }
+                _javaDimensions.value = withContext(Dispatchers.IO) {
+                    runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
+                }
+                val cfg = withContext(Dispatchers.IO) {
+                    runCatching { worldManager.readResourcePack(dirName) }.getOrNull()
+                }
+                _resourcePack.value = cfg
+                _resourcePackIssues.value = cfg?.let { JavaResourcePack.issues(it) }.orEmpty()
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.jv_load_failed)}：${e.message}")
+            } finally {
+                _javaAddonsLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * 新建 Java 版世界：只写 `server.properties` 的四个键，服务端下次启动生成。
+     *
+     * 生成参数只对新世界生效，已有世界改它们无效（实测 1.20.4 / 26.3 一致）。
+     */
+    fun createJavaWorld(
+        name: String,
+        seed: String,
+        type: JavaWorldGen.LevelType,
+        layers: List<BdsWorldGen.Layer>,
+        biome: String
+    ) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.wl_create))) return
+        viewModelScope.launch {
+            try {
+                val failure = withContext(Dispatchers.IO) {
+                    worldManager.createJavaWorld(dirName, name, seed, type, layers, biome)
+                }
+                when (failure) {
+                    null -> {
+                        _messageFlow.tryEmit(str(R.string.wl_jv_created, Worlds.sanitize(name)))
+                        loadWorlds()
+                    }
+                    WorldManager.CreateFailure.BadName ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_name))
+                    WorldManager.CreateFailure.NameTaken ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_taken))
+                    WorldManager.CreateFailure.ServerRunning ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_running))
+                    WorldManager.CreateFailure.WriteFailed ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_write))
+                    WorldManager.CreateFailure.NotJava ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_java))
+                    WorldManager.CreateFailure.NotBedrock ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_bedrock))
+                    WorldManager.CreateFailure.LevelDatFailed ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_leveldat))
+                    WorldManager.CreateFailure.BadBiome ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_biome))
+                    WorldManager.CreateFailure.BadLayer ->
+                        _errorFlow.tryEmit(str(R.string.wl_create_fail_layer))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.wl_create_fail_write)}：${e.message}")
+            }
+        }
+    }
+
+    /** 启用 / 停用一个世界级数据包（改 `level.dat:DataPacks`）。 */
+    fun setJavaDataPackEnabled(pack: JavaWorlds.DataPack, enabled: Boolean) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(if (enabled) R.string.jv_enable else R.string.jv_disable))) return
+        viewModelScope.launch {
+            try {
+                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+                val ok = withContext(Dispatchers.IO) {
+                    worldManager.setJavaDataPackEnabled(dirName, world, pack, enabled)
+                }
+                if (ok) {
+                    _messageFlow.tryEmit(
+                        str(if (enabled) R.string.jv_enabled else R.string.jv_disabled, pack.name)
+                    )
+                    loadJavaAddons()
+                } else {
+                    _errorFlow.tryEmit(str(R.string.jv_write_failed))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.jv_write_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /** 从系统选择器导入数据包 zip（拷进 `world/datapacks/`）。 */
+    fun importJavaDataPackFromUri(uri: Uri, displayName: String) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.jv_import))) return
+        viewModelScope.launch {
+            var temp: java.io.File? = null
+            try {
+                temp = withContext(Dispatchers.IO) {
+                    val f = java.io.File(app.cacheDir, "datapack_${System.currentTimeMillis()}.zip")
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        f.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    f.takeIf { it.isFile && it.length() > 0 }
+                }
+                if (temp == null) {
+                    _errorFlow.tryEmit(str(R.string.jv_import_failed))
+                    return@launch
+                }
+                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+                val name = withContext(Dispatchers.IO) {
+                    worldManager.installJavaDataPack(dirName, world, temp)
+                }
+                if (name != null) {
+                    _messageFlow.tryEmit(str(R.string.jv_import_ok, name))
+                    loadJavaAddons()
+                } else {
+                    _errorFlow.tryEmit(str(R.string.jv_import_failed))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.jv_import_failed)}：${e.message}")
+            } finally {
+                runCatching { temp?.delete() }
+            }
+        }
+    }
+
+    /** 保存资源包配置（URL / SHA-1 / ID / 提示语 / 是否强制）。 */
+    fun saveResourcePack(config: JavaResourcePack.Config) {
+        val dirName = activeDirName() ?: return
+        val url = JavaResourcePack.normalizeUrl(config.url)
+        if (url == null) { _errorFlow.tryEmit(str(R.string.jv_rp_bad_url)); return }
+        val sha1 = JavaResourcePack.normalizeSha1(config.sha1)
+        if (sha1 == null) { _errorFlow.tryEmit(str(R.string.jv_rp_bad_sha1)); return }
+        if (!requireServerStopped(str(R.string.jv_rp_title))) return
+        viewModelScope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) {
+                    worldManager.writeResourcePack(dirName, config.copy(url = url, sha1 = sha1))
+                }
+                if (ok) {
+                    _resourcePack.value = config.copy(url = url, sha1 = sha1)
+                    _resourcePackIssues.value = JavaResourcePack.issues(config.copy(url = url, sha1 = sha1))
+                    _messageFlow.tryEmit(str(R.string.jv_rp_saved))
+                } else {
+                    _errorFlow.tryEmit(str(R.string.jv_write_failed))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.jv_write_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /** 从用户选的文件算 SHA-1 并填进资源包配置。 */
+    fun fillResourcePackSha1(uri: Uri) {
+        viewModelScope.launch {
+            try {
+                val hash = withContext(Dispatchers.IO) {
+                    val f = java.io.File(app.cacheDir, "rp_${System.currentTimeMillis()}.zip")
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        f.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    try {
+                        JavaResourcePack.sha1(f)
+                    } finally {
+                        f.delete()
+                    }
+                }
+                val current = _resourcePack.value ?: JavaResourcePack.Config()
+                if (hash == null) {
+                    _errorFlow.tryEmit(str(R.string.jv_rp_sha1_failed))
+                } else {
+                    _resourcePack.value = current.copy(sha1 = hash)
+                    _resourcePackIssues.value = JavaResourcePack.issues(current.copy(sha1 = hash))
+                    _messageFlow.tryEmit(str(R.string.jv_rp_sha1_filled))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.jv_rp_sha1_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /** 重命名世界（目录 + level.dat 的 LevelName 一起改）。 */
+    fun renameWorld(worldName: String, newName: String) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.wl_rename))) return
+        viewModelScope.launch {
+            try {
+                val renamed = withContext(Dispatchers.IO) {
+                    worldManager.renameJavaWorld(dirName, worldName, newName)
+                }
+                if (renamed != null) {
+                    _messageFlow.tryEmit(str(R.string.wl_renamed, renamed))
+                    loadWorlds()
+                } else {
+                    _errorFlow.tryEmit(str(R.string.wl_rename_failed))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.wl_rename_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /** 只重置一个维度（下界 / 末地），先备份。 */
+    fun resetDimension(worldName: String, key: String) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.wl_reset_dim))) return
+        viewModelScope.launch {
+            try {
+                val result = worldManager.resetDimension(dirName, worldName, key)
+                when {
+                    result.backupFailed -> _errorFlow.tryEmit(str(R.string.wl_backup_failed))
+                    result.success -> {
+                        _messageFlow.tryEmit(str(R.string.wl_dim_reset_ok, key))
+                        loadWorlds()
+                        loadJavaAddons()
+                    }
+                    else -> _errorFlow.tryEmit(str(R.string.wl_dim_reset_failed))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.wl_dim_reset_failed)}：${e.message}")
+            }
+        }
+    }
+
+    // ── 附加包（行为包 / 资源包） ────────────────────────────────
+
+    private val _addons = MutableStateFlow<BdsPacks.Scan?>(null)
+    val addons: StateFlow<BdsPacks.Scan?> = _addons.asStateFlow()
+
+    private val _addonsLoading = MutableStateFlow(false)
+    val addonsLoading: StateFlow<Boolean> = _addonsLoading.asStateFlow()
+
+    /**
+     * `texturepack-required` 的当前值；null = 当前核心不支持（PNX 走 pnx.yml）。
+     *
+     * 它是 `server.properties` 里唯一与资源包有关的键，语义是"进服前必须下载本服登记的
+     * 全部资源包"。UI 上必须与资源包清单一起看：开着它却一个资源包都没登记，等于什么都没做。
+     */
+    private val _texturePackRequired = MutableStateFlow<Boolean?>(null)
+    val texturePackRequired: StateFlow<Boolean?> = _texturePackRequired.asStateFlow()
+
+    /**
+     * 重新扫描附加包。
+     *
+     * 扫描范围包含全服目录与世界目录：BDS 对两处都会加载，且**世界目录里的同名包优先**
+     * （实测，见 `docs/BDS-ADDONS-WORLDS-VERIFICATION.md` §11.3）。
+     */
+    fun loadAddons() {
+        refreshActiveCore()
+        val dirName = activeDirName() ?: return
+        viewModelScope.launch {
+            _addonsLoading.value = true
+            try {
+                val scan = withContext(Dispatchers.IO) {
+                    val world = worldManager.readLevelName(dirName)
+                    BdsPacks.scan(
+                        serverDir = worldManager.serverDir(dirName),
+                        worldName = world,
+                        builtinUuids = BdsPacks.readBuiltinUuids(worldManager.serverDir(dirName))
+                    )
+                }
+                _addons.value = scan
+                _texturePackRequired.value = withContext(Dispatchers.IO) {
+                    runCatching { worldManager.readTexturePackRequired(dirName) }.getOrNull()
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.ad_load_failed)}：${e.message}")
+            } finally {
+                _addonsLoading.value = false
+            }
+        }
+    }
+
+    /**
+     * 启用 / 停用某个包：只改当前世界的 `world_*_packs.json`。
+     *
+     * BDS 只在启动时读这两个文件，运行中改动不会生效，所以运行中直接拒绝而不是静默写入。
+     */
+    fun setAddonEnabled(pack: BdsPacks.Pack, enabled: Boolean) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(if (enabled) R.string.ad_enable else R.string.ad_disable))) return
+        viewModelScope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) {
+                    val world = worldManager.readLevelName(dirName)
+                    BdsPacks.setEnabled(
+                        worldDir = worldManager.worldDir(dirName, world),
+                        kind = pack.kind,
+                        entry = BdsPacks.Entry(pack.uuid, pack.version),
+                        enabled = enabled
+                    )
+                }
+                if (ok) {
+                    _messageFlow.tryEmit(str(if (enabled) R.string.ad_enabled else R.string.ad_disabled, pack.name))
+                    loadAddons()
+                } else {
+                    _errorFlow.tryEmit(str(R.string.ad_write_failed))
+                }
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.ad_write_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 切换「强制客户端下载资源包」（`texturepack-required`）。
+     *
+     * 只写 `server.properties`，BDS 每次启动会把它同步进 `level.dat:texturePacksRequired`。
+     * 开启时如果世界一个资源包都没登记，提示语要说清楚"开了但没东西可下发"，否则用户会
+     * 以为是客户端坏了。
+     */
+    fun setTexturePackRequired(required: Boolean) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.ad_tpr_title))) return
+        viewModelScope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) {
+                    worldManager.setTexturePackRequired(dirName, required)
+                }
+                if (!ok) {
+                    _errorFlow.tryEmit(str(R.string.ad_write_failed))
+                    return@launch
+                }
+                _texturePackRequired.value = required
+                val empty = _addons.value?.enabledResource?.isEmpty() ?: true
+                _messageFlow.tryEmit(
+                    when {
+                        required && empty -> str(R.string.ad_tpr_on_empty)
+                        required -> str(R.string.ad_tpr_on, _addons.value?.enabledResource?.size ?: 0)
+                        else -> str(R.string.ad_tpr_off)
+                    }
+                )
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.ad_write_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 安装包目录里躺着的压缩包（`.mcpack` / `.mcaddon`）。
+     *
+     * 装好后把原压缩包挪到 `.minexa/imported-archives/`：它留在 `behavior_packs/` 里
+     * 既不会被 BDS 正确读取（`.mcaddon`），也会让下次扫描重复列出同一个包。
+     */
+    fun installAddonArchive(archive: BdsPacks.Archive) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.ad_install_archive))) return
+        viewModelScope.launch {
+            try {
+                val out = withContext(Dispatchers.IO) {
+                    installArchiveFile(dirName, archive.file, archiveOut = true)
+                }
+                reportArchiveInstall(out)
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.ad_install_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 从系统文件选择器导入 `.mcpack` / `.mcaddon`。
+     *
+     * 先复制到 cache：SAF 给的流只能顺序读一次，而解压要按条目随机定位，
+     * 且 [BdsPacks.installArchive] 需要真实文件路径。
+     */
+    fun importAddonFromUri(uri: Uri, displayName: String) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.ad_import_archive))) return
+        viewModelScope.launch {
+            var temp: java.io.File? = null
+            try {
+                temp = withContext(Dispatchers.IO) {
+                    val name = displayName.ifBlank { "addon_${System.currentTimeMillis()}.mcpack" }
+                    val f = java.io.File(app.cacheDir, "addon_" + System.currentTimeMillis() + "_" +
+                        name.substringAfterLast('/').takeLast(40))
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        f.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    f.takeIf { it.isFile && it.length() > 0 }
+                }
+                if (temp == null) {
+                    _errorFlow.tryEmit(str(R.string.ad_install_failed))
+                    return@launch
+                }
+                val out = withContext(Dispatchers.IO) {
+                    installArchiveFile(dirName, temp, archiveOut = false)
+                }
+                reportArchiveInstall(out)
+            } catch (e: Exception) {
+                _errorFlow.tryEmit("${str(R.string.ad_install_failed)}：${e.message}")
+            } finally {
+                runCatching { temp?.delete() }
+            }
+        }
+    }
+
+    /** 解压安装的实际执行（同步，调用方放到 IO 线程）。 */
+    private fun installArchiveFile(
+        dirName: String,
+        archive: java.io.File,
+        archiveOut: Boolean
+    ): BdsPacks.ArchiveInstall {
+        val serverDir = worldManager.serverDir(dirName)
+        val out = if (archiveOut) {
+            java.io.File(serverDir, ".minexa/imported-archives/" + archive.name)
+        } else {
+            null
+        }
+        return BdsPacks.installArchive(
+            archive = archive,
+            destFor = { kind -> java.io.File(serverDir, kind.dirName) },
+            archiveOut = out
+        )
+    }
+
+    private fun reportArchiveInstall(result: BdsPacks.ArchiveInstall) {
+        when {
+            result.success -> {
+                val names = result.installed.map { it.name }.distinct().take(3).joinToString("、")
+                _messageFlow.tryEmit(str(R.string.ad_install_ok, names))
+                loadAddons()
+            }
+            result.skipped.isNotEmpty() ->
+                _messageFlow.tryEmit(str(R.string.ad_install_skipped, result.skipped.first()))
+            else -> _errorFlow.tryEmit(result.error ?: str(R.string.ad_install_failed))
+        }
+    }
+
+    /**
+     * 世界导出的前置检查，**必须在拉起系统保存框之前调用**。
+     *
+     * 旧流程是先 `CreateDocument` 让用户挑位置（系统立刻建出一个空文件），
+     * 到 ViewModel 里才检查运行状态 → 被拒绝时那个 0 字节的 zip 已经留在
+     * 用户选的目录里了（实测 `/sdcard/Download/世界_t1.zip` 0 B）。
+     */
+    fun canExportWorldNow(): Boolean = requireServerStopped("导出世界")
+
     /** 导出世界到用户选择的位置（先打包到导出目录，再复制到 SAF 目标）。 */
     fun exportWorldToUri(worldName: String, uri: Uri) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         val dirName = activeDirName() ?: return
-        if (!requireServerStopped("导出世界")) return
+        if (!requireServerStopped("导出世界")) {
+            // 兜底：万一还有别的入口绕过了前置检查，这里把空文档清掉，别留 0 字节垃圾
+            runCatching {
+                app.contentResolver.openOutputStream(uri)?.close()
+                app.contentResolver.delete(uri, null, null)
+            }
+            return
+        }
         viewModelScope.launch {
             try {
                 val path = worldManager.exportWorld(dirName, worldName)
@@ -5389,7 +6056,6 @@ class McViewModel(
      * 条目头部（[Worlds.inspectZip] 会独立打开一次）。
      */
     fun importWorldFromUri(uri: Uri, preferredName: String) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         val dirName = activeDirName() ?: return
         if (!requireServerStopped("导入世界")) return
         viewModelScope.launch {
@@ -5442,7 +6108,6 @@ class McViewModel(
      * 也避免把「已删除但没备份」提示成「已中止」。
      */
     fun resetWorld(worldName: String) {
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         val dirName = activeDirName() ?: return
         if (!requireServerStopped("重置世界")) return
         viewModelScope.launch {
@@ -5472,7 +6137,6 @@ class McViewModel(
 
     /** 加载崩溃报告列表 */
     fun loadCrashReports() {
-        if (!isBootstrapped.value) return
         viewModelScope.launch {
             try {
                 _crashReports.value = withContext(Dispatchers.IO) {
@@ -5485,6 +6149,10 @@ class McViewModel(
                 _errorFlow.tryEmit(str(R.string.s287, e.message))
             }
         }
+        // 进崩溃页时顺带到点刷新在线规则包（24h 节流；失败静默，不影响本地分析）
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { crashKnowledgeBase.refreshIfStale() }
+        }
     }
 
     /** 当前查看的崩溃报告全文（供 UI 展示） */
@@ -5492,6 +6160,69 @@ class McViewModel(
     val currentCrashContent: StateFlow<String?> = _currentCrashContent.asStateFlow()
     private val _currentCrashAnalysis = MutableStateFlow<CrashReportAnalyzer.Analysis?>(null)
     val currentCrashAnalysis: StateFlow<CrashReportAnalyzer.Analysis?> = _currentCrashAnalysis.asStateFlow()
+
+    /** 结构化报告（分析页主数据源）；生成失败时为 null，UI 退回纯规则归因 */
+    private val _currentCrashInsight = MutableStateFlow<CrashInsight?>(null)
+    val currentCrashInsight: StateFlow<CrashInsight?> = _currentCrashInsight.asStateFlow()
+
+    /** 崩溃弹窗「一键修复证书库」的进度与结果（弹窗内就地展示）。 */
+    private val _trustStoreRepair = MutableStateFlow(TrustStoreRepairUi())
+    val trustStoreRepair: StateFlow<TrustStoreRepairUi> = _trustStoreRepair.asStateFlow()
+
+    /** 本次启动的日志视图（关键日志 / 全部日志）；与报告 sidecar 一一对应 */
+    private val _currentCrashLog = MutableStateFlow<CrashLogView?>(null)
+    val currentCrashLog: StateFlow<CrashLogView?> = _currentCrashLog.asStateFlow()
+
+    /** L2 历史案例库 + L3 在线规则包（懒加载，避免拖慢 ViewModel 构建） */
+    private val crashCaseStore by lazy { CrashCaseStore(File(app.filesDir, "crash-cases")) }
+    private val crashInsightEngine by lazy { CrashInsightEngine(crashCaseStore) }
+    private val crashKnowledgeBase by lazy { CrashKnowledgeBase(app) }
+
+    /** 崩溃分析用的环境快照：从用户配置读取，比从日志里猜更可靠。 */
+    private fun crashEnv(): EnvInfo {
+        val c = config.value
+        return EnvInfo(
+            core = c.activeCoreName ?: "unknown",
+            coreVersion = c.mcVersion,
+            mcVersion = c.mcVersion,
+            javaVersion = c.selectedJavaVersion.displayName.removePrefix("Java "),
+            javaVendor = c.selectedJavaVendor.logName,
+            heapMb = c.maxHeapMb,
+            android = android.os.Build.VERSION.RELEASE.orEmpty(),
+            abi = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+            device = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
+        )
+    }
+
+    /**
+     * 生成结构化报告（失败返回 null，绝不阻塞弹窗）。
+     * @param logText 必须是**本次启动**的日志切片（会话日志或 sidecar `.log`）
+     */
+    private fun buildInsight(
+        crashId: String,
+        exitCode: Int,
+        logText: String,
+        sessionId: String,
+        startedAt: Long,
+        endedAt: Long,
+        fallbackText: String,
+        truncated: Boolean = false,
+        fallbackToLatestLog: Boolean = false
+    ): CrashInsight? = runCatching {
+        crashInsightEngine.analyze(
+            CrashInsightEngine.Input(
+                crashId = crashId,
+                env = crashEnv(),
+                trigger = TriggerInfo(exitCode = exitCode),
+                logText = logText.ifBlank { fallbackText },
+                sessionId = sessionId,
+                startedAt = startedAt,
+                endedAt = if (endedAt > 0L) endedAt else System.currentTimeMillis(),
+                truncated = truncated,
+                fallbackToLatestLog = fallbackToLatestLog
+            )
+        )
+    }.getOrNull()
 
     /** Shows a structured report when validation fails before a process can create its own crash file. */
     private fun showStartupFailureReport(error: Throwable) {
@@ -5504,6 +6235,8 @@ class McViewModel(
         }
         _currentCrashContent.value = text
         _currentCrashAnalysis.value = CrashReportAnalyzer.analyze(text)
+        _currentCrashInsight.value = null
+        _currentCrashLog.value = null
     }
 
     private fun showStartupFailureReport(failure: McServerController.StartupFailure) {
@@ -5516,25 +6249,123 @@ class McViewModel(
                 appendLine(str(R.string.startup_report_reason, failure.detail))
                 appendLine(str(R.string.startup_report_hint))
             }
-            withContext(kotlinx.coroutines.Dispatchers.Main) {
+            val crashId = failure.reportPath?.let { File(it).name.removeSuffix(".txt") }
+                ?: "live_${System.currentTimeMillis()}"
+            // 本次启动的会话切片（启动即失败时可能只有应用侧几行，但依然是有效证据）
+            val session = repo.termuxRuntime.currentLaunchSession()
+            val sessionLog = session?.let { repo.termuxRuntime.readSessionLog(it) }.orEmpty()
+            val logView = sessionLog.takeIf { it.isNotBlank() }?.let {
+                CrashLogView.from(
+                    scopeId = session?.id.orEmpty(),
+                    startedAt = session?.startedAt ?: 0L,
+                    logText = it
+                )
+            }
+            val insight = buildInsight(
+                crashId = crashId,
+                exitCode = failure.code,
+                logText = sessionLog,
+                sessionId = session?.id.orEmpty(),
+                startedAt = session?.startedAt ?: 0L,
+                endedAt = System.currentTimeMillis(),
+                fallbackText = text
+            )
+            if (insight != null && failure.reportPath != null) {
+                crashReportManager.writeInsight(crashId, CrashInsight.encode(insight))
+            }
+            withContext(Dispatchers.Main) {
                 _currentCrashContent.value = text
                 _currentCrashAnalysis.value = CrashReportAnalyzer.analyze(text)
+                _currentCrashInsight.value = insight
+                _currentCrashLog.value = logView
             }
         }
     }
 
-    /** 读取崩溃报告全文 */
+    /**
+     * 读取崩溃报告全文。
+     *
+     * 日志视图只从该报告的会话 sidecar（`{crashId}.log`）读取 —— 那是崩溃当时冻结的
+     * 本次启动日志，App 重启后再打开也不会掺入任何历史启动内容。
+     */
     fun readCrashReport(fileName: String) {
         viewModelScope.launch {
             try {
-                _currentCrashContent.value = withContext(Dispatchers.IO) { java.io.File(_crashReports.value.firstOrNull { it.fileName == fileName }?.path ?: "").takeIf { it.isFile }?.readText() }
-                _currentCrashAnalysis.value = _currentCrashContent.value?.let(CrashReportAnalyzer::analyze)
-                if (_currentCrashContent.value == null) {
-                    _errorFlow.tryEmit(str(R.string.s288))
+                val path = _crashReports.value.firstOrNull { it.fileName == fileName }?.path
+                val text = withContext(Dispatchers.IO) {
+                    path?.let { File(it).takeIf { f -> f.isFile }?.readText() }
                 }
+                if (text == null) {
+                    _errorFlow.tryEmit(str(R.string.s288))
+                    return@launch
+                }
+                val crashId = fileName.removeSuffix(".txt")
+                val loaded = withContext(Dispatchers.IO) {
+                    val sessionLog = crashReportManager.readSessionLogSidecar(crashId)
+                    val insight = crashReportManager.readInsight(crashId)
+                        ?: buildInsight(
+                            crashId = crashId,
+                            exitCode = CrashReportAnalyzer.analyze(text).exitCode ?: -1,
+                            logText = sessionLog,
+                            sessionId = "",
+                            startedAt = 0L,
+                            endedAt = 0L,
+                            fallbackText = text
+                        )?.also { crashReportManager.writeInsight(crashId, CrashInsight.encode(it)) }
+                    val logView = sessionLog.takeIf { it.isNotBlank() }?.let {
+                        CrashLogView.from(
+                            scopeId = insight?.session?.id.orEmpty(),
+                            startedAt = insight?.session?.startedAt ?: 0L,
+                            logText = it
+                        )
+                    }
+                    Triple(insight, logView, text)
+                }
+                _currentCrashContent.value = loaded.third
+                _currentCrashAnalysis.value = CrashReportAnalyzer.analyze(loaded.third)
+                _currentCrashInsight.value = loaded.first
+                _currentCrashLog.value = loaded.second
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s289, e.message))
             }
+        }
+    }
+
+    /** 用户反馈：回写 L2 案例库，让后续相似崩溃的建议更准。 */
+    fun recordCrashFeedback(resolved: Boolean) {
+        val crashId = _currentCrashInsight.value?.crashId ?: return
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { crashCaseStore.recordFeedback(crashId, resolved) }
+        }
+    }
+
+    /**
+     * 崩溃弹窗里的「一键修复」：重装当前 Java + ca-certificates，必要时用本机证书包
+     * 原地重建 cacerts。修复期间弹窗保持打开，结果就地展示。
+     */
+    fun repairJavaTrustStore() {
+        if (_trustStoreRepair.value.running) return
+        val cfg = config.value
+        _trustStoreRepair.value = TrustStoreRepairUi(running = true)
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    repo.termuxRuntime.repairTrustStore(cfg.selectedJavaVersion, cfg.selectedJavaVendor)
+                }.getOrElse { TrustStoreRepair(false, "修复过程出错：${it.message ?: it::class.java.simpleName}") }
+            }
+            _trustStoreRepair.value = TrustStoreRepairUi(running = false, ok = result.ok, message = result.summary)
+            if (result.ok) {
+                // 环境页读的是缓存列表，不刷新会继续显示旧状态。
+                refreshJava()
+            }
+        }
+    }
+
+    /** 手动刷新在线知识库规则包（分析页可选入口，失败静默）。 */
+    fun refreshCrashKnowledge() {
+        viewModelScope.launch(Dispatchers.IO) {
+            val updated = runCatching { crashKnowledgeBase.refresh() }.getOrDefault(false)
+            if (updated) _messageFlow.tryEmit(str(R.string.crash_knowledge_updated))
         }
     }
 
@@ -5542,6 +6373,9 @@ class McViewModel(
     fun clearCrashContent() {
         _currentCrashContent.value = null
         _currentCrashAnalysis.value = null
+        _currentCrashInsight.value = null
+        _currentCrashLog.value = null
+        _trustStoreRepair.value = TrustStoreRepairUi()
     }
 
     /** 删除崩溃报告 */
@@ -5763,10 +6597,6 @@ class McViewModel(
 
     /** 下载服务端核心（使用自定义名称，保存到独立目录），成功返回 true */
     fun downloadCore(customName: String) {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
         if (_isDownloadingCore.value) return
         if (customName.isBlank()) {
             _errorFlow.tryEmit(str(R.string.s295))
@@ -5820,7 +6650,6 @@ class McViewModel(
             _errorFlow.tryEmit(str(R.string.err_core_bds_no_verify))
             return
         }
-        if (!isBootstrapped.value) { _errorFlow.tryEmit(str(R.string.s192)); return }
         viewModelScope.launch {
             try {
                 val serverDir = repo.termuxRuntime.serverDirFor(dirName)
@@ -5894,14 +6723,15 @@ class McViewModel(
                 val core = cfg.installedCores.find { it.name == name }
                     ?: throw RuntimeException(str(R.string.msg_core_not_found, name))
                 val dir = repo.termuxRuntime.serverDirFor(core.dirName)
-                val existed = withContext(Dispatchers.IO) { dir.exists() }
-                if (existed) {
-                    val deleted = withContext(Dispatchers.IO) { dir.deleteRecursively() }
-                    if (!deleted) {
-                        _errorFlow.tryEmit(str(R.string.s299, dir.absolutePath))
-                        return@launch
-                    }
-                } else {
+                // 不能用 exists() + deleteRecursively()：FUSE 上目录会在两步之间消失或被换掉，
+                // 而 Kotlin 的 deleteRecursively 对「根不是目录」是 assert（AssertionError，
+                // catch(Exception) 拦不住）—— 2026-11-13 的实机崩溃就是这么来的。
+                val deleted = withContext(Dispatchers.IO) { FileOps.deleteRecursively(dir) }
+                if (!deleted && FileOps.existsNoFollow(dir)) {
+                    _errorFlow.tryEmit(str(R.string.s299, dir.absolutePath))
+                    return@launch
+                }
+                if (!FileOps.existsNoFollow(dir)) {
                     termux3Log("deleteCore: 目录已不存在，仅清理登记 ${dir.absolutePath}")
                 }
                 // 原子读改写 + 落盘；based on 权威态，不会把陈旧列表写回去
@@ -6083,9 +6913,7 @@ class McViewModel(
     fun deleteFile(file: java.io.File) {
         viewModelScope.launch {
             try {
-                val ok = withContext(Dispatchers.IO) {
-                    if (file.isDirectory) file.deleteRecursively() else file.delete()
-                }
+                val ok = withContext(Dispatchers.IO) { FileOps.deleteRecursively(file) }
                 if (ok) {
                     _messageFlow.tryEmit(str(R.string.s304, file.name))
                     loadFiles(java.io.File(_currentPath.value))
@@ -6144,12 +6972,34 @@ class McViewModel(
                         }
                     }
                 }
-                _messageFlow.tryEmit(str(R.string.s309))
+                // 写完主动扫一次 + 把落盘路径告诉用户。
+                // SAF 写进 Downloads 的文件不会自动进 MediaStore，部分文件管理器
+                // 要等扫描后才显示 —— 这正是「导出成功但找不到文件」的最常见成因。
+                val path = scanExportedUri(uri)
+                _messageFlow.tryEmit(
+                    if (path != null) str(R.string.export_saved_to, path) else str(R.string.s309)
+                )
             } catch (e: Exception) {
                 _errorFlow.tryEmit(str(R.string.s257, e.message))
             }
         }
     }
+
+    /**
+     * 把 SAF 的 `content://` 目标反解成真实路径并触发媒体扫描。
+     *
+     * 只处理最常见的 `primary:`（主存储）docId；反解不出来时返回 null，
+     * 调用方退回普通的「导出完成」提示——不猜路径，避免给出一个错的。
+     */
+    private fun scanExportedUri(uri: Uri): String? = runCatching {
+        val docId = android.provider.DocumentsContract.getDocumentId(uri)
+        val rel = docId.substringAfter(':', missingDelimiterValue = "")
+        if (rel.isBlank()) return@runCatching null
+        val file = java.io.File(android.os.Environment.getExternalStorageDirectory(), rel)
+        if (!file.isFile) return@runCatching null
+        android.media.MediaScannerConnection.scanFile(app, arrayOf(file.absolutePath), null, null)
+        file.absolutePath
+    }.getOrNull()
 
     /** 导出整个服务器核心目录（打包 zip）；目录按当前活动核心的实际位置解析 */
     fun exportServerToUri(uri: android.net.Uri) {
@@ -6312,9 +7162,7 @@ class McViewModel(
         viewModelScope.launch {
             try {
                 val failed = withContext(Dispatchers.IO) {
-                    entries.count { f ->
-                        !(if (f.isDirectory) f.deleteRecursively() else f.delete())
-                    }
+                    entries.count { f -> !FileOps.deleteRecursively(f) }
                 }
                 when {
                     failed == 0 -> _messageFlow.tryEmit(str(R.string.fm_deleted_count, entries.size))
@@ -6362,9 +7210,10 @@ class McViewModel(
         // 把端口改掉之后，只要没再进过那个页面，地址栏、复制出来的地址、以及 STUN 的
         // 转发目标就全部停在旧端口上（默认 25565）。用户看到的「本地地址没跟着变」
         // 就是这个时间差。
-        viewModelScope.launch {
-            app.isBootstrapped.collect { ready -> if (ready) refreshServerPropertiesNow() }
-        }
+        //
+        // 这里**不再等 Termux 初始化完成**：读的是 server.properties 这个纯文本文件，
+        // 与运行时毫无关系。等它只会让「没装环境就改过配置」的用户继续看到旧端口。
+        viewModelScope.launch { refreshServerPropertiesNow() }
         viewModelScope.launch {
             var wasRunning = false
             serverState.collect { state ->
@@ -6510,7 +7359,17 @@ class McViewModel(
     /** 设置后台周期保活：开启时调度 WorkManager 周期任务，关闭时取消 */
     fun setKeepAliveEnabled(v: Boolean) {
         metaPrefs().edit().putBoolean(BootReceiver.KEY_KEEP_ALIVE, v).apply()
-        if (v) scheduleKeepAlive() else cancelKeepAlive()
+        if (v) {
+            scheduleKeepAlive()
+            // 主心跳：AlarmManager 10 分钟一次（WorkManager 在 Doze/国产 ROM 下会被推迟）。
+            // 打开开关后立刻排一次并拉起服务，不必等下一次 15 分钟周期。
+            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.resetRestartGuard(app) }
+            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.schedule(app) }
+            startKeepAliveService()
+        } else {
+            cancelKeepAlive()
+            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.cancel(app) }
+        }
     }
 
     /** 拉起前台保活服务 */
@@ -6546,3 +7405,14 @@ class McViewModel(
         androidx.work.WorkManager.getInstance(app).cancelUniqueWork("keep_alive")
     }
 }
+
+/**
+ * 崩溃弹窗里「一键修复证书库」的界面状态。
+ *
+ * [ok] 为 null 且 [running] 为 false 表示还没点过；`ok=true/false` 是上次修复结果。
+ */
+data class TrustStoreRepairUi(
+    val running: Boolean = false,
+    val ok: Boolean? = null,
+    val message: String? = null
+)

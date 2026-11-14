@@ -13,7 +13,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -48,6 +47,9 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 历史版本选择器：「把这台服务器换成另一个 BDS 版本」。
@@ -141,7 +143,7 @@ fun BdsVersionDialog(
                     onValueChange = { query = it },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 4.dp),
+                        .padding(top = 4.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row),
                     placeholder = { Text(stringResource(R.string.bds_version_search), fontSize = 12.sp) },
                     singleLine = true,
                     textStyle = MaterialTheme.typography.bodySmall
@@ -209,7 +211,7 @@ fun BdsVersionDialog(
     }
 
     pendingDowngrade?.let { entry ->
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { pendingDowngrade = null },
             title = {
                 Text(stringResource(R.string.bds_version_downgrade_title), fontSize = 15.sp, fontWeight = FontWeight.Bold)

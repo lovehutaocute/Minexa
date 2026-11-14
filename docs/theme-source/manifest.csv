@@ -1,0 +1,21 @@
+﻿file,name_zh,width_dp,height_dp,png_px_3x,tokens
+01-start-button,启动大按钮,328,46,984x138,secondary controlRadius 16
+02-stop-buttons,停止 / 强制停止,328,46,984x138,tertiary controlRadius 16
+03-env-button,功能按钮（依赖与环境管理）,116,36,348x108,pillStart pillEnd gold controlRadius 14
+04-row-button,长条按钮,328,36,984x108,primaryContainer controlRadius 14
+05-buttons-pair,主按钮 / 次按钮,328,44,984x132,primary outline
+06-list-card,列表卡片,328,96,984x288,glassTop cardRim cardRadius 18
+07-address-card,地址卡片,328,96,984x288,glassTop cardRim primary
+08-hero-card,Hero 状态卡,328,112,984x336,assets.hero pillStart heroTrack heroBarStart heroRadius 18
+09-setting-row,设置行,328,56,984x168,inkTitle outline
+10-input-field,输入框,328,56,984x168,surfaceVariant outline controlRadius 14
+11-segment,分段控件,200,36,600x108,surface primary navRadius 18
+12-switch-row,开关行,328,48,984x144,secondary controlRadius 16
+13-progress,进度条,328,24,984x72,surfaceVariant primary
+14-banner,提示条,328,44,984x132,primaryContainer primary
+15-status-chip,状态胶囊,76,26,228x78,secondaryContainer navRadius 13
+16-header,顶栏,360,72,1080x216,surface onBackground
+17-navbar,底栏,360,80,1080x240,surface navActiveStart
+18-dialog,弹窗,300,176,900x528,surface tertiary dialogRadius 28
+19-terminal,终端日志（不跟随主题）,328,200,984x600,
+20-widget,桌面小组件（不跟随主题）,320,80,960x240,

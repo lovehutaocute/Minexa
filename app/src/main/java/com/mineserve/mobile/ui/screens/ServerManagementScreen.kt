@@ -22,7 +22,6 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.KeyboardArrowUp
 import androidx.compose.material.icons.outlined.Map
 import androidx.compose.material.icons.outlined.Tune
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -55,11 +54,15 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.AppDialog
 
 @Composable
 fun ServerManagementScreen(
     vm: McViewModel,
     onPlugins: () -> Unit,
+    onAddons: () -> Unit,
     onProperties: () -> Unit,
     onIcon: () -> Unit,
     onWorlds: () -> Unit
@@ -122,7 +125,29 @@ fun ServerManagementScreen(
             if (active?.core == com.mineserve.mobile.data.ServerCore.Bds) {
                 BdsCoreCard(vm)
             }
-            ManagementEntry(stringResource(R.string.sm_entry_plugins), stringResource(R.string.sm_entry_plugins_desc), Icons.Outlined.Extension, onPlugins)
+            // 内容扩展入口：按核心能力给，而不是一律显示一个点了才知道不支持的表单。
+            // - 吃插件或模组（Paper/Spigot/Fabric/Forge/PowerNukkitX…）→「模组与插件」
+            // - Java 但两者都不吃（Vanilla / 代理端）：插件页是死的，改给「数据包与资源包」
+            // - 基岩系另有「附加包」（行为包 + 资源包），和 Java 那套不是一回事，所以是**另一个**入口
+            if (active != null) {
+                val content = active.core.supportsPlugins || active.core.supportsMods
+                if (content || !active.core.isBedrock) {
+                    ManagementEntry(
+                        stringResource(if (content) R.string.sm_entry_plugins else R.string.sm_entry_datapacks),
+                        stringResource(if (content) R.string.sm_entry_plugins_desc else R.string.sm_entry_datapacks_desc),
+                        Icons.Outlined.Extension,
+                        onPlugins
+                    )
+                }
+                if (active.core.isBedrock) {
+                    ManagementEntry(
+                        stringResource(R.string.sm_entry_addons),
+                        stringResource(R.string.sm_entry_addons_desc),
+                        Icons.Outlined.Extension,
+                        onAddons
+                    )
+                }
+            }
             // 世界（存档）是服务端目录下的实体，属服务器管理；原先藏在「更多」里，路径太长
             ManagementEntry(stringResource(R.string.sm_entry_worlds), stringResource(R.string.sm_entry_worlds_desc), Icons.Outlined.Map, onWorlds)
             ManagementEntry(stringResource(R.string.sm_entry_props), stringResource(R.string.sm_entry_props_desc), Icons.Outlined.Tune, onProperties)
@@ -170,7 +195,7 @@ private fun EditServerInfoDialog(
     var coreMenuExpanded by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
 
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.sm_dlg_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
         text = {
@@ -180,15 +205,13 @@ private fun EditServerInfoDialog(
                     onValueChange = { name = it },
                     label = { Text(stringResource(R.string.sm_dlg_name)) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                 OutlinedTextField(
                     value = version,
                     onValueChange = { version = it },
                     label = { Text(stringResource(R.string.sm_dlg_version)) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                 OutlinedTextField(
                     value = selectedCore.displayName,
                     onValueChange = {},
@@ -203,8 +226,7 @@ private fun EditServerInfoDialog(
                         }
                     },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                 androidx.compose.material3.DropdownMenu(
                     expanded = coreMenuExpanded,
                     onDismissRequest = { coreMenuExpanded = false }

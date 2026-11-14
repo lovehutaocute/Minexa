@@ -33,9 +33,12 @@ class ServerPropertiesManager(private val termux: TermuxRuntime) {
      * - 文件不存在返回空 Map
      * - 仅按第一个 `=` 分割（值本身可能含有 `=`）
      * - 保持文件中的出现顺序
+     * - **反斜杠转义会被解码**：Java 服务端每次启动都会把 `:` 写成 `\:`，
+     *   不解码的话 `level-type` 读出来是 `minecraft\:flat`、`generator-settings`
+     *   更不是合法 JSON（见 [PropertiesEscape]）
      */
     fun readProperties(dirName: String): Map<String, String> =
-        readDocument(dirName).toMap()
+        readDocument(dirName).toMap().mapValues { PropertiesEscape.decode(it.value) }
 
     /** 读取完整文档（保留注释与行序），文件不存在时返回空文档。 */
     fun readDocument(dirName: String): ServerProperties {
@@ -70,7 +73,9 @@ class ServerPropertiesManager(private val termux: TermuxRuntime) {
             file.parentFile?.mkdirs()
             val doc = if (file.exists()) ServerProperties.parse(file.readText())
             else ServerProperties.of(emptyMap())
-            doc.merge(props)
+            // 写回时只做"必要"的转义（换行/制表/首空格），不复刻服务端把 `:` 写成 `\:` 的行为：
+            // 我们加了会在下次读取时被解码，等于两边互相改写
+            doc.merge(props.mapValues { PropertiesEscape.encode(it.value) })
             file.writeText(doc.toText())
             true
         } catch (e: Exception) {

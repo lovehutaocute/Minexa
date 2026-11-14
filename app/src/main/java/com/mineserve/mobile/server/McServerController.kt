@@ -12,6 +12,7 @@ import com.mineserve.mobile.data.InstalledCore
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.MultiThreadDownloader
+import com.mineserve.mobile.data.FileOps
 import com.mineserve.mobile.data.BdsDigestStore
 import com.mineserve.mobile.data.BdsVersionCatalogLoader
 import com.mineserve.mobile.data.ProotDistro
@@ -350,6 +351,18 @@ class McServerController(
     private val userStopRequestedAtMs: Long
         get() = termux.lastUserStopRequestAtMs
 
+    /**
+     * 崩溃自动重启的起点时刻（= 本次异常退出时刻），0 表示当前不是自动重启。
+     *
+     * 用来区分「停止请求发生在本轮崩溃之前」（历史标记，可以清）与
+     * 「停止请求发生在自动重启的准备期间」（必须中止本次重启）。
+     * 准备期里 `launchMc` 要跑 Java 自动切换、autoRepairRuntime、字体安装、
+     * 旧版 Forge 重部署，可达数十秒到数分钟 —— 这段时间用户点停止，
+     * 旧实现会把它当成历史标记清掉，然后把服务端照常拉起来。
+     */
+    @Volatile
+    private var autoRestartSinceMs = 0L
+
     @Volatile
     private var lastStartupFailure: StartupFailure? = null
     @Volatile
@@ -392,7 +405,7 @@ class McServerController(
                 throw RuntimeException("Termux 环境未初始化，请等待初始化完成")
             }
             termux.fixRootfsPermissions()
-            if (!termux.prepareAptPackages("wget", "fontconfig", "ttf-dejavu")) {
+            if (!termux.prepareAptPackages("fontconfig", "ttf-dejavu")) {
                 return@withContext false
             }
             val steps = InstallStep.values().filter { it != InstallStep.Jdk }
@@ -400,16 +413,18 @@ class McServerController(
                 repo.markStep(step, StepStatus.Active, idx * (100 / steps.size))
                 val code = when (step) {
                     InstallStep.Jdk -> 0
-                    InstallStep.Wget -> termux.execOnce(
+                    // 名字虽叫「字体运行库」，装的确实是字体而不是下载工具：Forge/NeoForge
+                    // 启动时 AWT 要 fontconfig 才能初始化。wget 不再捎带安装（应用内下载
+                    // 全走 MultiThreadDownloader，wget 运行时零调用）。
+                    InstallStep.Fonts -> termux.execOnce(
                         "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--allow-unauthenticated", "-y",
-                        "wget", "fontconfig", "ttf-dejavu"
+                        "fontconfig", "ttf-dejavu"
                     )
-                    InstallStep.Rclone -> if (termux.prepareAptPackages("rclone")) termux.execOnce("apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--allow-unauthenticated", "-y", "rclone") else 1
                     InstallStep.Proot -> if (termux.prepareAptPackages("proot")) termux.execOnce("apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--allow-unauthenticated", "-y", "proot") else 1
                 }
                 if (code == 0) {
                     termux.repairInstalledCommands()
-                    if (step == InstallStep.Wget) {
+                    if (step == InstallStep.Fonts) {
                         termux.repairFontRuntime()
                     }
                 }
@@ -505,14 +520,23 @@ class McServerController(
                         jarPath, serverDir, normalizedConfig.selectedCore.displayName, installerTempDir,
                         normalizedConfig.selectedJavaVersion
                     )
-                    if (code != 0) throw RuntimeException("Forge installer 执行失败 (exit=$code)")
+                    if (code != 0) {
+                        // 半成品目录必须清掉：留着它，下次回前台 scanUnregisteredServers
+                        // 会因「目录里有文件」把它登记成 Forge 核心，用户看到一台
+                        // 点开就报「启动文件缺失」的幽灵服务器。BDS 路径一直这么做。
+                        FileOps.deleteRecursively(serverDir)
+                        throw RuntimeException("Forge installer 执行失败 (exit=$code)")
+                    }
                 }
                 ServerCore.NeoForge -> {
                     val code = runInstallerWithRetry(
                         jarPath, serverDir, normalizedConfig.selectedCore.displayName, installerTempDir,
                         normalizedConfig.selectedJavaVersion
                     )
-                    if (code != 0) throw RuntimeException("NeoForge installer 执行失败 (exit=$code)")
+                    if (code != 0) {
+                        FileOps.deleteRecursively(serverDir)
+                        throw RuntimeException("NeoForge installer 执行失败 (exit=$code)")
+                    }
                 }
                 ServerCore.Quilt -> {
                     // 来宾链路（PRoot）与宿主链路二选一。判定统一走
@@ -545,11 +569,19 @@ class McServerController(
                             "--install-dir=${serverDir.absolutePath}", "--download-server"
                         )
                     }
-                    if (code != 0) throw RuntimeException("Quilt installer 执行失败 (exit=$code)")
+                    if (code != 0) {
+                        FileOps.deleteRecursively(serverDir)
+                        throw RuntimeException("Quilt installer 执行失败 (exit=$code)")
+                    }
                 }
                 else -> {}
             }
-            requireInstallerLaunchArtifacts(normalizedConfig.selectedCore, serverDir)
+            // 产物复检失败同样是「装了一半」：不清理就会留下幽灵服务器
+            runCatching { requireInstallerLaunchArtifacts(normalizedConfig.selectedCore, serverDir) }
+                .onFailure { e ->
+                    FileOps.deleteRecursively(serverDir)
+                    throw e
+                }
             termux.emitLog("[install] ${normalizedConfig.selectedCore.displayName} 安装完成")
         }
         val eula = File(serverDir, "eula.txt")
@@ -683,7 +715,7 @@ class McServerController(
         } catch (e: Throwable) {
             // 新装失败必须把半成品目录清掉：否则列表里会出现一个「有目录、没核心」
             // 的幽灵服务器，启动时才报错，用户还得手动去文件管理里删。
-            runCatching { serverDir.deleteRecursively() }
+            runCatching { FileOps.deleteRecursively(serverDir) }
             throw e
         } finally {
             zip.delete()
@@ -1771,8 +1803,17 @@ class McServerController(
         }
         // 首次安装依赖
         if (!repo.serverState.value.isInstallComplete) {
+            // 手动安装正在进行时，installDependencies() 会因为互斥直接返回 false。
+            // 那不是「安装失败」，只是并发被挡了一下 —— 复用失败文案会把用户
+            // 引向「再装一次」，而实际只需要等它跑完。
+            if (isInstalling) {
+                throw RuntimeException("依赖正在安装中，请等待安装完成后再启动服务器")
+            }
             val ok = installDependencies()
             if (!ok) {
+                if (isInstalling) {
+                    throw RuntimeException("依赖正在安装中，请等待安装完成后再启动服务器")
+                }
                 throw RuntimeException("依赖安装失败，请先安装依赖后再启动服务器")
             }
         } else {
@@ -2012,6 +2053,19 @@ class McServerController(
             // 清掉历史上的「用户已请求停止」标记 —— 否则本轮的真实崩溃会被
             // createExitHandler 判成「用户主动停止」而漏报、也不自动重启。
             // 用户发起的启动在 beginStartRequest() 里已经清过一次。
+            //
+            // 但**准备期间**（本次退出之后）用户点的停止不能当历史标记清掉：
+            // 那会让「点了停止 → 服务端照样启动」，而且下一次真实崩溃还会被
+            // 判成用户主动停止而漏报。
+            val restartSince = autoRestartSinceMs
+            val stopAt = userStopRequestedAtMs
+            if (restartSince != 0L && stopAt != 0L && stopAt >= restartSince) {
+                termux.emitLog("[startMc] 准备期间已收到停止请求，取消本次自动重启")
+                repo.updateServerState {
+                    it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Idle)
+                }
+                return true
+            }
             termux.clearUserStopRequest()
             return false
         }
@@ -2527,7 +2581,14 @@ class McServerController(
                             termux.emitLog("[restart] 已收到停止请求，取消自动重启")
                         } else {
                             kotlinx.coroutines.runBlocking {
-                                launchMc(config, dirName, jarPath)
+                                // 标记本轮自动重启的起点：launchMc 内部准备阶段很长，
+                                // 期间用户点停止必须能中止（见 abortIfStartCancelled）
+                                autoRestartSinceMs = exitAtMs
+                                try {
+                                    launchMc(config, dirName, jarPath)
+                                } finally {
+                                    autoRestartSinceMs = 0L
+                                }
                                 repo.updateServerState { markRunningIfAlive(it) }
                             }
                         }

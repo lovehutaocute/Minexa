@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Folder
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -115,7 +114,7 @@ fun StoragePermissionDialog(
     onConfirm: () -> Unit
 ) {
     val context = LocalContext.current
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.storage_perm_title), fontWeight = FontWeight.Bold, fontSize = 16.sp) },
         text = {
@@ -165,7 +164,7 @@ fun LegacyMigrationDialog(
     onMigrateSkippingUnreadable: () -> Unit = {}
 ) {
     if (candidates.isEmpty() && !running) return
-    AlertDialog(
+    AppDialog(
         onDismissRequest = { if (!running) onLater() },
         title = {
             Text(

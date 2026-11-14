@@ -36,6 +36,9 @@ import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 /**
  * OP 等级指引页：说明原版 MC /op 命令不支持指定等级的限制，并提供两种解决方案。
@@ -75,10 +78,9 @@ fun OpLevelGuideScreen(
             Spacer(Modifier.height(10.dp))
             Button(
                 onClick = onNavigateProperties,
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.fillMaxWidth()
-            ) {
+                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp))) {
                 Text(
                     stringResource(R.string.s1042),
                     color = androidx.compose.ui.graphics.Color.White,

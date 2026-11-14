@@ -183,4 +183,55 @@ class BdsVersionsTest {
         assertFalse(BdsVersionEntry("1.21", BdsChannel.Stable).installable)
         assertTrue(BdsVersionEntry("1.21.84", BdsChannel.Stable).installable)
     }
+
+    /**
+     * 回归：远端清单只给三段版本号、`metadata.json` 又取不回来时，
+     * 按命名规则拼出来的 `bedrock-server-1.26.60.zip` 一定 404
+     * （真实文件名是 `bedrock-server-1.26.60.6.zip`）。
+     * 必须穷举几个构建号，而不是一条 404 就判死。
+     */
+    @Test
+    fun candidatesGuessBuildNumberWhenNoDirectLink() {
+        val urls = BdsVersions.candidates(BdsVersionEntry("1.26.60", BdsChannel.Stable)).map { it.url }
+        assertTrue(urls.first().endsWith("/bedrock-server-1.26.60.zip"))
+        assertTrue(
+            "缺少构建号穷举，1.26.60 会直接单源 404：$urls",
+            urls.contains(
+                "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.26.60.6.zip"
+            )
+        )
+        // 已经带构建号的版本不该再瞎猜
+        val fixed = BdsVersions.candidates(BdsVersionEntry("1.21.84.1", BdsChannel.Stable)).map { it.url }
+        assertEquals(1, fixed.size)
+        // 清单给了直链时优先用它，不做构建号穷举
+        // （末段补零变体 `…60.6` → `…60.06` 是既有规则，最多再多一条）
+        val authoritative = BdsVersions.candidates(
+            BdsVersionEntry(
+                "1.26.60",
+                BdsChannel.Stable,
+                url = "https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.26.60.6.zip"
+            )
+        ).map { it.url }
+        assertEquals("https://www.minecraft.net/bedrockdedicatedserver/bin-linux/bedrock-server-1.26.60.6.zip", authoritative.first())
+        assertFalse("有直链时不该再穷举构建号：$authoritative", authoritative.any { it.endsWith("1.26.60.3.zip") })
+    }
+
+    /** 远端清单/元数据要能绕过被墙的 raw.githubusercontent.com */
+    @Test
+    fun remoteMirrorsFallBackToProxyAndGithubApi() {
+        val raw = "https://raw.githubusercontent.com/EndstoneMC/bedrock-server-data" +
+            "/v2/release/1.26.60/metadata.json"
+        val mirrors = BdsVersionCatalogLoader.mirrorUrls(raw)
+        assertEquals(raw, mirrors.first())
+        assertTrue(mirrors.any { it.startsWith("https://gh-proxy.com/") })
+        assertTrue(
+            "缺 GitHub 内容接口兜底：$mirrors",
+            mirrors.contains(
+                "https://api.github.com/repos/EndstoneMC/bedrock-server-data" +
+                    "/contents/release/1.26.60/metadata.json?ref=v2"
+            )
+        )
+        // 非 raw 地址（官方 CDN / links 接口）没有等价镜像，保持单条
+        assertEquals(1, BdsVersionCatalogLoader.mirrorUrls("https://www.minecraft.net/x.zip").size)
+    }
 }

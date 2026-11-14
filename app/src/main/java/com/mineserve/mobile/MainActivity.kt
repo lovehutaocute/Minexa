@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
 import com.mineserve.mobile.ui.McApp
 import com.mineserve.mobile.ui.theme.MineServeMobileTheme
@@ -87,7 +89,10 @@ class MainActivity : ComponentActivity() {
             McApplication.get().requestOpenUpdate()
         }
         setContent {
-            MineServeMobileTheme {
+            // 主题包是全局状态：切换后这里重组，整棵树换肤（不重建 Activity）。
+            val skinState by com.mineserve.mobile.McApplication.get(this@MainActivity)
+                .skinRepository.state.collectAsState()
+            MineServeMobileTheme(skin = skinState.active, glassEnabled = skinState.glassEnabled) {
                 // 显式给出书写方向：虽然 Compose 会从 Configuration 推断，但这里再钉一次，
                 // 保证「切到波斯语 → 整棵树（含弹窗、抽屉这类子组合）立即 RTL」不依赖平台推断。
                 androidx.compose.runtime.CompositionLocalProvider(

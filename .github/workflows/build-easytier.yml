@@ -26,10 +26,20 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build JNI (arm64-v8a)
     runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # workflow_dispatch 的输入必须经 env 中转再进 shell：
+    # 直接 `VERSION="${{ inputs.version }}"` 时，填 `x"; <cmd>; #` 就能在 runner 上执行任意命令
+    env:
+      ET_VERSION: ${{ inputs.version }}
+      ET_TAG: ${{ inputs.upload_release }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -72,7 +82,7 @@ jobs:
       - name: Fetch EasyTier source
         run: |
           set -euo pipefail
-          VERSION="${{ inputs.version }}"
+          VERSION="$ET_VERSION"
           curl -sSL --retry 3 -o et.tar.gz "https://codeload.github.com/EasyTier/EasyTier/tar.gz/refs/tags/${VERSION}"
           mkdir -p et
           tar -xzf et.tar.gz -C et --strip-components=1
@@ -152,6 +162,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="${{ inputs.upload_release }}"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "EasyTier engine $TAG" --notes "EasyTier JNI 引擎（arm64-v8a），来源 ${{ inputs.version }}"
+          TAG="$ET_TAG"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "EasyTier engine $TAG" --notes "EasyTier JNI 引擎（arm64-v8a），来源 $ET_VERSION"
           gh release upload "$TAG" $(find et/out -type f -name '*.so') checksums.txt --clobber

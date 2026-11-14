@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Text
@@ -24,6 +23,7 @@ import com.mineserve.mobile.R
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.McViewModel.UpdateUiState
 import com.mineserve.mobile.ui.theme.Indigo
+import com.mineserve.mobile.ui.components.AppDialog
 
 @Composable
 fun UpdateDialog(vm: McViewModel) {
@@ -31,14 +31,14 @@ fun UpdateDialog(vm: McViewModel) {
     val state by vm.updateState.collectAsState()
     if (!visible) return
     when (val current = state) {
-        UpdateUiState.Checking -> AlertDialog(
+        UpdateUiState.Checking -> AppDialog(
             onDismissRequest = vm::dismissUpdateDialog,
             title = { Text(stringResource(R.string.upd_checking)) },
             text = { CircularProgressIndicator() },
             confirmButton = {},
             dismissButton = { TextButton(onClick = vm::dismissUpdateDialog) { Text(stringResource(R.string.upd_cancel)) } }
         )
-        is UpdateUiState.Available -> AlertDialog(
+        is UpdateUiState.Available -> AppDialog(
             onDismissRequest = vm::skipCurrentUpdate,
             title = { Text(stringResource(R.string.upd_found, current.release.tag)) },
             text = {
@@ -65,7 +65,7 @@ fun UpdateDialog(vm: McViewModel) {
             },
             dismissButton = { TextButton(onClick = vm::skipCurrentUpdate) { Text(stringResource(R.string.upd_skip)) } }
         )
-        is UpdateUiState.Downloading -> AlertDialog(
+        is UpdateUiState.Downloading -> AppDialog(
             onDismissRequest = {},
             title = { Text(stringResource(R.string.upd_downloading)) },
             text = {
@@ -76,14 +76,14 @@ fun UpdateDialog(vm: McViewModel) {
             },
             confirmButton = {}
         )
-        is UpdateUiState.Downloaded -> AlertDialog(
+        is UpdateUiState.Downloaded -> AppDialog(
             onDismissRequest = vm::dismissUpdateDialog,
             title = { Text(stringResource(R.string.upd_downloaded)) },
             text = { Text(stringResource(R.string.upd_install_hint)) },
             confirmButton = { TextButton(onClick = { vm.installDownloadedUpdate(current.apkPath) }) { Text(stringResource(R.string.upd_install), color = Indigo) } },
             dismissButton = { TextButton(onClick = vm::dismissUpdateDialog) { Text(stringResource(R.string.upd_install_later)) } }
         )
-        is UpdateUiState.Failed -> AlertDialog(
+        is UpdateUiState.Failed -> AppDialog(
             onDismissRequest = vm::dismissUpdateDialog,
             title = { Text(stringResource(R.string.upd_failed)) },
             text = { Text(current.message, fontSize = 13.sp) },

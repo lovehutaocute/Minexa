@@ -5,64 +5,78 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 
-// ── 亮色设计令牌（与参考界面完全对齐） ──────────────────────────────
-val LightBg = Color(0xFFF3F4F8)
-val LightCard = Color(0xFFFFFFFF)
-val LightInk = Color(0xFF1F2430)
-// 次要文字由 #8890A0 加深到 #6B7385：原值在纯白卡片上的对比度只有约 3.2:1，
-// 11sp 的说明文字（全项目用量最大的一档）读起来发灰；新值约 4.8:1，达到 WCAG AA，
-// 色相不变，因此配色观感保持一致。
-val LightMuted = Color(0xFF6B7385)
-// 卡片描边由 #E7E9F0 微微加深：过浅的描边在纯白卡片上几乎不可见，
-// 加深后卡片边界更清晰，同时仍然足够轻，不会显得厚重。
-val LightLine = Color(0xFFE4E7EE)
+// ── 全局配色：全部读「当前生效主题」 ────────────────────────────────
+// 这些名字是 1.5.0 之前就存在的顶层常量，被 20+ 页面直接引用（Indigo 一处就 300+ 次）。
+// 现在它们改成 getter，取值来自 [SkinPalette.current]（由 MineServeMobileTheme 安装）。
+// 调用点零改动，换主题整界面同步 —— 具体理由见 SkinPalette 的注释。
+//
+// 字面色值的唯一出处是 [SkinDefaults]：没有主题包时这里取到的值与 1.5.0 完全一致。
 
-val Indigo = Color(0xFF3B4C9C)
-val IndigoDark = Color(0xFF2B3A7A)
-val LightIndigoSoft = Color(0xFFEEF0FA)
+private val scheme get() = SkinPalette.current.scheme
+private val ext get() = SkinPalette.current.ext
 
-val Mint = Color(0xFF2FBF87)
-val LightMintSoft = Color(0xFFE7F8F0)
-val MintBright = Color(0xFF8CF0C4)
+val LightBg: Color get() = scheme.background
+val LightCard: Color get() = scheme.surface
+val LightInk: Color get() = scheme.onBackground
+val LightMuted: Color get() = scheme.onSurfaceVariant
+val LightLine: Color get() = scheme.outline
 
-val Coral = Color(0xFFF97066)
-val LightCoralSoft = Color(0xFFFDEEEC)
+val Indigo: Color get() = scheme.primary
+val IndigoDark: Color get() = ext.pillEnd
+val LightIndigoSoft: Color get() = scheme.primaryContainer
 
-val LightFieldGray = Color(0xFFF0F1F5)
+val Mint: Color get() = scheme.secondary
+val LightMintSoft: Color get() = scheme.secondaryContainer
+val MintBright: Color get() = scheme.secondary
 
-// ── 深色设计令牌 ─────────────────────────────────────────────────
-val DarkBg = Color(0xFF10131A)
-val DarkCard = Color(0xFF1A1F2B)
-val DarkInk = Color(0xFFE6E9F2)
-val DarkMuted = Color(0xFF9AA3B5)
-val DarkLine = Color(0xFF2A3140)
-val DarkIndigoSoft = Color(0xFF2A3563)
-val DarkMintSoft = Color(0xFF17382C)
-val DarkCoralSoft = Color(0xFF3D2424)
-val DarkFieldGray = Color(0xFF232936)
+val Coral: Color get() = scheme.tertiary
+val LightCoralSoft: Color get() = scheme.tertiaryContainer
+
+val LightFieldGray: Color get() = scheme.surfaceVariant
+
+// ── 深色令牌 ─────────────────────────────────────────────────────
+// 语义在改造后变成了「当前主题的对应角色」：深色模式下取深色令牌，浅色模式下取浅色令牌。
+// 唯一还在用它们的是 Theme.kt 的默认配色（已迁到 SkinDefaults），所以不会出现
+// 「浅色模式读到深色值」的错配。
+val DarkBg: Color get() = scheme.background
+val DarkCard: Color get() = scheme.surface
+val DarkInk: Color get() = scheme.onBackground
+val DarkMuted: Color get() = scheme.onSurfaceVariant
+val DarkLine: Color get() = scheme.outline
+val DarkIndigoSoft: Color get() = scheme.primaryContainer
+val DarkMintSoft: Color get() = scheme.secondaryContainer
+val DarkCoralSoft: Color get() = scheme.tertiaryContainer
+val DarkFieldGray: Color get() = scheme.surfaceVariant
 
 // ── 容器色阶 ──────────────────────────────────────────────────────
-// Material3 的弹窗、下拉菜单、Chip 等组件默认取 surfaceContainer* 系列色，
-// 若不在 colorScheme 里显式覆盖，它们会落到 M3 内置的淡紫灰（#ECE6F0 一类），
-// 与项目的中性灰蓝体系明显不是一套配色。这里把整条容器色阶显式定义出来，
-// 让所有走默认值的组件自动落在同一套配色上，不必逐个调用点去改。
-val LightContainerLowest = Color(0xFFFFFFFF)
-val LightContainerLow = Color(0xFFFAFBFC)
-val LightContainer = Color(0xFFF7F8FA)
-val LightContainerHigh = Color(0xFFF5F6F9)
-val LightContainerHighest = Color(0xFFF0F1F5)
-val LightSurfaceDim = Color(0xFFE9EBF1)
-val LightSurfaceBright = Color(0xFFFFFFFF)
+val LightContainerLowest: Color get() = scheme.surfaceContainerLowest
+val LightContainerLow: Color get() = scheme.surfaceContainerLow
+val LightContainer: Color get() = scheme.surfaceContainer
+val LightContainerHigh: Color get() = scheme.surfaceContainerHigh
+val LightContainerHighest: Color get() = scheme.surfaceContainerHighest
+val LightSurfaceDim: Color get() = scheme.surfaceDim
+val LightSurfaceBright: Color get() = scheme.surfaceBright
 
-val DarkContainerLowest = Color(0xFF0B0E14)
-val DarkContainerLow = Color(0xFF161B25)
-val DarkContainer = Color(0xFF1A1F2B)
-val DarkContainerHigh = Color(0xFF20262F)
-val DarkContainerHighest = Color(0xFF262C38)
-val DarkSurfaceDim = Color(0xFF10131A)
-val DarkSurfaceBright = Color(0xFF343B49)
+val DarkContainerLowest: Color get() = scheme.surfaceContainerLowest
+val DarkContainerLow: Color get() = scheme.surfaceContainerLow
+val DarkContainer: Color get() = scheme.surfaceContainer
+val DarkContainerHigh: Color get() = scheme.surfaceContainerHigh
+val DarkContainerHighest: Color get() = scheme.surfaceContainerHighest
+val DarkSurfaceDim: Color get() = scheme.surfaceDim
+val DarkSurfaceBright: Color get() = scheme.surfaceBright
 
-// ── 终端配色 ─────────────────────────────────────────────────────
+// ── 主题扩展色（角色皮肤） ────────────────────────────────────────
+/** 玻璃卡 1px 内描边。 */
+val ThemeGlassRim: Color get() = ext.glassRim
+val ThemeCardRim: Color get() = ext.cardRim
+val ThemeNavSurface: Color get() = ext.navSurface
+val ThemeTopGlow: Color get() = ext.topGlow
+val ThemeNight: Color get() = ext.night
+val ThemeDeep: Color get() = ext.deep
+val ThemeGold: Color get() = ext.gold
+val ThemeHydro: Color get() = ext.hydro
+
+// ── 终端配色（明确不主题化） ─────────────────────────────────────
 /**
  * 终端页专用调色板。
  *
@@ -78,6 +92,10 @@ val DarkSurfaceBright = Color(0xFF343B49)
  *
  * 日志色均在各自底色上校验过对比度，正文档 ≥ 4.5:1（WCAG AA），
  * 命令提示与加粗标识 ≥ 3:1；同一色相在浅/深两套里保持一致的语义指向。
+ *
+ * **主题包不改变这两套色**：日志色需要跨主题稳定（用户记住「红色=报错」），
+ * 而且终端页有自己的深浅开关，跟 App 主题不是一套逻辑。因此这里用字面色值，
+ * 不读 [SkinPalette] —— 这是刻意的，不是遗漏。
  */
 data class TerminalPalette(
     /** 页面底色。 */
@@ -110,14 +128,14 @@ data class TerminalPalette(
 
 val LightTerminalPalette = TerminalPalette(
     surface = Color(0xFFFBFBFD),
-    bar = LightCard,
-    line = LightLine,
-    ink = LightInk,
-    muted = LightMuted,
-    accent = Indigo,
+    bar = Color(0xFFFFFFFF),
+    line = Color(0xFFE4E7EE),
+    ink = Color(0xFF1F2430),
+    muted = Color(0xFF6B7385),
+    accent = Color(0xFF3B4C9C),
     onAccent = Color.White,
-    chipBg = LightFieldGray,
-    fieldBg = LightCard,
+    chipBg = Color(0xFFF0F1F5),
+    fieldBg = Color(0xFFFFFFFF),
     // 浅底上的日志色统一压暗一档：原来的 One Dark 亮色（#57E357 等）
     // 放到白底上对比度不到 2:1，等于看不见。
     logCommand = Color(0xFF0E7A54),
@@ -127,19 +145,19 @@ val LightTerminalPalette = TerminalPalette(
     logDebug = Color(0xFF2B4FA8),
     logDownload = Color(0xFF3B4C9C),
     logSuccess = Color(0xFF146C46),
-    logDefault = LightInk
+    logDefault = Color(0xFF1F2430)
 )
 
 val DarkTerminalPalette = TerminalPalette(
-    surface = DarkContainerLowest,
-    bar = DarkContainerLow,
-    line = DarkLine,
-    ink = DarkInk,
-    muted = DarkMuted,
+    surface = Color(0xFF0B0E14),
+    bar = Color(0xFF161B25),
+    line = Color(0xFF2A3140),
+    ink = Color(0xFFE6E9F2),
+    muted = Color(0xFF9AA3B5),
     accent = Color(0xFF9FB0F0),
     onAccent = Color(0xFF1B2447),
-    chipBg = DarkContainerHigh,
-    fieldBg = DarkContainerLow,
+    chipBg = Color(0xFF20262F),
+    fieldBg = Color(0xFF161B25),
     // 深底上的日志色沿用原终端观感（用户已经看惯了），但把色相对齐到项目色系：
     // 原来的 #82AAFF / #89B4FA 两个蓝几乎分不出，这里 Debug 归到 Indigo、
     // Download 改成更亮的青蓝，两者一眼能分开。
@@ -150,7 +168,7 @@ val DarkTerminalPalette = TerminalPalette(
     logDebug = Color(0xFF9FB0F0),
     logDownload = Color(0xFF8CC4FF),
     logSuccess = Color(0xFFA6E3A1),
-    logDefault = DarkInk
+    logDefault = Color(0xFFE6E9F2)
 )
 
 /**
@@ -166,8 +184,7 @@ val DarkTerminalPalette = TerminalPalette(
  */
 val LocalTerminalPalette = staticCompositionLocalOf { DarkTerminalPalette }
 
-// Theme tokens come from MaterialTheme, so previews and explicit theme overrides
-// remain consistent instead of silently reading the system theme again.
+// 语义读法：新代码优先用这些（跟随 MaterialTheme，预览里也能取到正确值）。
 val Bg: Color @Composable get() = MaterialTheme.colorScheme.background
 val Card: Color @Composable get() = MaterialTheme.colorScheme.surface
 val Ink: Color @Composable get() = MaterialTheme.colorScheme.onBackground

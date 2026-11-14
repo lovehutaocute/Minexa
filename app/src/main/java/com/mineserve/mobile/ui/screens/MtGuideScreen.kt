@@ -43,6 +43,9 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 @Composable
 fun MtGuideScreen(onBack: () -> Unit) {
@@ -65,10 +68,9 @@ fun MtGuideScreen(onBack: () -> Unit) {
                 onClick = {
                     context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://mt2.cn/download/")))
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.Control,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                 Text(stringResource(R.string.s567), fontSize = 14.sp)
             }
         }

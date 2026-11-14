@@ -1,5 +1,142 @@
 # 更新日志
 
+## 1.5.1（versionCode 62）
+
+主题：**崩溃智能诊断、世界与内容包管理补全、保活重做**。
+
+### 崩溃报告与智能分析
+
+- 会话隔离：`runtime/LaunchSession.kt` + `server/SessionLogReader.kt`；`prepareMcLogFile` 建会话
+  （startOffset）、`freezeLaunchSession()` 退出冻结。报告/弹窗/MCP 只读 `[startOffset, frozenEnd]`，
+  不再用 `latest.log` 当真相。
+- `CrashReportManager.captureCrashDetail()`：只用会话日志 + 本次启动的原生报告（mtime ≥ start-2s），
+  写 `{crashId}.txt/.log/.json` sidecar；删报告同步删 sidecar。
+- `server/KeyLogExtractor.kt`：EXCEPTION / WATCHDOG / SEVERE / CRASH_TAIL，1 基行号，600 行 / 256KB 上限；
+  非 `[时间]` 前缀行算块内续行（MC 日志两种形态）。
+- `CrashInsight`（JSON schema）+ `CrashInsightEngine`（L1 规则 → L2 案例 → 置信度 → fixes）；
+  `CrashCaseStore`（jsonl，反馈回写，Jaccard + 结构相似）；`CrashKnowledgeBase`（远程规则包 `kb-` 前缀，
+  sha/结构校验，24h 节流，`filesDir/kb`，失败沿用旧版）。`CrashReportAnalyzer.matchAll()` 返回带 ruleId 的命中。
+- UI 三页签：分析 / 关键日志 / 全部日志；分析卡含结论、置信度、证据回链、修复步骤（`appAction`）、
+  知识来源、相似故障、反馈；日志 LazyColumn 带行号、搜索高亮、跳转；范围条含回退/旧报告/截断提示。
+- `readPreview` 500 → 8000 字符（列表页归因用，不展示原文）——500 字符会把异常链截掉，
+  误诊根源就是这里。`server_errors.json` 新增 Identified 规则 `java-cacerts-broken`；
+  findings 按 Identified > Possible > Reminder 稳定排序。
+- MCP 新增 `get_crash_insight`（同一引擎，读/生成 sidecar）。
+- 弹窗高度 `(屏高 × 0.74).coerceIn(480, 620)dp`。
+
+### Java 证书库一键修复
+
+- `runtime/TrustStoreRepair.kt`：纯本地重建 cacerts（PEM 拆分 → PKCS12 → 临时文件 + rename，先备份 `cacerts.bak`）。
+- `TermuxRuntime.repairTrustStore()`：Fcl 直接拒绝；Java 8 走容器 `apt-get --reinstall ca-certificates`；
+  宿主先重装 JDK + ca-certificates，仍不就绪则用本机 PEM（PREFIX 的 cacerts.pem / ca-certificates.crt /
+  `/system/etc/security/cacerts`）原地重建。与 `ensureJvmComplete` 的区别：用户显式触发、无条件执行。
+- 深链 `id=repair-truststore` / `appAction=action:repair-truststore`，`onFixAction` 对 `action:` 前缀不关弹窗。
+
+### 世界与内容包
+
+- Java 高级世界管理：`JavaWorlds.kt` / `JavaWorldGen.kt` / `JavaLevelDat.kt`（gzip + 大端 NBT）/
+  `LevelDat.kt` / `WorldGenLedger.kt` / `WorldManager.kt`。新建世界（普通/超平坦/大型生物群系/放大化/单一生物群系/虚空）、
+  读种子与生成类型、单维度重置（先备份）、数据包增删启停、资源包 URL + SHA-1 + 强制与提示语。
+- `JavaWorlds.MODERN_GEN_SETTINGS_CANDIDATES`：26.x 把 `world_gen_settings.dat` 放到
+  `dimensions/minecraft/overworld/data/minecraft/`。
+- 基岩附加包：`BdsPacks.kt`，`.mcpack`/`.mcaddon` 拆分安装、未解压包识别与一键解压、
+  `world_*_packs.json` 写 `header.uuid`、`texturepack-required` 开关带两种空/孤儿校验。
+- `BdsWorldGen.kt`：超平坦显式写 `SpawnX/SpawnY/SpawnZ`（BDS 对 `Generator=2` 直接用 (0,0,0)，
+  玩家从 y=0 掉到 -61 摔死）；`flatSpawnY(layers)` = `FLAT_BASE_Y + 总层高`，纳入回读校验。
+- `data/BlockIds.kt` + `assets/bedrock_block_ids.txt`（Mojang bedrock-samples 的 1466 条 id）：
+  只校验 `minecraft:` 命名空间（别的命名空间是用户 BP，硬拦会误伤）。
+- `server/SaveWorld.kt` + `McConfig.consoleSaveCommands`：`save hold` 后 800ms 自动 `save resume`，
+  5 处调用点统一；原来只 hold 不 resume，世界自此刻起不落盘。
+- `Worlds.list(worldsRoot, levelName, containerBedrock)`：`worlds/` 下一律 Bedrock；`WorldInfo.planned`
+  由账本补出「待生成」。
+- `BackupManager.worldBackupTargets` 认 `worlds/<level-name>`（原先只认 world/world_nether/world_the_end，
+  BDS 世界备份恒失败）。
+- 覆盖还原跨文件系统：暂离目录改到 `Minexa/.restore-trash/`（同卷），换入由 rename 改 `copyRecursively`，
+  失败删半成品并把旧目录换回。`/data/data` 与 `/storage/emulated/0` 永远不在一卷。
+- `properties` 转义：`PropertiesEscape.kt` 处理 Java 服务端每次启动写回的 `\:` 转义（否则
+  `level-type` 读成 `minecraft\:flat`、`generator-settings` 读成非法 JSON）。
+- 导出：`MediaScannerConnection.scanFile` + 提示改为「已导出到 <绝对路径>」；运行中导出先判停服再建文件。
+
+### 保活
+
+- `service/KeepAliveWatchdog.kt`：`setExactAndAllowWhileIdle`（无权限退化 `setAndAllowWhileIdle`）
+  每 10 分钟投递 `ACTION_HEARTBEAT`，请求码 0x4B41/0x4B42，8 次/30 分钟退避。WorkManager 15 分钟降为兜底。
+- 旧 `onTaskRemoved` 用 `PendingIntent.getService` 排重启闹钟，targetSdk ≥ 26 后台 `startService` 被系统拒绝
+  ⇒ 划掉卡片后再也不拉起。统一改 `getForegroundService`。
+- 心跳续排写在 `onStartCommand(ACTION_HEARTBEAT)`（`ensureForeground()` 对已在前台的服务幂等，
+  靠它排期会在第二次心跳后断链）；`onDestroy` 补 5s 重启闹钟；用户点停止置 `stopRequestedByUser` + `cancel()`。
+- 保活页「系统限制诊断」：电池优化豁免 / `UsageStatsManager.getAppStandbyBucket()` / 精确闹钟
+  （`STANDBY_BUCKET_EXEMPTED` 在部分 SDK 不可见，写字面值 5）。
+
+### 初始化提速与国产 ROM 兼容
+
+- `BootstrapInstaller.racingOrder()`：每源一个 daemon 线程并行 `probeMirror`，可用源按实测延迟排序、
+  不可用源殿后；手动指定源永远第一。设置页 `probeMirrors` 仍串行（UI 语义是「正在测试 X」）。
+- `extractZipToDir`：每 entry `readBytes()` 丢进 4 线程池写盘 + `Semaphore(16)` 限流，
+  `destDir.canonicalPath` 提到循环外，`buffered(128KB)`，全部写完再建软链。
+- `aptIndexFresh()`：标记存 `<时间戳>|<sourcesHash>`，12h 内且源未变则跳过 `apt-get update`；
+  跳过之后查不到包自动强制 update 一次。
+- `postSetup` 的 CA 合并由覆盖写改为「系统 CA（4 个路径含 `/apex/com.android.conscrypt/cacerts`）+ 保留原有」
+  按证书块去重；取不到原样保留。原写法在定制 ROM 上会把 rootfs CA 清成 0 字节，apt HTTPS 全挂且重装不救。
+- `openManufacturerAutostart`：补 `<queries>` 13 个包 + 每厂商 2–4 候选（荣耀/OPPO/一加/iQOO/魅族/三星/华硕/诺基亚），
+  `resolveActivity` + `getActivityInfo` 双重校验再跳。
+- `data/MirrorSpeedTest.kt` + `ui/components/MirrorSpeedTestDialog.kt`：GitHub 源用 `probeUrl()` 发 Range 0-1，
+  APT 源取 `dists/stable/Release`；6 并发、单源 8s，只测首字节延迟。主界面安装卡与设置页共用。
+- `DashboardBootstrapCard` + `DashboardDependenciesCard` 合并为 `DashboardSetupCard`（四阶段，全就绪隐藏）；
+  `McApplication` 不再自动 bootstrap。
+- 枚举退役只能加 `retired=true`，不能删项：`ServerRepository` 用 `runCatching{decode}.getOrNull()`，
+  未知枚举名会让整份配置回落默认（`DownloadMirror.active` / `AptMirror.active`）。
+- 镜像实测：剔除 `cdn.gh-proxy.com`（302 自跳死循环）；新增 APT 华为云 / HUST / BFSU / ZJU。
+
+### 纯文件操作不再要求运行环境
+
+- `InstallStep` 删 `Rclone`、`Wget` 改名 `Fonts`；`bootstrap()` 不再 `apt install wget curl`；
+  `isDependencyInstalled(Fonts)` 查 fonts.conf + 任一 ttf（walk 三个候选落点）。
+- 摘除纯文件操作上的 `isBootstrapped` 闸门（插件/模组、备份还原、快照、世界与附加包、
+  server.properties、玩家列表、崩溃报告、核心下载校验、服务器图标）；BDS 环境、终端、
+  依赖安装卸载、PHP、启动服务端、隧道仍要求先初始化。
+- `McViewModel` 启动时无条件先读一次端口真源。
+
+### UI
+
+- `PageTopBar`（不画底色/分隔线，只放右对齐按钮）；`HeaderBlock` / `BackBar` 退化为薄包装、签名不变，
+  20+ 调用点零改动；`reserveBackSlot` = 行高 ≥ BackChipSize + 8dp，保证悬浮返回键不压首张卡片。
+- 三处自绘标题栏同步：下载页 `DownloadHeader`、日志页、文本编辑器、终端 `TerminalTopBar`。
+- `MoreScreen` 去「下载帮助」；`SettingsScreen` 删「运行与保活」组，
+  wifiLock / cpuWakelock 落到 `KeepAliveScreen`。
+- `PlayersScreen` 页头去 surface 底，历史图标 `padding(top = 8dp)` 避开状态栏。
+
+### 安全与稳定性（静态审查 42 处）
+
+- `McpHttpServer`：`Preflight` 短路钩子（Origin/OPTIONS/路径/鉴权在**读 body 前**判定，原先按
+  Content-Length 预分配 64MB × 16 线程）、120s 绝对 deadline（**ThreadLocal** 存，实例字段会被并发覆盖）、
+  `stop()` 补 `pool.shutdownNow()`。
+- `data/FileOps.kt`：`deleteRecursivelyCounted` 与 `deleteRecursively` 共用 `collectForDelete`，
+  MCP / 世界删除 / zip 导入全部委托它，不再跟随软链删到沙盒外。
+- `McViewModel.deleteWorldDirs` 补 `requireServerStopped`；`installJava` 补运行中守卫。
+- `CommandExecutor.buildExecCommand`：白名单 `[字母数字 _-./:=+@%,]` 免引号，其余转义（45 个调用点已核）。
+- `BackupManager.restoreSnapshot` 对齐 `restoreWorldFromExternal`：rename 失败退化为复制，成功才删。
+- `MultiThreadDownloader`：part 文件 `setLength(0)`；`mergeRanges` 先写 `.merge` 再 rename。
+- `McForegroundService`：`ACTION_STOP` try/finally；watchdog 循环体 `catch(Throwable)` + `invokeOnCompletion` 复位；
+  `syncLocks`/`releaseLocks` 共用 `lockGuard`。
+- `ProotContainer.versionMarker`（`<dirName>-<aptPackage>.ready`）与发行版级 `readyMarker` 并存，
+  装新版失败不再让旧版判成未安装。
+- `reuseLiveMcProcess(dirName)` 替掉 4 处 `mcProcess?.let { if (it.isAlive) return it }`（跨实例会静默串进程）。
+- 4 个 workflow 加 `concurrency` + `timeout-minutes`；easytier 的 `inputs.*` 经 `env` 中转。
+
+### 多语言
+
+- `values-en` 的 `s742..s750` 整体错位（Modrinth 卡片显示成 BuiltByBit、`All` 显示成 `Enabled`），已对齐。
+- `s757` 的 `%1$s}` 多一个花括号（en 正确，另三套错），已修。
+- 四套 values 各 2507 键，键集合、占位符数量、无裸 `&` 已核对。
+
+### 测试
+
+- 新增 20+ 测试类：`CrashInsightEngineTest` / `KeyLogExtractorTest` /
+  `SessionLogReaderTest` / `TrustStoreRepairerTest` / `JavaWorldsTest` / `JavaWorldsMetaTest` / `JavaWorldGenTest` /
+  `LevelDatTest` / `WorldGenLedgerTest` / `BdsPacksTest` / `BdsWorldGenTest` / `FileOpsTest` /
+  `BedrockBlockIdsAssetTest` 等。全量 101 suite / 956 项 / 0 失败。
+
 ## 1.5.0（versionCode 61）
 
 主题：**BDS 从「能跑最新版」变成「能装任意版本，且知道装的是什么」**。

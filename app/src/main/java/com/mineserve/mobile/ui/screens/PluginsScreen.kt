@@ -43,7 +43,6 @@ import androidx.compose.material.icons.outlined.PowerSettingsNew
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Update
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -94,6 +93,7 @@ import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.theme.Coral
@@ -109,11 +109,29 @@ import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.skinContainerColor
+import com.mineserve.mobile.ui.components.AppDialog
 
 private enum class PluginTab(val labelRes: Int) { Installed(R.string.s735), Upload(R.string.s736) }
 
-/** 资源类型：插件 / 模组（按核心兼容性屏蔽） */
-private enum class ResourceType(val labelRes: Int) { Plugin(R.string.s737), Mod(R.string.s738) }
+/**
+ * 内容分类：插件 / 模组 / 数据包 / 资源包，按核心能力屏蔽不支持的项。
+ *
+ * 后两项只对 Java 版存在（世界级数据包 + 单个外部资源包）；基岩版走「附加包」独立页面，
+ * 因为它的行为包/资源包是**多包 + 世界级登记**，与 Java 的单资源包根本不是一套模型。
+ */
+private enum class ResourceType(val labelRes: Int) {
+    Plugin(R.string.s737),
+    Mod(R.string.s738),
+    DataPack(R.string.jv_datapacks_title),
+    ResourcePack(R.string.jv_rp_title);
+
+    /** 只有插件/模组才有"已安装 / 本地上传"这层。 */
+    val hasSubTabs: Boolean get() = this == Plugin || this == Mod
+}
 
 /** 插件资源站点（点击跳转官网） */
 private data class PluginSite(val nameRes: Int, val descRes: Int, val url: String)
@@ -183,7 +201,7 @@ fun PluginsScreen(vm: McViewModel) {
     val installingEntry = downloadProgress.entries.firstOrNull()
     if (installingEntry != null) {
         val p = installingEntry.value
-        AlertDialog(
+        AppDialog(
             onDismissRequest = {},
             title = { Text(stringResource(R.string.ui_installing), fontSize = 16.sp) },
             text = {
@@ -242,6 +260,11 @@ fun PluginsScreen(vm: McViewModel) {
     val availableTypes = buildList {
         if (coreType.supportsPlugins) add(ResourceType.Plugin)
         if (coreType.supportsMods) add(ResourceType.Mod)
+        // Java 版（非基岩核心且核心已识别）才有数据包与资源包
+        if (!coreType.isBedrock && coreType != com.mineserve.mobile.data.ServerCore.Unknown) {
+            add(ResourceType.DataPack)
+            add(ResourceType.ResourcePack)
+        }
     }
     var resourceType by remember { mutableStateOf(ResourceType.Plugin) }
     // 核心切换时校正资源类型（默认取第一个可用类型）
@@ -254,6 +277,15 @@ fun PluginsScreen(vm: McViewModel) {
             vm.refreshMods()
             vm.loadModrinthLoaders()
             vm.loadModrinthGameVersions()
+        }
+    }
+    // 切到数据包 / 资源包分类时重新扫描。
+    // 之前这两个列表只在进页面时加载一次，在别处换过文件后回到本页点刷新也不会更新。
+    LaunchedEffect(isBootstrapped, config.activeCoreName, resourceType) {
+        if (isBootstrapped && config.activeCoreName != null &&
+            (resourceType == ResourceType.DataPack || resourceType == ResourceType.ResourcePack)
+        ) {
+            vm.loadJavaAddons()
         }
     }
     // 进入插件分类时加载插件 Modrinth 资源
@@ -269,6 +301,8 @@ fun PluginsScreen(vm: McViewModel) {
     val pluginConflicts = remember(installedPlugins) { vm.detectPluginConflicts(installedPlugins) }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用，避免顶部空白/白色遮挡
         contentWindowInsets = WindowInsets(0.dp)
@@ -290,8 +324,13 @@ fun PluginsScreen(vm: McViewModel) {
             // reserveBackSlot：本页没有 BackBar（也没有其它返回入口），
             // 顶部让出悬浮返回键的安全间距
             HeaderBlock(
-                eyebrow = stringResource(R.string.eyebrow_plugins),
-                title = stringResource(R.string.s750),
+                // 同一个页面装四类内容，标题必须跟着核心能力走：
+                // 对一个只能装数据包的核心喊「插件管理」只会让人以为功能坏了。
+                eyebrow = stringResource(
+                    if (coreType.supportsPlugins || coreType.supportsMods) R.string.eyebrow_plugins
+                    else R.string.eyebrow_content
+                ),
+                title = stringResource(R.string.plx_title),
                 reserveBackSlot = true
             )
 
@@ -337,37 +376,41 @@ fun PluginsScreen(vm: McViewModel) {
                         overflow = TextOverflow.Ellipsis
                     )
                     Spacer(Modifier.height(8.dp))
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(if (installedPlugins.isEmpty()) Muted else Mint)
-                        )
-                        Spacer(Modifier.size(6.dp))
-                        Text(
-                            stringResource(R.string.s756, installedPlugins.size) +
-                                if (installedPlugins.count { !it.isEnabled } > 0)
-                                    stringResource(R.string.s757, installedPlugins.count { !it.isEnabled })
-                                else "",
-                            color = Muted,
-                            fontSize = 11.sp
-                        )
+                    if (coreType.supportsPlugins || coreType.supportsMods) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(if (installedPlugins.isEmpty()) Muted else Mint)
+                            )
+                            Spacer(Modifier.size(6.dp))
+                            Text(
+                                stringResource(R.string.s756, installedPlugins.size) +
+                                    if (installedPlugins.count { !it.isEnabled } > 0)
+                                        stringResource(R.string.s757, installedPlugins.count { !it.isEnabled })
+                                    else "",
+                                color = Muted,
+                                fontSize = 11.sp
+                            )
+                        }
+                        Spacer(Modifier.height(8.dp))
                     }
-                    Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            if (coreType.supportsPlugins) stringResource(R.string.s467) else stringResource(R.string.s468),
-                            color = if (coreType.supportsPlugins) Mint else Coral,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Text(
-                            if (coreType.supportsMods) stringResource(R.string.s469) else stringResource(R.string.s470),
-                            color = if (coreType.supportsMods) Mint else Coral,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                        if (coreType.supportsPlugins) {
+                            Text(stringResource(R.string.s467), color = Mint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        if (coreType.supportsMods) {
+                            Text(stringResource(R.string.s469), color = Mint, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        if (!coreType.isBedrock && coreType != com.mineserve.mobile.data.ServerCore.Unknown) {
+                            Text(
+                                stringResource(R.string.plx_datapack_supported),
+                                color = Mint,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        }
                     }
                 }
             }
@@ -405,8 +448,12 @@ fun PluginsScreen(vm: McViewModel) {
             )
             }
 
-            // ── 内容区（插件 / 模组按资源类型分流） ──
-            if (resourceType == ResourceType.Plugin) {
+            // ── 内容区（插件 / 模组 / 数据包 / 资源包 四路分流） ──
+            if (resourceType == ResourceType.DataPack) {
+                JavaDataPackTab(vm)
+            } else if (resourceType == ResourceType.ResourcePack) {
+                JavaResourcePackTab(vm)
+            } else if (resourceType == ResourceType.Plugin) {
             when (activeTab) {
                 PluginTab.Installed -> InstalledTab(
                     installed = installedPlugins,
@@ -470,7 +517,8 @@ fun PluginsScreen(vm: McViewModel) {
                 )
             }
 
-            // ── 底部热重载 ──
+            // ── 底部工具区（只对插件/模组有意义：数据包/资源包不支持热重载） ──
+            if (resourceType.hasSubTabs) {
             McCard(title = stringResource(R.string.s759)) {
                 Text(
                     if (isServerRunning)
@@ -488,12 +536,11 @@ fun PluginsScreen(vm: McViewModel) {
                     },
                     enabled = isServerRunning,
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Indigo,
+                        containerColor = skinContainerColor(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                         disabledContainerColor = IndigoSoft
                     ),
                     shape = McShape.Control,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                     Icon(Icons.Outlined.PowerSettingsNew, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.size(6.dp))
                     Text(
@@ -553,6 +600,7 @@ fun PluginsScreen(vm: McViewModel) {
                     }
                 }
             }
+            }
             Spacer(Modifier.height(16.dp))
         }
     }
@@ -571,7 +619,7 @@ fun PluginsScreen(vm: McViewModel) {
 
     // 模组删除确认对话框
     pendingModDelete?.let { mod ->
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { pendingModDelete = null },
             title = { Text(stringResource(R.string.s768), fontWeight = FontWeight.Bold) },
             text = {
@@ -664,7 +712,7 @@ private fun InstalledTab(
             placeholder = { Text(stringResource(R.string.s772), fontSize = 11.sp) },
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(16.dp)) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact
         )
 
@@ -682,7 +730,8 @@ private fun InstalledTab(
                     InstalledFilter.Disabled -> installed.count { !it.isEnabled }
                     InstalledFilter.Local -> installed.count { it.sourceTag == "本地" }
                 }
-                val label = "$filter $count"
+                // 必须走 labelRes：直接用枚举名会让中文界面也显示 All / Enabled / Disabled
+                val label = "${stringResource(filter.labelRes)} $count"
                 Box(
                     modifier = Modifier
                         .clip(RoundedCornerShape(12.dp))
@@ -918,7 +967,7 @@ private fun UploadTab(
             label = { Text(stringResource(R.string.s800), fontSize = 11.sp) },
             leadingIcon = { Icon(Icons.Outlined.Link, contentDescription = null, modifier = Modifier.size(14.dp)) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri)
         )
@@ -928,7 +977,7 @@ private fun UploadTab(
             onValueChange = { customName = it },
             label = { Text(stringResource(R.string.s801), fontSize = 11.sp) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact
         )
 
@@ -957,10 +1006,9 @@ private fun UploadTab(
                 onInstallFromUrl(customUrl.trim(), customName.trim())
             },
             enabled = customUrl.isNotBlank() && customName.isNotBlank() && customUrlProgress == null,
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+            colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
             shape = McShape.ControlCompact,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact)) {
             Icon(Icons.Outlined.Link, contentDescription = null, modifier = Modifier.size(14.dp))
             Spacer(Modifier.size(4.dp))
             Text(stringResource(R.string.s486), color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
@@ -986,7 +1034,7 @@ private fun DeletePluginDialog(
     onDismiss: () -> Unit
 ) {
     var alsoRemoveData by remember { mutableStateOf(true) }
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.s803), fontWeight = FontWeight.Bold) },
         text = {
@@ -1055,7 +1103,7 @@ private fun PluginDetailDialog(
 ) {
     val meta = plugin.meta
     val context = LocalContext.current
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1248,7 +1296,7 @@ private fun ModsTab(
                 onValueChange = { modrinthQuery = it },
                 placeholder = { Text(stringResource(R.string.s833), fontSize = 11.sp) },
                 singleLine = true,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
                 shape = McShape.ControlCompact
             )
             Spacer(Modifier.size(6.dp))
@@ -1270,9 +1318,10 @@ private fun ModsTab(
             }
 Spacer(Modifier.size(6.dp))
             Button(
+                modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
                 onClick = { onSearchModrinth(modrinthQuery.trim(), selectedLoaders.toList(), sortOptions[sortIndex].first, selectedModVersion) },
                 enabled = modrinthQuery.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.ControlCompact
             ) {
                 Text(stringResource(R.string.s834), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -1436,7 +1485,7 @@ private fun PluginModrinthCard(
                 onValueChange = { query = it },
                 placeholder = { Text(stringResource(R.string.s1070), fontSize = 11.sp) },
                 singleLine = true,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
                 shape = McShape.ControlCompact
             )
             Spacer(Modifier.size(6.dp))
@@ -1458,9 +1507,10 @@ private fun PluginModrinthCard(
             }
             Spacer(Modifier.size(6.dp))
             Button(
+                modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
                 onClick = { onSearch(query.trim(), selectedLoaders.toList(), sortOptions[sortIndex].first, selectedVersion) },
                 enabled = query.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.ControlCompact
             ) {
                 Text(stringResource(R.string.s834), color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -1650,7 +1700,7 @@ private fun LoaderFilterSection(
 @Composable
 private fun ModrinthDetailDialog(hit: PluginManager.ModrinthHit?, onDismiss: () -> Unit) {
     val h = hit ?: return
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {

@@ -44,8 +44,23 @@ enum class ServerCore(val displayName: String) {
     /** 是否为基岩版（UDP 网络、Bedrock 客户端连接） */
     val isBedrock: Boolean get() = this == PowerNukkitX || this == PocketMine || this == Allay || this == Bds
 
-    /** 控制台保存世界的命令：基岩版（PowerNukkitX）不支持 save-all，用 save hold */
-    val consoleSaveCommand: String get() = if (isBedrock) "save hold" else "save-all"
+    /**
+     * 控制台「保存世界」要发送的命令序列。
+     *
+     * Java 版：`save-all` 一条就够。
+     *
+     * **基岩版没有 `save-all`**，只有 `save hold` / `save query` / `save resume`。
+     * 早期只发 `save hold` 是错的：`hold` 的语义是「冻结写入并刷盘，等我拷完文件再放行」，
+     * 不跟一条 `save resume`，世界**从此刻起再也不落盘**（真机实测：之后 `save query`
+     * 一直报 `A previous save has not been completed`，只能手工 `save resume` 恢复）。
+     * 所以这里成对发送，`hold` 之后立刻 `resume`，等价于「现在就刷一次盘」。
+     */
+    val consoleSaveCommands: List<String>
+        get() = if (isBedrock) listOf("save hold", "save resume") else listOf("save-all")
+
+    /** 命令序列的可读形式（用于提示文案，别再写死 “save-all”） */
+    val consoleSaveCommandText: String
+        get() = consoleSaveCommands.joinToString(" / ")
 
     val supportsPlugins: Boolean get() = this == Paper || this == Purpur ||
         this == Leaves || this == Leaf || this == Spigot || this == CraftBukkit || this == PowerNukkitX
@@ -123,48 +138,100 @@ data class TunnelState(
  * - Auto: 按顺序尝试所有镜像（镜像优先，GitHub 直连兜底）
  * - 其余: 指定镜像优先，失败后仍按 Auto 顺序回退
  *
- * 只保留**实测可用**的源：`mirror.ghproxy.com`（超时）、`github.moeyy.xyz`（连接重置）、
- * `gh.api.99988866.xyz`（TLS 失败）三个旧镜像已陆续失效，于 2026-10 移除，避免每次
- * 下载都白跑一轮回退。新增 `cdn.gh-proxy.com`：它同时支持 Release 资产、`api.github.com`
- * 与 raw.githubusercontent.com 三类代理，是唯一实测能代理 GitHub API 的镜像。
+ * ## 为什么有 [retired]
  *
- * 枚举顺序即 Auto 模式下的尝试顺序：镜像在前、直连最后（符合「镜像优先」语义）。
+ * 失效的源**不能直接删枚举项**：配置以 JSON 落盘（`ServerRepository` 用
+ * `runCatching { decode }.getOrNull()`），旧配置里存着 `CdnGhProxy` 这类名字，
+ * 一旦枚举里没有它，反序列化整份配置失败 → 全部设置被静默重置成默认值。
+ * 所以失效项保留枚举名、标 `retired = true`，由下载顺序与界面统一过滤掉。
+ *
+ * ## 2026-11 实测（bootstrap 包 Range 0-1 探测）
+ *
+ * - 移除：`cdn.gh-proxy.com` 302 跳 `cdn.gh-proxy.org` 后自跳自，永远拿不到内容。
+ * - 新增：`gh.nxnow.top`、`g.blfrp.cn`、`gh-proxy.eu.org`。
+ * - `ghfast.top` 本机 10 秒超时，但真机历史验证过可用，保留并排到后面。
+ *
+ * 枚举顺序即 Auto 模式下的尝试顺序：镜像在前、直连最后（符合「镜像优先」语义），
+ * 同一批镜像内部按实测延迟升序。
  */
 @Serializable
-enum class DownloadMirror(val displayName: String, val baseUrl: String) {
+enum class DownloadMirror(
+    val displayName: String,
+    val baseUrl: String,
+    /** 已失效：不参与下载顺序，也不出现在界面里（仅保留名字防止旧配置反序列化失败）。 */
+    val retired: Boolean = false
+) {
     Auto("自动（镜像优先）", ""),
-    Ghfast("ghfast.top", "https://ghfast.top/https://github.com/termux/termux-packages/releases/download"),
     GhProxy("gh-proxy.com", "https://gh-proxy.com/https://github.com/termux/termux-packages/releases/download"),
-    CdnGhProxy("cdn.gh-proxy.com", "https://cdn.gh-proxy.com/https://github.com/termux/termux-packages/releases/download"),
     GhproxyNet("ghproxy.net", "https://ghproxy.net/https://github.com/termux/termux-packages/releases/download"),
-    GitHub("GitHub 直连", "https://github.com/termux/termux-packages/releases/download")
+    Nxnow("gh.nxnow.top", "https://gh.nxnow.top/https://github.com/termux/termux-packages/releases/download"),
+    GhProxyEu("gh-proxy.eu.org", "https://gh-proxy.eu.org/https://github.com/termux/termux-packages/releases/download"),
+    Blfrp("g.blfrp.cn", "https://g.blfrp.cn/https://github.com/termux/termux-packages/releases/download"),
+    Ghfast("ghfast.top", "https://ghfast.top/https://github.com/termux/termux-packages/releases/download"),
+    CdnGhProxy(
+        "cdn.gh-proxy.com",
+        "https://cdn.gh-proxy.com/https://github.com/termux/termux-packages/releases/download",
+        retired = true
+    ),
+    GitHub("GitHub 直连", "https://github.com/termux/termux-packages/releases/download");
+
+    companion object {
+        /** 参与下载与界面展示的源（Auto 之外、且未失效）。 */
+        val active: List<DownloadMirror>
+            get() = DownloadMirror.entries.filter { it != DownloadMirror.Auto && !it.retired }
+    }
 }
 
 /**
- * Termux apt 软件源（JDK/wget/frp 等依赖包下载）
- * 默认使用清华镜像，切换后下次初始化时生效。
+ * Termux apt 软件源（JDK/字体/proot 等依赖包下载）
+ * 默认使用清华镜像，切换后立即改写 Termux 的 sources.list。
+ *
+ * [retired] 语义同 [DownloadMirror.retired]：`Official` 是早期写错的旧项（与 Tuna 同址），
+ * 只为了读得懂老配置而留着，任何选择路径都会把它折算成 [Tuna]。
  */
 @Serializable
-enum class AptMirror(val displayName: String, val url: String) {
+enum class AptMirror(
+    val displayName: String,
+    val url: String,
+    val retired: Boolean = false
+) {
     Tuna("清华镜像 (TUNA)", "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main"),
+    Huawei("华为云镜像", "https://mirrors.huaweicloud.com/termux/termux-main"),
+    Ustc("中科大镜像 (USTC)", "https://mirrors.ustc.edu.cn/termux/apt/termux-main"),
     // 阿里云的 Termux 仓库路径**没有** `/apt/` 段：旧的 /termux/apt/termux-main 返回 404，
     // 正确地址是 /termux/termux-main（已实测 dists/stable/Release 为 200）。
     Aliyun("阿里云镜像", "https://mirrors.aliyun.com/termux/termux-main"),
-    Ustc("中科大镜像 (USTC)", "https://mirrors.ustc.edu.cn/termux/apt/termux-main"),
     Nju("南京大学镜像", "https://mirror.nju.edu.cn/termux/apt/termux-main"),
+    Hust("华中科大镜像 (HUST)", "https://mirrors.hust.edu.cn/termux/apt/termux-main"),
+    Bfsu("北外镜像 (BFSU)", "https://mirrors.bfsu.edu.cn/termux/apt/termux-main"),
+    Zju("浙大镜像 (ZJU)", "https://mirrors.zju.edu.cn/termux/apt/termux-main"),
     // Kept only for old DataStore values; new installs never select an overseas APT source.
-    Official("清华镜像 (旧配置)", "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main")
+    Official("清华镜像 (旧配置)", "https://mirrors.tuna.tsinghua.edu.cn/termux/apt/termux-main", retired = true);
+
+    companion object {
+        /** 参与界面展示的源（未失效）。 */
+        val active: List<AptMirror> get() = AptMirror.entries.filter { !it.retired }
+    }
 }
 
 /**
  * 依赖安装步骤
- * 注：已去掉 Tmux 步骤（改用 Android 原生 ProcessBuilder 管理进程）
+ *
+ * 注：已去掉 Tmux 步骤（改用 Android 原生 ProcessBuilder 管理进程）。
+ *
+ * 2026-11 精简（只保留真正被运行时用到的项）：
+ * - `Rclone` 整项删除 —— 全工程只有「安装 / 检测 / 删除」，没有任何一处运行时调用它。
+ * - `Wget` 改名为 [Fonts] —— 这一步实际装的是 `fontconfig` + `ttf-dejavu`（Forge/NeoForge
+ *   缺字体时启动崩），`wget` 只是当年同一条 apt 命令捎带的；应用内所有下载都走
+ *   [com.mineserve.mobile.data.MultiThreadDownloader]，`wget` 从未被执行过。
+ *
+ * 枚举名参与 `StepState` 序列化，但该状态每次启动都由 [values] 重建、不落盘，
+ * 因此改名不会影响已安装用户。
  */
 @Serializable
 enum class InstallStep(val label: String) {
     Jdk("JDK 17 运行环境"),
-    Wget("Wget 下载工具"),
-    Rclone("Rclone 远程挂载"),
+    Fonts("字体运行库"),
     Proot("PRoot 兼容层")
 }
 

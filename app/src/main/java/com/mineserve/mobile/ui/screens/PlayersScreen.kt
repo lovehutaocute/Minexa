@@ -33,7 +33,6 @@ import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.VideogameAsset
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Checkbox
@@ -71,9 +70,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.server.PlayerManager
-import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.EmptyHint
+import com.mineserve.mobile.ui.PageTopBar
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.theme.Coral
@@ -88,6 +88,10 @@ import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.AppDialog
 
 private enum class PlayerListTab(val labelRes: Int) { Online(R.string.s657), Ops(R.string.s658), Whitelist(R.string.s659), Banned(R.string.s660) }
 
@@ -185,6 +189,8 @@ fun PlayersScreen(
     }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用，避免顶部空白/白色遮挡
         contentWindowInsets = WindowInsets(0.dp)
@@ -195,32 +201,25 @@ fun PlayersScreen(
                 .padding(padding)
                 .verticalScroll(rememberScrollState())
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MaterialTheme.colorScheme.surface),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                HeaderBlock(
-                    eyebrow = stringResource(R.string.eyebrow_players),
-                    title = stringResource(R.string.s672),
-                    modifier = Modifier.weight(1f)
-                )
-                // 页面右上角：玩家进服/离服历史记录入口
-                IconButton(
-                    onClick = { showHistory = true },
-                    modifier = Modifier
-                        .padding(end = 8.dp)
-                        .size(McIcon.Touch)
-                ) {
-                    Icon(
-                        Icons.Outlined.History,
-                        contentDescription = stringResource(R.string.s673),
-                        tint = Indigo,
-                        modifier = Modifier.size(McIcon.Item)
-                    )
+            // 右上角「进服/离服记录」入口。
+            // 必须交给 PageTopBar 承载：它把 statusBarsPadding 加在**容器**上，按钮因此排在状态栏下沿。
+            // 之前写成 Row + HeaderBlock + IconButton，HeaderBlock 无 trailing 时只剩状态栏那么高，
+            // 40dp 的按钮在这一行里垂直居中就往上下各溢出十几个 dp，上半截被状态栏吃掉、点不动。
+            PageTopBar(
+                trailing = {
+                    IconButton(
+                        onClick = { showHistory = true },
+                        modifier = Modifier.size(McIcon.Touch)
+                    ) {
+                        Icon(
+                            Icons.Outlined.History,
+                            contentDescription = stringResource(R.string.s673),
+                            tint = Indigo,
+                            modifier = Modifier.size(McIcon.Item)
+                        )
+                    }
                 }
-            }
+            )
 
             // ── 服务器状态横幅 ──
             ServerStatusBanner(
@@ -340,7 +339,7 @@ private fun PlayerHistoryDialog(
     var search by remember { mutableStateOf("") }
     var clearConfirm by remember { mutableStateOf(false) }
     val filtered = remember(history, search) { history.filter { matchesPlayerQuery(it.player, search) } }
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
@@ -366,7 +365,7 @@ private fun PlayerHistoryDialog(
                         .verticalScroll(rememberScrollState())
                 ) {
                     Text(stringResource(R.string.player_history_summary, summaries.size, formatActivitySeconds(summaries.sumOf { it.totalSeconds })), color = Muted, fontSize = 11.sp)
-                    OutlinedTextField(value = search, onValueChange = { search = it }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp), singleLine = true, label = { Text(stringResource(R.string.player_search)) })
+                    OutlinedTextField(value = search, onValueChange = { search = it }, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row), singleLine = true, label = { Text(stringResource(R.string.player_search)) })
                     filtered.forEach { h ->
                         Row(
                             modifier = Modifier
@@ -413,7 +412,7 @@ private fun PlayerHistoryDialog(
             }
         }
     )
-    if (clearConfirm) AlertDialog(onDismissRequest = { clearConfirm = false }, title = { Text(stringResource(R.string.player_clear_title)) }, text = { Text(stringResource(R.string.player_clear_hint)) }, confirmButton = { TextButton(onClick = { onClear(); clearConfirm = false }) { Text(stringResource(R.string.player_clear), color = Coral) } }, dismissButton = { TextButton(onClick = { clearConfirm = false }) { Text(stringResource(R.string.props_cancel)) } })
+    if (clearConfirm) AppDialog(onDismissRequest = { clearConfirm = false }, title = { Text(stringResource(R.string.player_clear_title)) }, text = { Text(stringResource(R.string.player_clear_hint)) }, confirmButton = { TextButton(onClick = { onClear(); clearConfirm = false }) { Text(stringResource(R.string.player_clear), color = Coral) } }, dismissButton = { TextButton(onClick = { clearConfirm = false }) { Text(stringResource(R.string.props_cancel)) } })
 }
 
 @Composable
@@ -501,7 +500,7 @@ private fun OnlineTab(
             OutlinedTextField(
                 value = search,
                 onValueChange = { search = it },
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row),
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
                 label = { Text(stringResource(R.string.player_search), fontSize = 11.sp) }
@@ -631,7 +630,7 @@ private fun OpsTab(
             placeholder = { Text(stringResource(R.string.s692), fontSize = 11.sp) },
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(14.dp)) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(10.dp))
@@ -665,7 +664,7 @@ private fun OpsTab(
             onValueChange = { opName = it },
             label = { Text(stringResource(R.string.s697), fontSize = 11.sp) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(8.dp))
@@ -767,10 +766,9 @@ private fun OpsTab(
                 }
             },
             enabled = isRunning && opName.isNotBlank(),
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+            colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
             shape = McShape.ControlCompact,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact)) {
             Text(
                 if (useDefaultLevel || !supportsOpLevel) stringResource(R.string.s1035)
                 else stringResource(R.string.s700, selectedLevel.value),
@@ -833,7 +831,7 @@ private fun WhitelistTab(
             placeholder = { Text(stringResource(R.string.s705), fontSize = 11.sp) },
             leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(14.dp)) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(10.dp))
@@ -872,10 +870,11 @@ private fun WhitelistTab(
                 onValueChange = { newName = it },
                 label = { Text(stringResource(R.string.s697), fontSize = 11.sp) },
                 singleLine = true,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
                 shape = McShape.ControlCompact
             )
             Button(
+                modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
                 onClick = {
                     if (newName.isNotBlank()) {
                         onWhitelistAdd(newName.trim())
@@ -883,7 +882,7 @@ private fun WhitelistTab(
                     }
                 },
                 enabled = isRunning && newName.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.ControlCompact
             ) { Text(stringResource(R.string.s709), color = Color.White, fontSize = 11.sp) }
         }
@@ -915,7 +914,7 @@ private fun BannedTab(
                 placeholder = { Text(stringResource(R.string.s711), fontSize = 11.sp) },
                 leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null, modifier = Modifier.size(14.dp)) },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
                 shape = McShape.ControlCompact
             )
             Spacer(Modifier.height(10.dp))
@@ -946,7 +945,7 @@ private fun BannedTab(
             onValueChange = { banName = it },
             label = { Text(stringResource(R.string.s697), fontSize = 11.sp) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(6.dp))
@@ -955,7 +954,7 @@ private fun BannedTab(
             onValueChange = { banReason = it },
             label = { Text(stringResource(R.string.s717), fontSize = 11.sp) },
             singleLine = true,
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.ControlCompact),
             shape = McShape.ControlCompact
         )
         Spacer(Modifier.height(6.dp))
@@ -1034,7 +1033,7 @@ private fun PlayerDetailDialog(
     onSetGameMode: (String, Int) -> Unit,
     onGiveXp: (String, Int) -> Unit
 ) {
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {

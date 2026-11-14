@@ -26,10 +26,26 @@ import java.util.concurrent.atomic.AtomicInteger
  */
 class McpHttpServer(
     private val port: Int,
+    /**
+     * 读请求体**之前**执行的短路钩子：返回非 null 时直接写回该响应、关闭连接，
+     * 不再读取 body。
+     *
+     * 为什么鉴权必须放在这里：`readRequest` 先于 handler 执行，而未授权的
+     * `Content-Length: 64MB` 请求会让 `readFully` 立刻 `ByteArray(64MB)`。
+     * 16 个工作线程各占 64MB 就足以把 Android 的进程堆打穿 —— 攻击者不需要令牌。
+     */
+    private val preflight: Preflight? = null,
     private val handler: Handler
 ) {
     fun interface Handler {
         fun handle(request: Request): Response
+    }
+
+    fun interface Preflight {
+        /**
+         * @return null 表示放行、继续读 body；非 null 则作为最终响应（body 不再读取）
+         */
+        fun check(method: String, target: String, headers: Map<String, String>): Response?
     }
 
     class Request(
@@ -75,8 +91,27 @@ class McpHttpServer(
     private class MalformedRequestException(message: String) : IOException(message)
     private class BodyTooLargeException : IOException("request body too large")
 
+    /** 在读取请求体之前就已得出最终响应（鉴权失败 / 路径不对 / OPTIONS 预检） */
+    private class ShortCircuitException(val response: Response) : Exception()
+
+    /** 整个请求耗时超过 [REQUEST_DEADLINE_MS]（慢速滴字节之类） */
+    private class RequestTimeoutException : IOException("request deadline exceeded")
+
     private val running = AtomicBoolean(false)
     private var serverSocket: ServerSocket? = null
+
+    /**
+     * 当前连接的绝对截止时间（`System.currentTimeMillis()`），未设置表示不限。
+     *
+     * 只靠 `soTimeout` 挡不住慢速攻击：它是「单次 read」的时限，攻击者每 29s 发一个字节
+     * 就能让 16 个工作线程永久卡在 readLine 上。所以每个请求另设一个绝对 deadline，
+     * 由 [checkDeadline] 在读循环里逐字节检查。
+     *
+     * 必须是 ThreadLocal：一个 [McpHttpServer] 实例同时服务最多 16 条连接，用实例字段
+     * 会互相覆盖 deadline（A 连接把 B 的时限改长/改短）。而 [serve] 的整个 keep-alive
+     * 循环都跑在同一个池线程上，所以按线程存是准确的。
+     */
+    private val threadDeadline = ThreadLocal<Long>()
 
     /**
      * 有界线程池：MCP 允许上传大文件、跑耗时命令，单条连接会长时间占用线程。
@@ -89,8 +124,14 @@ class McpHttpServer(
      *    一条长命令就会把其余请求全部堵在队列里
      *  - 队列满时 AbortPolicy 拒绝，由 [acceptLoop] 兜底关闭该连接
      *  - core 线程按需惰性创建，MCP 未启用时不会常驻任何线程
+     *
+     * 注意这里是 `var` 而不是 `val`：[stop] 会 `shutdownNow()` 它（否则每次改配置
+     * 换一个新实例，旧实例的 16 个核心线程会永久 park），而 [start] 允许同一实例
+     * 重启，所以 shutdown 之后要换一个新的池。
      */
-    private val pool = ThreadPoolExecutor(
+    private var pool: ThreadPoolExecutor = newPool()
+
+    private fun newPool(): ThreadPoolExecutor = ThreadPoolExecutor(
         MAX_POOL_SIZE, MAX_POOL_SIZE, 60L, TimeUnit.SECONDS,
         LinkedBlockingQueue(QUEUE_CAPACITY),
         { r -> Thread(r, "mcp-http").apply { isDaemon = true } },
@@ -119,6 +160,8 @@ class McpHttpServer(
      */
     fun start(bindLan: Boolean = false): Boolean {
         if (!running.compareAndSet(false, true)) return true
+        // stop() 会 shutdownNow 线程池；同一实例重启时必须换一个新的
+        if (pool.isShutdown) pool = newPool()
         return try {
             val ss = ServerSocket()
             ss.reuseAddress = true
@@ -139,6 +182,9 @@ class McpHttpServer(
         if (!running.compareAndSet(true, false)) return
         runCatching { serverSocket?.close() }
         serverSocket = null
+        // 必须 shutdown：applyConfig 每次因 port/token/allowLan 变化都会 stop 旧实例再 new
+        // 一个，旧实例的 16 个核心线程未开 allowCoreThreadTimeOut，不 shutdown 就永久 park。
+        runCatching { pool.shutdownNow() }
     }
 
     private fun acceptLoop(ss: ServerSocket) {
@@ -177,6 +223,8 @@ class McpHttpServer(
             val input = BufferedInputStream(socket.getInputStream())
             val output = socket.getOutputStream()
             while (running.get()) {
+                // 每个请求一个绝对截止时间：soTimeout 只管单次 read，慢速滴字节挡不住
+                threadDeadline.set(System.currentTimeMillis() + REQUEST_DEADLINE_MS)
                 val request = try {
                     readRequest(input, output)
                 } catch (e: MalformedRequestException) {
@@ -184,6 +232,15 @@ class McpHttpServer(
                     break
                 } catch (e: BodyTooLargeException) {
                     writeResponse(output, Response.json(413, "{\"error\":\"payload too large\"}"), false)
+                    break
+                } catch (e: ShortCircuitException) {
+                    // 鉴权 / 路径 / OPTIONS 预检在读 body 之前就出了结果：直接回写并关连接
+                    runCatching { writeResponse(output, e.response, false) }
+                    break
+                } catch (e: RequestTimeoutException) {
+                    runCatching {
+                        writeResponse(output, Response.json(408, "{\"error\":\"request timeout\"}"), false)
+                    }
                     break
                 } catch (e: IOException) {
                     break // 读超时 / 对端断开
@@ -209,6 +266,8 @@ class McpHttpServer(
         } finally {
             // 无论正常结束、超时还是异常都必须递减，否则计数泄漏会导致后续连接被误拒
             activeConnections.decrementAndGet()
+            // 线程会被池复用，别把上一条连接的 deadline 留给下一个任务
+            threadDeadline.remove()
             runCatching { socket.close() }
         }
     }
@@ -236,6 +295,11 @@ class McpHttpServer(
             if (idx > 0) {
                 headers[headerLine.substring(0, idx).trim().lowercase()] = headerLine.substring(idx + 1).trim()
             }
+        }
+        // 鉴权 / 路径 / OPTIONS 预检必须在读 body **之前**完成：
+        // 否则一个未授权、只发了 Content-Length 头的请求就能让 readFully 先分配几十 MB。
+        preflight?.check(parts[0].uppercase(), parts[1], headers)?.let {
+            throw ShortCircuitException(it)
         }
         if (headers["expect"]?.contains("100-continue", ignoreCase = true) == true) {
             output.write("HTTP/1.1 100 Continue\r\n\r\n".toByteArray(Charsets.US_ASCII))
@@ -274,6 +338,7 @@ class McpHttpServer(
         val buf = ByteArray(count)
         var off = 0
         while (off < count) {
+            checkDeadline()
             val n = input.read(buf, off, count - off)
             if (n == -1) throw MalformedRequestException("eof in body")
             off += n
@@ -281,9 +346,18 @@ class McpHttpServer(
         return buf
     }
 
+    /** 超过请求的绝对截止时间就抛 [RequestTimeoutException]（慢速滴字节在这种循环里挡不住） */
+    private fun checkDeadline() {
+        val deadline = threadDeadline.get() ?: 0L
+        if (deadline > 0L && System.currentTimeMillis() > deadline) {
+            throw RequestTimeoutException()
+        }
+    }
+
     private fun readLine(input: InputStream, maxBytes: Int = MAX_HEADER_BYTES): String? {
         val buf = ByteArrayOutputStream(128)
         while (true) {
+            checkDeadline()
             val b = input.read()
             if (b == -1) {
                 return if (buf.size() == 0) null else buf.toString("UTF-8")
@@ -312,6 +386,14 @@ class McpHttpServer(
     companion object {
         private const val TAG = "McpHttpServer"
         private const val READ_TIMEOUT_MS = 30_000
+
+        /**
+         * 单个请求（从读完请求行到响应写完）的绝对上限。
+         *
+         * [READ_TIMEOUT_MS] 是「单次 read」的时限，挡不住慢速攻击：每 29s 发一个字节
+         * 就能让线程永久占着不放。16 条这样的连接即可让整个 MCP 端点不可用。
+         */
+        private const val REQUEST_DEADLINE_MS = 120_000L
         private const val MAX_HEADER_BYTES = 32 * 1024
 
         // 有界线程池参数：见 [pool] 的说明。16 个线程足以覆盖正常的 MCP 调用，

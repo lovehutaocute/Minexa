@@ -1,6 +1,7 @@
 package com.mineserve.mobile.server
 
 import android.util.Log
+import com.mineserve.mobile.data.FileOps
 import com.mineserve.mobile.runtime.TermuxRuntime
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -52,6 +53,23 @@ class BackupManager(private val termux: TermuxRuntime) {
 
     private fun worldDir(dirName: String): File =
         File(termux.serverDirFor(dirName), "world")
+
+    /**
+     * 需要备份 / 还原的世界目录列表。
+     *
+     * **BDS 的世界在 `worlds/<level-name>`，不是 Java 版的 `world/`。**
+     * 旧实现只认 `world` / `world_nether` / `world_the_end`，基岩服上
+     * 「备份世界」永远找不到存档 → 恒定失败（真机实测）。
+     */
+    private fun worldBackupTargets(dir: File): List<File> = when {
+        BdsSupport.isBdsDir(dir) -> listOf(File(dir, BdsSupport.WORLDS_DIR))
+        PowerNukkitXLayout.isPowerNukkitX(dir) -> PowerNukkitXLayout.worldDirectories(dir)
+        else -> listOf(File(dir, "world"), File(dir, "world_nether"), File(dir, "world_the_end"))
+    }
+
+    /** 与 [worldBackupTargets] 对应，只取目录名（还原时按同名前缀判断） */
+    private fun worldTargetNames(dir: File): List<String> =
+        worldBackupTargets(dir).map { it.name }
 
     /** 列出所有快照，按时间倒序（最新在前） */
     fun listSnapshots(): List<SnapshotInfo> {
@@ -160,7 +178,7 @@ class BackupManager(private val termux: TermuxRuntime) {
         out.exists() && out.length() > 0
     } catch (e: Exception) { out.delete(); false }
 
-    /** 外部备份整个世界（world + world_nether + world_the_end）。 */
+    /** 外部备份整个世界（Java: world + world_nether + world_the_end；BDS: worlds/）。 */
     fun backupWorldToExternal(
         dirName: String,
         origin: BackupOrigin = BackupOrigin.Manual,
@@ -168,11 +186,7 @@ class BackupManager(private val termux: TermuxRuntime) {
     ): String? {
         if (!ExternalBackupStore.ensure()) return null
         val dir = serverDir(dirName)
-        val worlds = if (PowerNukkitXLayout.isPowerNukkitX(dir)) {
-            PowerNukkitXLayout.worldDirectories(dir)
-        } else {
-            listOf(File(dir, "world"), File(dir, "world_nether"), File(dir, "world_the_end"))
-        }
+        val worlds = worldBackupTargets(dir)
         if (!worlds.any { it.isDirectory }) return null
         val out = File(ExternalBackupStore.rootDir, backupName(BackupKind.World, dirName, origin = origin))
         return if (zipDirs(worlds, out)) {
@@ -292,7 +306,7 @@ class BackupManager(private val termux: TermuxRuntime) {
         }
     }
 
-    /** 从外部 zip 还原世界（zip 内 world/world_nether/world_the_end 前缀） */
+    /** 从外部 zip 还原世界（zip 内为 world/… 或 worlds/… 前缀） */
     suspend fun restoreWorldFromExternal(file: File, dirName: String): Boolean = withContext(Dispatchers.IO) {
         try {
             if (!file.exists()) return@withContext false
@@ -305,9 +319,7 @@ class BackupManager(private val termux: TermuxRuntime) {
             }
             stopServerIfRunning()
             val serverDir = serverDir(dirName)
-            val dims = if (PowerNukkitXLayout.isPowerNukkitX(serverDir)) {
-                listOf(PowerNukkitXLayout.worldsDirectory)
-            } else listOf("world", "world_nether", "world_the_end")
+            val dims = worldTargetNames(serverDir)
             // 备份旧 world。rename 失败时**不能**直接 deleteRecursively：
             // 那等于在没能保留副本的情况下主动毁掉用户唯一的世界。
             // 退化为「复制成 .bak 再删」，复制也不成功就中止还原，原世界保持原样。
@@ -386,19 +398,35 @@ class BackupManager(private val termux: TermuxRuntime) {
                 return@withContext false // 原目录一步都没动过
             }
 
-            // ③ 换入。先把旧目录改名暂离（同分区 rename），失败就整体放弃。
+            // ③ 换入。先把旧目录改名暂离，失败就整体放弃。
+            //
+            // **暂离目录必须和 target 同卷**：原来放在 rootDir/tmp（= /data/data/…/files/home/tmp，
+            // 应用私有分区），/storage/emulated/0 与 /data 是两个文件系统，
+            // renameTo 一定失败（EXDEV）→ 每次都走「无法暂离，已中止覆盖」，
+            // 用户看到的却是对话框关掉、什么都没发生（真机实测 2026-11-14）。
+            // 放在 Minecraftserver 的**上一级**（同一卷）既能成功 rename，
+            // 又不会被「按子目录枚举服务器」扫成一台假服务器。
             var rollback: File? = null
             if (target.exists()) {
-                val old = File(termux.installer.rootDir, "tmp/restore-old-${System.currentTimeMillis()}")
+                val trashDir = File(termux.serversDir.parentFile, ".restore-trash")
+                    .apply { mkdirs() }
+                val old = File(trashDir, "${target.name}-${System.currentTimeMillis()}")
                 if (!target.renameTo(old)) {
                     Log.e(TAG, "restoreServerFromExternal: 无法暂离 ${target.name}，已中止覆盖（原目录未改动）")
                     return@withContext false
                 }
                 rollback = old
             }
-            if (!stageDir.renameTo(target)) {
-                Log.e(TAG, "restoreServerFromExternal: 换入失败，正在回滚")
-                rollback?.let { if (it.renameTo(target)) Log.i(TAG, "已回滚到还原前状态") }
+            // 暂存目录在 /data，目标在 /storage —— 跨卷只能"复制"，不能 rename。
+            val moved = runCatching { stageDir.copyRecursively(target, overwrite = true) }
+                .getOrDefault(false)
+            if (!moved) {
+                Log.e(TAG, "restoreServerFromExternal: 复制到 ${target.name} 失败，正在回滚")
+                target.deleteRecursively()
+                rollback?.let {
+                    if (it.renameTo(target)) Log.i(TAG, "已回滚到还原前状态")
+                    else Log.e(TAG, "回滚失败，旧目录仍保留在 ${it.absolutePath}")
+                }
                 return@withContext false
             }
             rollback?.deleteRecursively()
@@ -529,9 +557,9 @@ class BackupManager(private val termux: TermuxRuntime) {
     /**
      * 恢复快照：
      * 1. 若 MC 在运行，发送 stop 命令并轮询等待退出（最多 10s），超时则强制停止
-     * 2. 备份当前 world 目录（重命名为 world.bak.<timestamp>）
-     * 3. 删除 world 目录
-     * 4. 解压快照到 world 目录
+     * 2. 备份当前三维度目录（优先 rename，失败退化为「复制成 .bak 再删」，都不行就中止）
+     * 3. 解压快照到 serverDir
+     * 4. 解压失败则把 .bak 换回来（回滚）
      */
     suspend fun restoreSnapshot(snapshotName: String, dirName: String): Boolean = withContext(Dispatchers.IO) {
         try {
@@ -558,34 +586,57 @@ class BackupManager(private val termux: TermuxRuntime) {
                 }
             }
 
-            val serverDir = worldDir(dirName).parentFile ?: return@withContext false
-            val dims = if (PowerNukkitXLayout.isPowerNukkitX(serverDir)) {
-                listOf(PowerNukkitXLayout.worldsDirectory)
-            } else listOf("world", "world_nether", "world_the_end")
+            val serverDir = serverDir(dirName)
+            val dims = worldTargetNames(serverDir)
 
-            // 2. 备份当前三维度目录（重命名为 *.bak.<timestamp>）
-            dims.forEach { dim ->
+            // 2. 备份当前三维度目录（优先重命名为 *.bak.<timestamp>）
+            //
+            //    与 restoreWorldFromExternal 用同一套约定：**rename 失败时绝不能直接
+            //    deleteRecursively** —— 那等于在没能保留副本的情况下主动毁掉用户唯一的
+            //    世界。公共存储是 FUSE，rename 在跨挂载点 / 目录被占用 / 权限抖动时
+            //    都会返回 false。这里退化为「复制成 .bak 再删」，复制也不成功就中止
+            //    还原并回滚已处理的部分，原世界保持原样。
+            val backedUp = mutableListOf<Pair<File, File>>() // 原目录 to 备份副本
+            for (dim in dims) {
                 val dimDir = File(serverDir, dim)
-                if (dimDir.exists()) {
-                    val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
-                    val backup = File(serverDir, "$dim.bak.$ts")
-                    if (!dimDir.renameTo(backup)) {
-                        // 重命名失败，直接递归删除
-                        dimDir.deleteRecursively()
+                if (!FileOps.existsNoFollow(dimDir)) continue
+                val ts = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                val backup = File(serverDir, "$dim.bak.$ts")
+                if (dimDir.renameTo(backup)) {
+                    backedUp += dimDir to backup
+                } else if (runCatching { dimDir.copyRecursively(backup, overwrite = true) }.getOrDefault(false)) {
+                    if (!FileOps.deleteRecursively(dimDir)) {
+                        Log.w(TAG, "restoreSnapshot: $dim 已复制备份但原目录删除失败，继续还原")
                     }
+                    backedUp += dimDir to backup
+                } else {
+                    Log.e(TAG, "restoreSnapshot: 无法备份 $dim，已中止还原（原世界保持不变）")
+                    backedUp.forEach { (orig, bak) ->
+                        if (!bak.renameTo(orig)) {
+                            Log.e(TAG, "restoreSnapshot: 回滚失败，备份仍保留在 ${bak.absolutePath}")
+                        }
+                    }
+                    return@withContext false
                 }
             }
 
-            // 3. 确保已删除（重命名成功后原目录不存在）
-            dims.forEach { dim ->
-                val dimDir = File(serverDir, dim)
-                if (dimDir.exists()) dimDir.deleteRecursively()
+            // 3. 解压快照到 serverDir（zip 条目带 world/ 前缀，恢复三维度目录）
+            val extracted = runCatching { extractZipToDir(snapshotFile, serverDir) }
+            if (extracted.isFailure) {
+                // 解压没成功就必须把备份换回来，否则用户的世界只剩一堆 .bak 目录、
+                // 界面上又看不到（不认 .bak），等于永久丢失。
+                Log.e(TAG, "restoreSnapshot: 解压失败，正在回滚到还原前状态", extracted.exceptionOrNull())
+                dims.forEach { FileOps.deleteRecursively(File(serverDir, it)) }
+                backedUp.forEach { (orig, bak) ->
+                    if (!bak.renameTo(orig)) {
+                        Log.e(TAG, "restoreSnapshot: 回滚失败，旧世界保留在 ${bak.absolutePath}")
+                    }
+                }
+                return@withContext false
             }
-
-            // 4. 解压快照到 serverDir（zip 条目带 world/ 前缀，恢复三维度目录）
-            extractZipToDir(snapshotFile, serverDir)
             true
         } catch (e: Exception) {
+            Log.e(TAG, "restoreSnapshot failed: ${e.message}", e)
             false
         }
     }

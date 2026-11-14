@@ -200,16 +200,53 @@ object BdsVersions {
      * 且它同样服务老版本文件；继续保留只会让每个老版本白等一次超时。
      */
     fun candidates(entry: BdsVersionEntry): List<DownloadSource> {
-        val urls = LinkedHashSet<String>()
-        val base = entry.url?.trim().orEmpty()
-        if (base.isNotEmpty()) urls += base
-        if (base.isNotEmpty()) lastSegmentVariants(base).forEach { urls += it }
-        // 清单没给直链时用命名规则兜底
-        if (urls.isEmpty()) urls += buildUrl(entry.version, entry.channel)
-        return urls.map { url ->
-            DownloadSource("官方 CDN（www.minecraft.net）", url)
+        val out = LinkedHashMap<String, DownloadSource>()
+        fun put(url: String, label: String = OFFICIAL_LABEL) {
+            val trimmed = url.trim()
+            if (trimmed.isNotEmpty()) out.putIfAbsent(trimmed, DownloadSource(label, trimmed))
         }
+        val base = entry.url?.trim().orEmpty()
+        if (base.isNotEmpty()) {
+            put(base)
+            lastSegmentVariants(base).forEach { put(it) }
+        } else {
+            // 清单没给直链时用命名规则兜底
+            put(buildUrl(entry.version, entry.channel))
+            // 只有三段版本号时，按命名规则拼出来的文件名**缺第四段构建号**
+            // （真名是 `bedrock-server-1.26.60.6.zip`），必然 404。
+            // 这里按构建号小范围穷举，够覆盖绝大多数发布（1.26.60 是第 6 个构建）。
+            guessBuildVariants(entry.version, entry.channel).forEach { name ->
+                put("${cdnPrefix(entry.channel)}/$name", "$OFFICIAL_LABEL·猜测构建号")
+            }
+        }
+        return out.values.toList()
     }
+
+    private const val OFFICIAL_LABEL = "官方 CDN（www.minecraft.net）"
+
+    /**
+     * 缺直链时穷举带构建号的文件名。
+     *
+     * 触发条件恰好是「远端清单在，但它的 `metadata.json` 取不回来」：
+     * 清单只给三段版本号（`1.26.60`），官方文件名却带构建号（`1.26.60.6`），
+     * 拼出来的 `bedrock-server-1.26.60.zip` 一定 404 —— 2026-11-13 实机
+     * 「选 1.26.60 直接单源失败」就是这个。多试几个构建号比直接判死有用，
+     * 真拿到错构建时摘要校验会拦住（有摘要的版本才会走到这里的情况极少）。
+     */
+    private fun guessBuildVariants(version: String, channel: BdsChannel): List<String> {
+        if (channel != BdsChannel.Stable) return emptyList()
+        val trimmed = version.trim()
+        if (trimmed.contains("preview", ignoreCase = true)) return emptyList()
+        // 已经带第四段（1.21.84.1）就不是「缺构建号」的问题，别乱猜
+        if (segments(trimmed).size != 3) return emptyList()
+        return (1..MAX_GUESSED_BUILD).map { "bedrock-server-$trimmed.$it.zip" }
+    }
+
+    /** 官方 CDN 的目录前缀（与 [buildUrl] 同一套规则，只是不带文件名） */
+    private fun cdnPrefix(channel: BdsChannel): String = hostFor(channel)
+
+    /** 穷举的构建号上限：1.26.60 的真实构建是 .6，留一倍余量 */
+    private const val MAX_GUESSED_BUILD = 12
 
     /** `bedrock-server-1.20.51.01.zip` ↔ `bedrock-server-1.20.51.1.zip` */
     private fun lastSegmentVariants(url: String): List<String> {
@@ -558,26 +595,111 @@ object BdsVersionCatalogLoader {
     }
 
     /**
-     * 取文本。
+     * 取文本（逐镜像重试）。
      *
-     * `Accept-Encoding: identity` 是硬要求：HttpURLConnection 会自动加 gzip 并在
-     * 读流时透明解压，但 `Content-Length` 仍是压缩前的值，跟实际读到的字节数
-     * 对不上 —— 历史上就是这条让「下载不完整」判定误触发、无限换源。
+     * `raw.githubusercontent.com` 在国内移动网络下经常整段不可达：版本清单还能
+     * 靠缓存显得「能用」，但单版本的 `metadata.json` 取不回来，直链就退化成
+     * 「按命名规则拼」，而官方文件名带第四段构建号（`bedrock-server-1.26.60.6.zip`），
+     * 拼出来的 `…-1.26.60.zip` 必然 404 —— 2026-11-13 实机「选 1.26.60 单源 404」。
+     *
+     * 所以同一份内容按顺序试三个通道：原始地址 → gh-proxy 加速 →
+     * GitHub 内容接口（api.github.com 可直连，返回原始内容或 base64）。
+     * 全挂才抛，抛错信息带每个通道的原因，方便用户判断是网络还是版本没了。
      */
     private fun fetchText(url: String): String {
+        val errors = mutableListOf<String>()
+        for (mirror in mirrorUrls(url)) {
+            try {
+                return fetchTextOnce(mirror)
+            } catch (e: Throwable) {
+                errors += "${runCatching { URL(mirror).host }.getOrDefault(mirror)} ${e.message ?: e.javaClass.simpleName}"
+            }
+        }
+        throw IllegalStateException(errors.joinToString("；").ifEmpty { "没有可用的地址" })
+    }
+
+    /**
+     * 一个原始地址对应的全部候选通道（第一个就是它自己）。
+     *
+     * 只对 `raw.githubusercontent.com` 做镜像：其它域名（minecraft.net 的
+     * 官方链接接口、CDN）没有等价的加速通道，套上去只会多一次无效请求。
+     */
+    internal fun mirrorUrls(url: String): List<String> {
+        val out = LinkedHashSet<String>()
+        out += url
+        if (url.startsWith(RAW_GITHUB)) {
+            GH_PROXIES.forEach { proxy -> out += proxy + url }
+            githubContentsApi(url)?.let { out += it }
+        }
+        return out.toList()
+    }
+
+    /**
+     * `raw.githubusercontent.com/<owner>/<repo>/<ref>/<path>`
+     * → `api.github.com/repos/<owner>/<repo>/contents/<path>?ref=<ref>`
+     */
+    private fun githubContentsApi(url: String): String? {
+        val rest = url.removePrefix(RAW_GITHUB)
+        val parts = rest.split('/')
+        if (parts.size < 4) return null
+        val owner = parts[0]
+        val repo = parts[1]
+        val ref = parts[2]
+        val path = parts.drop(3).joinToString("/")
+        if (owner.isBlank() || repo.isBlank() || ref.isBlank() || path.isBlank()) return null
+        return "https://api.github.com/repos/$owner/$repo/contents/$path?ref=$ref"
+    }
+
+    private fun fetchTextOnce(url: String): String {
+        val isApi = url.startsWith("https://api.github.com/")
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.connectTimeout = 12_000
             conn.readTimeout = 15_000
             conn.setRequestProperty("User-Agent", "Minexa/1.0 (Android)")
+            // `Accept-Encoding: identity` 是硬要求：HttpURLConnection 会自动加 gzip 并在
+            // 读流时透明解压，但 `Content-Length` 仍是压缩前的值，跟实读字节数对不上
+            // —— 历史上就是这条让「下载不完整」判定误触发、无限换源。
             conn.setRequestProperty("Accept-Encoding", "identity")
+            if (isApi) {
+                // 内容接口默认返回带 base64 的 JSON，这个媒体类型直接给原始字节
+                conn.setRequestProperty("Accept", "application/vnd.github.raw")
+            }
             val code = conn.responseCode
             if (code !in 200..299) throw IllegalStateException("HTTP $code")
-            return conn.inputStream.bufferedReader().use { it.readText() }
+            val text = conn.inputStream.bufferedReader().use { it.readText() }
+            return if (isApi) decodeGithubContents(text) else text
         } finally {
             conn.disconnect()
         }
     }
+
+    /**
+     * `application/vnd.github.raw` 不被支持时，内容接口会退回
+     * `{"content":"<base64>","encoding":"base64",…}`，这里兜一层解码。
+     * 拿到的已经是原始文本（首个非空字符不是 `{`）时原样返回。
+     */
+    private fun decodeGithubContents(text: String): String {
+        if (!text.trimStart().startsWith("{")) return text
+        val obj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: return text
+        val b64 = runCatching { obj["content"]?.jsonPrimitive?.content }.getOrNull() ?: return text
+        val cleaned = b64.filterNot { it == '\n' || it == '\r' }
+        val bytes = runCatching { java.util.Base64.getDecoder().decode(cleaned) }.getOrNull() ?: return text
+        return String(bytes, Charsets.UTF_8)
+    }
+
+    private const val RAW_GITHUB = "https://raw.githubusercontent.com/"
+
+    /**
+     * raw.githubusercontent 的加速通道。
+     *
+     * 只用「把原始地址拼在域名后面」这一种形态的代理；它们在 2026-11 实测可用。
+     * 失败会被跳过，顺序不影响正确性，只影响快慢。
+     */
+    private val GH_PROXIES = listOf(
+        "https://gh-proxy.com/",
+        "https://ghfast.top/"
+    )
 
     private fun prefs(context: Context) =
         context.applicationContext.getSharedPreferences(PREF, Context.MODE_PRIVATE)

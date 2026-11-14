@@ -64,6 +64,9 @@ import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 /**
  * MCP（Model Context Protocol）服务设置：
@@ -217,8 +220,7 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                     } else null,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                 Spacer(Modifier.height(4.dp))
                 Text(stringResource(R.string.mcp_port_hint), fontSize = 11.sp, color = Muted)
             }
@@ -234,9 +236,10 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 Row {
                     Button(
+                        modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
                         onClick = { copyToClipboard(config.mcpToken) },
                         enabled = config.mcpToken.isNotEmpty(),
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                         shape = McShape.ControlCompact
                     ) {
                         Text(stringResource(R.string.mcp_copy))
@@ -268,8 +271,9 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 )
                 Spacer(Modifier.height(6.dp))
                 Button(
+                    modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control),
                     onClick = { copyToClipboard(endpoint) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                     shape = McShape.Control
                 ) {
                     Text(stringResource(R.string.mcp_copy))
@@ -309,8 +313,9 @@ fun McpScreen(vm: McViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 Row {
                     Button(
+                        modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
                         onClick = { skillExportLauncher.launch(McpSkillDoc.FILE_NAME) },
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                         shape = McShape.ControlCompact
                     ) {
                         Text(stringResource(R.string.mcp_skill_export))

@@ -30,6 +30,21 @@ object CrashReportAnalyzer {
 
     data class Finding(val level: Level, val label: String, val detail: String, val evidence: String, val suggestion: String)
 
+    /**
+     * 带规则 id 的命中项。
+     *
+     * [Analysis] 只关心「给人看的文案」；而结构化分析引擎（`CrashInsightEngine`）
+     * 需要知道**是哪条规则**命中的，才能把修复动作、历史案例、置信度串起来。
+     */
+    data class RuleHit(
+        val ruleId: String,
+        val level: Level,
+        val label: String,
+        val detail: String,
+        val evidence: String,
+        val suggestion: String
+    )
+
     data class Analysis(
         val title: String,
         val firstException: String?,
@@ -106,6 +121,15 @@ object CrashReportAnalyzer {
     fun customRulesDir(context: Context): File = File(context.filesDir, "error_rules")
 
     /**
+     * 在线知识库规则包缓存目录：`filesDir/kb`。
+     *
+     * 由 [CrashKnowledgeBase] 下载写入（签名/版本校验通过才落盘），
+     * 加载顺序位于内置规则之后、用户自定义规则之前 —— 用户规则永远最高优先级。
+     * 规则包内的 id 约定以 `kb-` 开头，便于区分知识来源（L1 内置 / L3 在线）。
+     */
+    fun knowledgeRulesDir(context: Context): File = File(context.filesDir, "kb")
+
+    /**
      * 载入内置规则 + 用户自定义规则。幂等；重复调用会重新加载（便于用户在文件管理器里
      * 改完规则后刷新）。
      *
@@ -120,24 +144,31 @@ object CrashReportAnalyzer {
             warn("读取内置崩溃规则失败: ${e.message}")
             null
         }
-        val custom = try {
-            customRulesDir(context).listFiles { f -> f.isFile && f.name.endsWith(".json") }
+        // 在线知识库规则包（L3）+ 用户自定义规则：两者都是「追加/覆盖」，顺序决定覆盖优先级。
+        val knowledge = readRuleDir(knowledgeRulesDir(context), "在线规则包")
+        val custom = readRuleDir(customRulesDir(context), "自定义规则")
+        loadFromJson(builtin, *knowledge.toTypedArray(), *custom.toTypedArray())
+    }
+
+    /** 读取规则目录并逐个限额；任何 IO/体积异常都降级为「跳过该文件」，不影响内置规则。 */
+    private fun readRuleDir(dir: File, label: String): List<String> {
+        return try {
+            dir.listFiles { f -> f.isFile && f.name.endsWith(".json") }
                 ?.sortedBy { it.name }
                 ?.mapNotNull { f ->
                     if (f.length() > MAX_CUSTOM_RULE_BYTES) {
-                        warn("自定义规则 ${f.name} 超过 ${MAX_CUSTOM_RULE_BYTES / 1024} KB，已跳过")
+                        warn("$label ${f.name} 超过 ${MAX_CUSTOM_RULE_BYTES / 1024} KB，已跳过")
                         return@mapNotNull null
                     }
                     runCatching { f.readText() }
-                        .onFailure { warn("读取自定义规则 ${f.name} 失败: ${it.message}") }
+                        .onFailure { warn("读取$label ${f.name} 失败: ${it.message}") }
                         .getOrNull()
                 }
                 .orEmpty()
         } catch (e: Exception) {
-            warn("扫描自定义规则目录失败: ${e.message}")
+            warn("扫描$label 目录失败: ${e.message}")
             emptyList()
         }
-        loadFromJson(builtin, *custom.toTypedArray())
     }
 
     /**
@@ -276,22 +307,9 @@ object CrashReportAnalyzer {
         val code = exitCode.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
         val components = component.findAll(text).map { it.groupValues[1] }.distinct().take(12).toList()
 
-        val findings = mutableListOf<Finding>()
-        for (rule in rules) {
-            val hit = rule.regex?.find(text)
-            val matched = (rule.contains.isNotEmpty() && rule.contains.any { text.contains(it, ignoreCase = true) }) ||
-                hit != null ||
-                (code != null && code in rule.exitCodes)
-            if (!matched) continue
-            findings += Finding(
-                level = rule.level,
-                // label 若被占位符整条吃掉（渲染成空），退回规则 id，避免卡片出现空标题
-                label = render(rule.label, hit).ifBlank { rule.id },
-                detail = render(rule.detail, hit),
-                evidence = render(rule.evidence, hit),
-                suggestion = render(rule.suggest, hit)
-            )
-        }
+        val findings = matchAll(text, code).map {
+            Finding(it.level, it.label, it.detail, it.evidence, it.suggestion)
+        }.toMutableList()
         if (findings.isEmpty()) {
             findings += Finding(
                 level = Level.Reminder,
@@ -301,7 +319,40 @@ object CrashReportAnalyzer {
                 suggestion = "查看原始报告中的第一个异常和完整 Caused by 链，并核对核心官方要求。"
             )
         }
+        // Identified 优先展示：Possible 是启发式命中（如日志里恰好出现 fontconfig 字样），
+        // 不应盖过确定性归因坐上主结论——2026-11 用户案例：Java cacerts 损坏导致全部
+        // HTTPS 下载失败，却因 500 字符预览里恰好有 fontconfig 行被误诊成「字体运行库缺失」，
+        // 用户照提示修字体库自然无效。
+        // sortBy 是稳定排序：同级别内保持规则表顺序（自定义规则仍在同级别最前）。
+        findings.sortBy { it.level.ordinal }
         return Analysis(first ?: "未找到首个异常", first, causes, code, components, findings)
+    }
+
+    /**
+     * 结构化规则匹配：返回**带规则 id** 的命中列表（按规则表顺序，未排序）。
+     *
+     * 供 [com.mineserve.mobile.server.CrashInsightEngine] 使用；
+     * [analyze] 的结果与它同源，保证「弹窗摘要」与「结构化报告」不会各说各话。
+     */
+    fun matchAll(text: String, exitCodeOverride: Int? = null): List<RuleHit> {
+        val code = exitCodeOverride ?: exitCode.find(text)?.groupValues?.getOrNull(1)?.toIntOrNull()
+        val hits = mutableListOf<RuleHit>()
+        for (rule in rules) {
+            val hit = rule.regex?.find(text)
+            val matched = (rule.contains.isNotEmpty() && rule.contains.any { text.contains(it, ignoreCase = true) }) ||
+                hit != null ||
+                (code != null && code in rule.exitCodes)
+            if (!matched) continue
+            hits += RuleHit(
+                ruleId = rule.id,
+                level = rule.level,
+                label = render(rule.label, hit).ifBlank { rule.id },
+                detail = render(rule.detail, hit),
+                evidence = render(rule.evidence, hit),
+                suggestion = render(rule.suggest, hit)
+            )
+        }
+        return hits
     }
 
     // ── 文案占位符 ──────────────────────────────────────────────

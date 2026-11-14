@@ -21,6 +21,13 @@ import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.data.StepStatus
 import com.mineserve.mobile.server.BackupManager
+import com.mineserve.mobile.server.CrashCaseStore
+import com.mineserve.mobile.server.CrashInsight
+import com.mineserve.mobile.server.CrashInsightEngine
+import com.mineserve.mobile.server.CrashReportAnalyzer
+import com.mineserve.mobile.server.CrashReportManager
+import com.mineserve.mobile.server.EnvInfo
+import com.mineserve.mobile.server.TriggerInfo
 import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.Worlds
@@ -102,6 +109,7 @@ internal class McpToolRunner(
         "get_app_log" -> appLog(args)
         "clear_app_log" -> clearAppLog()
         "get_last_run_log" -> lastRunLog(args)
+        "get_crash_insight" -> crashInsight(args)
         "get_device_info" -> deviceInfo()
         "check_port" -> checkPort(args)
         "http_probe" -> httpProbe(args)
@@ -165,7 +173,8 @@ internal class McpToolRunner(
                 }
             })
             put("commands", buildJsonObject {
-                listOf("bash", "java", "wget", "frpc", "rclone", "proot", "apt-get").forEach { cmd ->
+                // rclone / wget 已从依赖链中移除（运行时零调用），不再作为健康项报告。
+                listOf("bash", "java", "frpc", "proot", "apt-get").forEach { cmd ->
                     put(cmd, termux.isCommandInstalled(cmd))
                 }
             })
@@ -312,7 +321,7 @@ internal class McpToolRunner(
             )
         }
         return runJob(args, "install_dependencies") { job ->
-            job.log("Installing runtime dependencies (wget / fonts / frp / rclone / proot) via apt...")
+            job.log("Installing runtime dependencies (fonts / frp / proot) via apt...")
             val ok = controller.installDependencies()
             if (!ok) {
                 dumpAppLog(job)
@@ -323,7 +332,7 @@ internal class McpToolRunner(
     }
 
     private suspend fun removeDependencies(args: JsonObject?): McpToolResult {
-        requireConfirm(args, "remove the installed Termux dependencies (wget / frp / rclone / proot)")?.let { return it }
+        requireConfirm(args, "remove the installed Termux dependencies (fonts / frp / proot)")?.let { return it }
         if (termux.isMcRunning()) return bad("The server is running; stop it before removing dependencies.")
         val removed = termux.deleteDependencies()
         return McpToolResult("Dependency removal finished ($removed entries touched). Verify with get_runtime_info.")
@@ -385,7 +394,10 @@ internal class McpToolRunner(
                     "selected runtime is FCL (${config.selectedJavaVersion.name}); " +
                         "use reinstall_java with vendor=Fcl"
                 } else {
-                    "ensureJvmComplete(${config.selectedJavaVersion.name}) -> ${termux.ensureJvmComplete(config.selectedJavaVersion)}"
+                    // 先求值再拼字符串：ensureJvmComplete 现在是 suspend，模板里直接调用
+                    // 虽然能编译，但可读性差、也不方便加日志
+                    val fixed = termux.ensureJvmComplete(config.selectedJavaVersion)
+                    "ensureJvmComplete(${config.selectedJavaVersion.name}) -> $fixed"
                 }
                 "fonts" -> "repairFontRuntime -> ${termux.repairFontRuntime()}"
                 else -> {
@@ -909,6 +921,57 @@ internal class McpToolRunner(
         val text = termux.readLastMcRunLog(maxBytes)
         if (text.isBlank()) return McpToolResult("(no previous server run log found)")
         return McpToolResult(text)
+    }
+
+    /**
+     * 结构化崩溃分析（与 App 内「分析」页同源）。
+     *
+     * 入参：`crash_id` 可选（`crash_20260101_101500` 或文件名），缺省取最新一份报告。
+     * 输出：`CrashInsight` JSON（根因/置信度/证据行号/修复步骤/知识来源/相似案例）。
+     * 已有 sidecar 直接读；没有则现场生成并落盘，保证 MCP 与 UI 结论一致。
+     */
+    private suspend fun crashInsight(args: JsonObject?): McpToolResult = withContext(Dispatchers.IO) {
+        val manager = CrashReportManager(termux)
+        val reports = manager.listCrashReports()
+        if (reports.isEmpty()) return@withContext McpToolResult("(no crash report found)", isError = true)
+        val requested = McpArgs.string(args, "crash_id")
+        val target = requested?.let { id ->
+            val normalized = id.removeSuffix(".txt")
+            reports.firstOrNull { it.crashId == normalized || it.fileName == id }
+        } ?: reports.first()
+            ?: return@withContext McpToolResult("(crash report '$requested' not found)", isError = true)
+
+        val cached = manager.readInsight(target.crashId)
+        val insight = cached ?: run {
+            val reportText = runCatching { File(target.path).readText() }.getOrDefault("")
+            val sessionLog = manager.readSessionLogSidecar(target.crashId)
+            val config = repo.currentConfig()
+            val generated = CrashInsightEngine(CrashCaseStore(File(app.filesDir, "crash-cases")))
+                .analyze(
+                    CrashInsightEngine.Input(
+                        crashId = target.crashId,
+                        env = EnvInfo(
+                            core = config.activeCoreName ?: "unknown",
+                            coreVersion = config.mcVersion,
+                            mcVersion = config.mcVersion,
+                            javaVersion = config.selectedJavaVersion.displayName.removePrefix("Java "),
+                            javaVendor = config.selectedJavaVendor.logName,
+                            heapMb = config.maxHeapMb,
+                            android = Build.VERSION.RELEASE.orEmpty(),
+                            abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
+                            device = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
+                        ),
+                        trigger = TriggerInfo(exitCode = CrashReportAnalyzer.analyze(reportText).exitCode ?: -1),
+                        logText = sessionLog.ifBlank { reportText },
+                        sessionId = "",
+                        startedAt = 0L,
+                        endedAt = target.createdTime
+                    )
+                )
+            manager.writeInsight(target.crashId, CrashInsight.encode(generated))
+            generated
+        }
+        McpToolResult(CrashInsight.encode(insight))
     }
 
     private fun deviceInfo(): McpToolResult {

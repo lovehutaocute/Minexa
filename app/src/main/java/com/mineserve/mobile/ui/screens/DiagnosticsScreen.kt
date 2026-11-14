@@ -49,6 +49,9 @@ import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 @Composable
 fun DiagnosticsScreen(vm: McViewModel, onBack: () -> Unit) {
@@ -87,9 +90,8 @@ fun DiagnosticsScreen(vm: McViewModel, onBack: () -> Unit) {
                     Button(
                         onClick = { vm.safeRepairRuntime() },
                         enabled = !isDiagnosing && !isRepairing,
-                        modifier = Modifier.weight(1f), shape = McShape.ControlCompact,
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo)
-                    ) {
+                        modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact), shape = McShape.ControlCompact,
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo)) {
                         if (isRepairing) {
                             CircularProgressIndicator(Modifier.size(15.dp), color = Color.White, strokeWidth = 2.dp)
                             Spacer(Modifier.size(6.dp))

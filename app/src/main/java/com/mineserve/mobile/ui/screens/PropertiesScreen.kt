@@ -38,7 +38,6 @@ import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Save
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -92,6 +91,7 @@ import com.mineserve.mobile.server.ResolvedProperty
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.theme.Bg
@@ -106,6 +106,10 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Muted
 import kotlin.math.roundToInt
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 服务器属性页。
@@ -217,7 +221,7 @@ private fun DynamicPropertiesScreen(
         else -> group != PropertyGroup.P3 || size <= 6
     }
 
-    Column(Modifier.fillMaxSize().background(Bg)) {
+    Column(Modifier.fillMaxSize().background(pageSurface())) {
         // ── 顶栏 + 搜索：同一块白底 ──
         Column(Modifier.fillMaxWidth().background(Card)) {
             if (showBackBar) {
@@ -380,7 +384,7 @@ private fun DynamicPropertiesScreen(
     }
 
     if (showRestartDialog) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showRestartDialog = false },
             title = { Text(stringResource(R.string.s581), fontWeight = FontWeight.Bold) },
             text = { Text(stringResource(R.string.s1001)) },
@@ -399,7 +403,7 @@ private fun DynamicPropertiesScreen(
     }
 
     if (showLeaveDialog) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showLeaveDialog = false },
             title = { Text(stringResource(R.string.prop_ui_unsaved_title), fontWeight = FontWeight.Bold) },
             text = { Text(stringResource(R.string.prop_ui_unsaved_body, changed.size)) },
@@ -939,6 +943,8 @@ private fun MotdHeroCard(
     onValueChange: (String) -> Unit,
     onRevert: () -> Unit
 ) {
+    // 色板插入请求：用自增 id 触发一次「末尾追加」，由输入框负责拼到本地文本上
+    var motdInsert by remember { mutableStateOf<Pair<Long, String>?>(null) }
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -982,11 +988,14 @@ private fun MotdHeroCard(
                 maxLines = 4,
                 placeholder = { Text(stringResource(R.string.prop_ui_motd_empty), fontSize = 11.sp) },
                 textStyle = TextStyle(fontSize = 12.sp),
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                insertRequest = motdInsert
             )
 
             Spacer(Modifier.height(8.dp))
-            ColorPalette(onInsert = { code -> onValueChange(value + code) })
+            // 交给输入框自己拼到本地文本上：直接用外部 value 拼会把防抖窗口内
+            // 用户刚敲的字丢掉（两种操作顺序必丢其中一次编辑）
+            ColorPalette(onInsert = { code -> motdInsert = System.nanoTime() to code })
 
             Spacer(Modifier.height(10.dp))
             ServerListPreview(
@@ -1290,7 +1299,7 @@ private fun ColumnScope.NotGeneratedBody(
 
 @Composable
 private fun PropertiesEmptyScreen(onBack: () -> Unit, showBackBar: Boolean) {
-    Column(Modifier.fillMaxSize().background(Bg)) {
+    Column(Modifier.fillMaxSize().background(pageSurface())) {
         if (showBackBar) {
             BackBar(title = stringResource(R.string.props_back_title), onBack = onBack)
         } else {
@@ -1340,10 +1349,9 @@ private fun PropertiesNotGeneratedCard(
             Spacer(Modifier.height(8.dp))
             Button(
                 onClick = onRefresh,
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.Control,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                 Text(
                     stringResource(R.string.props_not_generated_refresh),
                     color = Color.White,
@@ -1353,10 +1361,9 @@ private fun PropertiesNotGeneratedCard(
         } else {
             Button(
                 onClick = onStartServer,
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.Control,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                 Text(
                     stringResource(R.string.props_not_generated_start),
                     color = Color.White,

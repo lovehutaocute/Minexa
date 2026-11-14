@@ -22,6 +22,7 @@ import android.net.Uri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Construction
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
@@ -63,7 +64,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -96,7 +96,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -122,6 +124,7 @@ import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.HeroBlock
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.ProgressTrack
 import com.mineserve.mobile.ui.QqGroupDialog
@@ -132,6 +135,11 @@ import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.hasSkinTile
+import com.mineserve.mobile.ui.components.skinSurface
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.theme.LocalSkin
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
@@ -143,6 +151,8 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 在线说明书站点（punycode 形式，避免部分系统解析中文域名失败）。
@@ -177,8 +187,6 @@ fun DashboardScreen(
     var showStartSettings by remember { mutableStateOf(false) }
     // QQ 群弹窗（顶部企鹅图标触发）
     var showQqDialog by remember { mutableStateOf(false) }
-    // Snackbar 文案需在 Composable 上下文取值（onClick 内不可调用 @Composable）
-    val mirrorSwitchMsg = stringResource(R.string.mirror_switch_requested)
     val context = androidx.compose.ui.platform.LocalContext.current
     val manualDesc = stringResource(R.string.manual_entry_desc)
 
@@ -196,6 +204,8 @@ fun DashboardScreen(
     // 首屏优先完成布局；各功能卡片自行订阅并刷新局部状态。
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用，避免顶部空白/白色遮挡
         contentWindowInsets = WindowInsets(0.dp)
@@ -239,12 +249,42 @@ fun DashboardScreen(
                             }
                             Spacer(Modifier.width(6.dp))
                             // 视觉突出的「依赖与环境管理」入口（靛蓝填充 + 图标，高对比）
+                            // 这一整块都可换肤：底色 = ext.pillStart → pillEnd 渐变（无主题包时
+                            // 等价于原来的纯 Indigo 填充）；主题包显式给了 ext.gold 时再加一圈
+                            // 金线描边（芙宁娜皮肤的那种描边），没给就保持无边框。
+                            val pill = LocalSkin.current.ext
+                            // v2：`assets.pillButton` 有图就用图，渐变与金边都不再画。
+                            val pillTile = hasSkinTile(SkinTileSlots.PILL_BUTTON)
                             Button(
                                 onClick = { onEnvManager(0) },
-                                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Transparent),
+                                elevation = ButtonDefaults.buttonElevation(defaultElevation = 0.dp),
                                 shape = McShape.ControlCompact,
                                 contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 6.dp),
-                                modifier = Modifier.height(36.dp)
+                                modifier = Modifier
+                                    .height(36.dp)
+                                    .then(
+                                        if (pillTile) Modifier else Modifier.background(
+                                            Brush.linearGradient(listOf(pill.pillStart, pill.pillEnd)),
+                                            McShape.ControlCompact
+                                        )
+                                    )
+                                    .skinTileOverlay(
+                                        SkinTileSlots.PILL_BUTTON,
+                                        McShape.ControlCompact,
+                                        tint = pill.pillStart
+                                    )
+                                    .then(
+                                        if (pill.hasExplicitGold && !pillTile) {
+                                            Modifier.border(
+                                                1.dp,
+                                                pill.gold.copy(alpha = 0.85f),
+                                                McShape.ControlCompact
+                                            )
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                             ) {
                                 Icon(
                                     Icons.Outlined.Construction,
@@ -283,17 +323,12 @@ fun DashboardScreen(
             // 原「服务端资源」卡片已删除（其内存信息并入 Hero 卡片，诊断入口移到启动卡片）；
             // 直接移除该 item，下方卡片由 LazyColumn 自动上移，不留空白。
             item {
-                // ── MC 终端入口（设备状态卡片下方） ──
-                DashboardBootstrapCard(
+                // 运行环境卡片：「初始化 Termux」与「一键安装依赖」合并为一张，
+                // 按阶段只显示当前该做的一步；环境 + 依赖 + 引擎全齐后整卡隐藏。
+                DashboardSetupCard(
                     vm = vm,
-                    onShowHelp = onShowDownloadHelp,
-                    onShowMessage = { message -> scope.launch { snackbarHostState.showSnackbar(message) } }
+                    onShowHelp = onShowDownloadHelp
                 )
-            }
-
-            item {
-                // 一键安装依赖（依赖未装齐时在页面显眼位置展示；装齐后移到底部）
-                DashboardDependenciesCard(vm = vm, onShowHelp = onShowDownloadHelp)
             }
 
             item {
@@ -377,10 +412,9 @@ private fun DashboardJavaInstallCard(vm: McViewModel) {
         Button(
             onClick = { vm.installJava(selected) },
             enabled = !isInstalling,
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+            colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
             shape = McShape.Control,
-            modifier = Modifier.fillMaxWidth()
-        ) {
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
             Text(stringResource(R.string.env_java_install_btn), color = Color.White, fontWeight = FontWeight.SemiBold)
         }
     }
@@ -445,7 +479,7 @@ private fun DashboardCoreSelectionCard(
     val isBdsCore = activeCore?.core == ServerCore.Bds
 
     if (showForceStopConfirm) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showForceStopConfirm = false },
             title = {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -561,14 +595,20 @@ private fun DashboardCoreSelectionCard(
             )
             Spacer(Modifier.height(8.dp))
             Box(modifier = Modifier.fillMaxWidth()) {
+                // 整行长条按钮（v2 `assets.rowButton`）：有图时容器让成透明，
+                // 由贴图承担底色；文字色仍按「有没有已选核心」区分，语义不变。
+                val hasRowTile = hasSkinTile(SkinTileSlots.ROW_BUTTON)
                 Button(
                     onClick = { showCoreDropdown = true },
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = if (activeCore != null) IndigoSoft else Indigo,
+                        containerColor = if (hasRowTile) Color.Transparent
+                        else if (activeCore != null) IndigoSoft else Indigo,
                         contentColor = if (activeCore != null) Indigo else Color.White
                     ),
                     shape = McShape.Control,
-                    modifier = Modifier.fillMaxWidth()
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .skinTileOverlay(SkinTileSlots.ROW_BUTTON, McShape.Control)
                 ) {
                     Text(
                         if (activeCore != null) stringResource(R.string.s374, activeCore.name)
@@ -663,12 +703,30 @@ private fun DashboardCoreSelectionCard(
     }
 }
 
+/**
+ * 运行环境卡片（原「初始化运行环境」与「一键安装依赖」两张卡合并）。
+ *
+ * 这两件事本来就是同一条流水线的前后两段：先下载解压 Termux rootfs，再 apt 装
+ * JDK/字体/proot。拆成两张卡时，首屏会同时出现两个「进度条 + 按钮」，用户不知道
+ * 该先点哪个；合并后按阶段只显示当前该做的一步。
+ *
+ * 四个阶段：
+ * - 未开始：应用启动**不再自动下载**，这里给「开始初始化」按钮，由用户决定何时下载；
+ * - 初始化中：进度条 + 速度 + 控制台尾部；
+ * - 初始化失败：错误原因 + 重试（控制台尾部保留，方便看是哪一步断的）；
+ * - 环境就绪：切成依赖步骤列表 + 开始安装（含独立于 apt 的隧道引擎下载）。
+ *
+ * 右上角闪电图标是镜像测速弹窗入口，**与环境安装状态无关**，任何阶段都在。
+ */
 @Composable
-private fun DashboardDependenciesCard(
+private fun DashboardSetupCard(
     vm: McViewModel,
     onShowHelp: () -> Unit
 ) {
     val isBootstrapped by vm.isBootstrapped.collectAsState()
+    val bootstrapError by vm.bootstrapError.collectAsState()
+    val bootstrapSpeed by vm.bootstrapSpeed.collectAsState()
+    val currentMirrorIndex by vm.currentMirrorIndex.collectAsState()
     val isInstalling by vm.isInstalling.collectAsState()
     val installSpeed by vm.installSpeed.collectAsState()
     val dependencySteps by vm.serverState
@@ -690,19 +748,98 @@ private fun DashboardDependenciesCard(
     val engine by vm.frpcEngine.collectAsState()
     val download by vm.frpcDownload.collectAsState()
     LaunchedEffect(Unit) { vm.refreshFrpcEngine() }
-    if (!depsInstalled || !engine.installed) {
-        McCard(
-            title = stringResource(R.string.s357),
-            compact = true,
-            trailing = {
-                Text(
-                    stringResource(R.string.s358),
-                    color = Indigo,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
+
+    // 「正在初始化」的判据只能是「进度或镜像索引被推动过」：启动不再自动下载，
+    // 所以「进度 0 + 无当前镜像 + 无错误」= 还没开始，不能当成正在下载。
+    // [startRequested] 兜住点击到第一个镜像索引写入之间的空档，否则进度条会闪回「开始初始化」。
+    var startRequested by remember { mutableStateOf(false) }
+    val bootstrapping = !isBootstrapped && bootstrapError == null &&
+        (startRequested || currentMirrorIndex >= 0 || progress > 0)
+
+    var showSpeedTest by remember { mutableStateOf(false) }
+
+    // 环境 + 依赖 + 隧道引擎三者齐备后整卡隐藏（与合并前两张卡各自隐藏的时机一致）。
+    if (isBootstrapped && depsInstalled && engine.installed) return
+
+    McCard(
+        title = stringResource(if (isBootstrapped) R.string.s357 else R.string.s351),
+        compact = true,
+        trailing = {
+            IconButton(
+                onClick = { showSpeedTest = true },
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                Icon(
+                    Icons.Outlined.Bolt,
+                    contentDescription = stringResource(R.string.mirror_speed_title),
+                    tint = Indigo,
+                    modifier = Modifier.size(McIcon.Action)
                 )
             }
-        ) {
+        }
+    ) {
+        if (!isBootstrapped) {
+            when {
+                bootstrapError != null -> {
+                    Text(stringResource(R.string.s354), color = Coral, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                    Spacer(Modifier.height(4.dp))
+                    Text(bootstrapError!!, color = Muted, fontSize = 11.sp)
+                    Spacer(Modifier.height(8.dp))
+                    DashboardConsolePreview(vm = vm, maxLines = 3)
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { startRequested = true; vm.retryBootstrap() },
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
+                        shape = McShape.Control,
+                        modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)
+                    ) { Text(stringResource(R.string.s355), color = Color.White, fontWeight = FontWeight.SemiBold) }
+                }
+                bootstrapping -> {
+                    DownloadHintHeader(
+                        isBusy = true,
+                        busyText = stringResource(R.string.s352, progress),
+                        idleText = stringResource(R.string.s353),
+                        speedBps = bootstrapSpeed,
+                        onShowHelp = onShowHelp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.s356), color = Muted, fontSize = 12.sp)
+                    Spacer(Modifier.height(8.dp))
+                    LinearProgressIndicator(
+                        progress = { progress / 100f },
+                        modifier = Modifier.fillMaxWidth(),
+                        color = Indigo,
+                        trackColor = IndigoSoft
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text("$progress%", color = Muted, fontSize = 10.sp)
+                    Spacer(Modifier.height(8.dp))
+                    DashboardConsolePreview(vm = vm, maxLines = 5)
+                }
+                else -> {
+                    DownloadHintHeader(
+                        isBusy = false,
+                        busyText = "",
+                        idleText = stringResource(R.string.s353),
+                        onShowHelp = onShowHelp
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        stringResource(R.string.setup_start_hint),
+                        color = Muted,
+                        fontSize = 11.sp,
+                        lineHeight = 16.sp
+                    )
+                    Spacer(Modifier.height(12.dp))
+                    Button(
+                        onClick = { startRequested = true; vm.retryBootstrap() },
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
+                        shape = McShape.Control,
+                        modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)
+                    ) { Text(stringResource(R.string.setup_start_init), color = Color.White, fontWeight = FontWeight.SemiBold) }
+                }
+            }
+        } else {
             DownloadHintHeader(
                 isBusy = isInstalling,
                 busyText = stringResource(R.string.s359),
@@ -734,17 +871,15 @@ private fun DashboardDependenciesCard(
             Button(
                 onClick = { vm.installDependencies() },
                 enabled = !isInstalling && isBootstrapped,
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.Control,
-                modifier = Modifier.fillMaxWidth()
-            ) {
+                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                 if (isInstalling) {
                     CircularProgressIndicator(modifier = Modifier.size(18.dp), color = Color.White, strokeWidth = 2.dp)
                     Spacer(Modifier.size(8.dp))
                 }
                 Text(
                     when {
-                        !isBootstrapped -> stringResource(R.string.s364)
                         isInstalling -> stringResource(R.string.s365)
                         else -> stringResource(R.string.s366)
                     },
@@ -778,96 +913,9 @@ private fun DashboardDependenciesCard(
             }
         }
     }
-}
 
-@Composable
-private fun DashboardBootstrapCard(
-    vm: McViewModel,
-    onShowHelp: () -> Unit,
-    onShowMessage: (String) -> Unit
-) {
-    val isBootstrapped by vm.isBootstrapped.collectAsState()
-    if (isBootstrapped) return
-
-    val bootstrapError by vm.bootstrapError.collectAsState()
-    val bootstrapSpeed by vm.bootstrapSpeed.collectAsState()
-    val currentMirrorIndex by vm.currentMirrorIndex.collectAsState()
-    val progress by vm.serverState
-        .map { it.currentProgress }
-        .distinctUntilChanged()
-        .collectAsState(initial = 0)
-    var switchInProgress by remember { mutableStateOf(false) }
-    var switchingFromMirror by remember { mutableStateOf(-1) }
-    LaunchedEffect(currentMirrorIndex) {
-        if (switchInProgress && (currentMirrorIndex == -1 || currentMirrorIndex != switchingFromMirror)) {
-            switchInProgress = false
-        }
-    }
-    val mirrorSwitchMsg = stringResource(R.string.mirror_switch_requested)
-    McCard(title = stringResource(R.string.s351), compact = true) {
-        DownloadHintHeader(
-            isBusy = true,
-            busyText = stringResource(R.string.s352, progress),
-            idleText = stringResource(R.string.s353),
-            speedBps = bootstrapSpeed,
-            onShowHelp = onShowHelp
-        )
-        Spacer(Modifier.height(8.dp))
-        if (bootstrapError != null) {
-            Text(stringResource(R.string.s354), color = Coral, fontSize = 14.sp, fontWeight = FontWeight.Bold)
-            Spacer(Modifier.height(4.dp))
-            Text(bootstrapError!!, color = Muted, fontSize = 11.sp)
-            Spacer(Modifier.height(8.dp))
-            DashboardConsolePreview(vm = vm, maxLines = 3)
-            Spacer(Modifier.height(12.dp))
-            Button(
-                onClick = { vm.retryBootstrap() },
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                shape = McShape.Control,
-                modifier = Modifier.fillMaxWidth()
-            ) { Text(stringResource(R.string.s355), color = Color.White, fontWeight = FontWeight.SemiBold) }
-        } else {
-            Text(stringResource(R.string.s356), color = Muted, fontSize = 12.sp)
-            Spacer(Modifier.height(8.dp))
-            LinearProgressIndicator(
-                progress = { progress / 100f },
-                modifier = Modifier.fillMaxWidth(),
-                color = Indigo,
-                trackColor = IndigoSoft
-            )
-            Spacer(Modifier.height(4.dp))
-            Text("${progress}%", color = Muted, fontSize = 10.sp)
-            if (currentMirrorIndex >= 0) {
-                Spacer(Modifier.height(8.dp))
-                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        stringResource(R.string.s1057, vm.mirrorSources.getOrElse(currentMirrorIndex) { "" }),
-                        color = Muted,
-                        fontSize = 10.sp,
-                        modifier = Modifier.weight(1f)
-                    )
-                    OutlinedButton(
-                        onClick = {
-                            if (switchInProgress) return@OutlinedButton
-                            switchingFromMirror = currentMirrorIndex
-                            switchInProgress = true
-                            vm.switchBootstrapMirror()
-                            onShowMessage(mirrorSwitchMsg)
-                        },
-                        enabled = !switchInProgress,
-                        shape = McShape.ControlCompact,
-                        // 原 48dp 的高度把这行撑得比上面的进度文字高出一倍多，
-                        // 收到 36dp 与其它行内紧凑按钮一致。
-                        modifier = Modifier.height(36.dp),
-                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                    ) {
-                        Text(stringResource(if (switchInProgress) R.string.mirror_switching else R.string.s1058), fontSize = 11.sp, color = Indigo)
-                    }
-                }
-            }
-            Spacer(Modifier.height(8.dp))
-            DashboardConsolePreview(vm = vm, maxLines = 5)
-        }
+    if (showSpeedTest) {
+        com.mineserve.mobile.ui.components.MirrorSpeedTestDialog(vm = vm, onDismiss = { showSpeedTest = false })
     }
 }
 
@@ -1157,6 +1205,13 @@ private fun javaRuntimeLabel(runtime: JavaRuntime): String {
 // ── 启动区域：长条启停按钮 + 启动设置抽屉 ──────────────────────────────
 
 /**
+ * 溢出模式下启动条插画的放大倍数：高 1.18（上下各探出约 4dp）、宽 1.06（左右各 3%）。
+ * 数值克制 —— 再大就会压到上一张卡片的文字。
+ */
+private const val ACCENT_OVERFLOW_HEIGHT_SCALE = 1.18f
+private const val ACCENT_OVERFLOW_WIDTH_SCALE = 1.06f
+
+/**
  * 卡片底部的启停长条。
  *
  * 未运行时是一整条「启动」；运行中则以「水滴分裂」的方式分成左右两个按钮
@@ -1212,6 +1267,30 @@ private fun StartStopBar(
         val rightWidth = half * split
 
         // ── 左：启动（未运行）→ 强制停止（运行中）──
+        // 主题包给了 `assets.accent`（启动条插画）时，未运行的整条按钮铺这张图；
+        // 运行中随着 split 动画把图淡出、换成珊瑚色描边 + 红字 —— 停止/强停的警示语义
+        // 不能被主题改掉，所以插画只在「可以启动」这个状态出现。
+        val accentArt = LocalSkin.current.assets.accent
+        val accentOverflow = LocalSkin.current.assets.accentOverflow
+        // 组件贴图（v2 `assets.startButton`）比 accent 插画更具体：它是「按钮皮肤」，
+        // 尺寸和圆角都对得上；accent 是一整条插画，两者同时给时优先贴图。
+        val startTile = hasSkinTile(SkinTileSlots.START_BUTTON)
+
+        // 溢出层：画在按钮本体**之外**（不受按钮 clip 约束），让插画能探出上下边缘。
+        // 只在未运行、且主题包把 accent 声明成 overflow 时出现；按钮本体因此不再画图。
+        if (accentArt != null && accentOverflow) {
+            Image(
+                bitmap = accentArt,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .align(Alignment.Center)
+                    .width(leftWidth * ACCENT_OVERFLOW_WIDTH_SCALE)
+                    .fillMaxHeight(ACCENT_OVERFLOW_HEIGHT_SCALE)
+                    .alpha((1f - split) * if (!isRunning && !startEnabled) 0.45f else 1f)
+            )
+        }
+
         Box(
             modifier = Modifier
                 .align(Alignment.CenterStart)
@@ -1219,7 +1298,7 @@ private fun StartStopBar(
                 .fillMaxHeight()
                 .alpha(if (!isRunning && !startEnabled) 0.45f else 1f)
                 .clip(shape)
-                .background(leftContainer)
+                .skinTileOverlay(SkinTileSlots.START_BUTTON, shape, tint = Mint)
                 .border(BorderStroke(1.5.dp, leftBorder), shape)
                 .clickable(
                     enabled = if (isRunning) !forceStopInFlight else startEnabled,
@@ -1227,6 +1306,26 @@ private fun StartStopBar(
                 ),
             contentAlignment = Alignment.Center
         ) {
+            if (startTile) {
+                // 贴图已由上面的 modifier 画好，这里什么都不加。
+            } else if (accentArt != null && !accentOverflow) {
+                Image(
+                    bitmap = accentArt,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .matchParentSize()
+                        .alpha(1f - split)
+                        // 同 Hero：插画自带透明圆角，放大一点把它推出按钮边界。
+                        .scale(1.06f),
+                    contentScale = ContentScale.Crop
+                )
+            } else if (accentArt == null) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .background(leftContainer)
+                )
+            }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     if (isRunning) Icons.Outlined.Warning else Icons.Filled.PlayArrow,
@@ -1260,8 +1359,10 @@ private fun StartStopBar(
                 .width(rightWidth)
                 .fillMaxHeight()
                 .alpha(split)
-                .clip(shape)
-                .background(Coral)
+                // 停止键可换皮（v2 `assets.stopButton`），但**语义色不许改**：
+                // 没图时仍是 Coral；有图时由作者画的图承担底色，文字恒为白色，
+                // 位置恒在右侧、恒在「运行中」才出现 —— 危险操作的辨识度不靠颜色也能成立。
+                .skinSurface(SkinTileSlots.STOP_BUTTON, Coral, shape)
                 .clickable(enabled = split > 0.6f && !stopInFlight, onClick = onStop)
         ) {
             // 内层固定半宽并贴右：外层宽度增长时文字原地不动、由左向右被"揭开"，
@@ -1683,17 +1784,21 @@ private fun StartSettingsSheet(
             DebouncedTextField(
                 value = maxHeapMb.toString(),
                 onValueChange = { value ->
-                    // 范围 256–65536 MB，超界自动收敛并提示（不静默改值），与设置页原行为一致
-                    value.toIntOrNull()?.let { raw ->
-                        val mb = raw.coerceIn(256, 65536)
-                        if (mb != raw) {
+                    // 范围 256–65536 MB。超界**不写回**，只提示：
+                    // 旧实现在每次防抖回调里 coerceIn 并落盘，于是清空后打第一位「4」
+                    // 停顿超过 300ms 就会被夹成 256 写回输入框，后续数字接在 256 后面
+                    // （「4096」变成「2560」/「25604」），最终以错误的 -Xmx 启动。
+                    val raw = value.toIntOrNull()
+                    if (raw != null) {
+                        if (raw < 256 || raw > 65536) {
                             android.widget.Toast.makeText(
                                 context,
                                 context.getString(R.string.set_max_heap_range_hint),
                                 android.widget.Toast.LENGTH_SHORT
                             ).show()
+                        } else {
+                            vm.setMaxHeap(raw)
                         }
-                        vm.setMaxHeap(mb)
                     }
                 },
                 sanitize = { it.filter(Char::isDigit) },

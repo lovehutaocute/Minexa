@@ -44,7 +44,6 @@ import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Stop
 import androidx.compose.material.icons.outlined.Warning
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -92,6 +91,7 @@ import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.HintNote
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.StatLine
 import com.mineserve.mobile.ui.StatusPill
@@ -107,6 +107,11 @@ import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
 import com.mineserve.mobile.ui.theme.TrackBg
 import kotlinx.coroutines.flow.collectLatest
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.skinContainerColor
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 网络页。
@@ -172,6 +177,8 @@ fun NetworkScreen(
     }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用，避免顶部空白/白色遮挡
         contentWindowInsets = WindowInsets(0.dp)
@@ -315,12 +322,11 @@ private fun TunnelActionRow(
             onClick = onStart,
             enabled = startEnabled,
             colors = ButtonDefaults.buttonColors(
-                containerColor = Indigo,
+                containerColor = skinContainerColor(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 disabledContainerColor = TrackBg
             ),
             shape = RoundedCornerShape(18.dp),
-            modifier = Modifier.weight(1f)
-        ) {
+            modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(18.dp))) {
             Icon(Icons.Outlined.PlayArrow, contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp))
             Spacer(Modifier.size(6.dp))
             Text(startText, color = Color.White)
@@ -607,7 +613,7 @@ private fun FrpProfilePickerDialog(
 ) {
     var pendingDelete by remember { mutableStateOf<FrpProfile?>(null) }
 
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.net_frp_dialog_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
         text = {
@@ -676,7 +682,7 @@ private fun FrpProfilePickerDialog(
     )
 
     pendingDelete?.let { target ->
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text(stringResource(R.string.net_frp_delete_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
             text = { Text(stringResource(R.string.net_frp_delete_message, target.name), fontSize = 13.sp) },
@@ -1208,7 +1214,7 @@ private fun TunnelLogPreview(
 
     // 全屏日志 Dialog
     if (showFullLog) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showFullLog = false },
             title = {
                 Text(stringResource(R.string.s618, tunnelLogs.size), fontWeight = FontWeight.Bold)
@@ -1237,7 +1243,10 @@ private fun TunnelLogPreview(
                 }
             },
             confirmButton = {
-                Button(onClick = { showFullLog = false }, shape = McShape.Control) {
+                Button(
+                    modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, MaterialTheme.colorScheme.primary),
+                    onClick = { showFullLog = false }, shape = McShape.Control) {
                     Text(stringResource(R.string.s620))
                 }
             }

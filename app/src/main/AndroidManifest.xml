@@ -42,6 +42,30 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <!--
+        Android 11+ 包可见性。
+
+        KeepAliveScreen 的「自启动设置」要直达各厂商的安全中心页面，
+        这些页面全在**别人的包**里。没有这段声明时 PackageManager 看不到它们，
+        resolveActivity 恒为 null、startActivity 抛 ActivityNotFoundException，
+        最终只能兜底到应用详情页 —— 用户点「自启动」却没进对页面。
+    -->
+    <queries>
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.huawei.systemmanager" />
+        <package android:name="com.hihonor.systemmanager" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oplus.safecenter" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.vivo.abe" />
+        <package android:name="com.meizu.safe" />
+        <package android:name="com.samsung.android.lool" />
+        <package android:name="com.samsung.android.sm" />
+        <package android:name="com.asus.mobilemanager" />
+        <package android:name="com.evenwell.powersaving.g3" />
+    </queries>
+
+    <!--
         extractNativeLibs 必须为 true。
 
         NativeLibraryBundler 依赖它：jniLibs 下随 APK 打包的 Termux 依赖库
@@ -80,10 +104,16 @@
         </activity>
 
         <!-- 前台服务：MC 进程托管 + 日志 socket 服务端 -->
+        <!--
+            stopWithTask="false"：从最近任务划掉 App 时**不要**顺带停掉服务。
+            显式写出来是因为部分 ROM 会按厂商策略把它当 true 处理；
+            写死后至少 AOSP 侧行为是确定的（服务继续跑，由保活心跳接管）。
+        -->
         <service
             android:name=".service.McForegroundService"
             android:enabled="true"
             android:exported="false"
+            android:stopWithTask="false"
             android:foregroundServiceType="specialUse|dataSync">
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"

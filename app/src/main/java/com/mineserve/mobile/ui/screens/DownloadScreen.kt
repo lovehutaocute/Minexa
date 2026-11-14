@@ -47,7 +47,6 @@ import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
@@ -88,6 +87,8 @@ import com.mineserve.mobile.data.InstalledCore
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.StorageLocation
+import com.mineserve.mobile.ui.pageSurface
+import com.mineserve.mobile.ui.PageTopBar
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
@@ -100,6 +101,9 @@ import com.mineserve.mobile.ui.theme.MintBright
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * 服务端核心下载页（紧凑版）
@@ -229,6 +233,8 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     val installed = config.installedCores.filter { it.location == StorageLocation.Internal }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用
         contentWindowInsets = WindowInsets(0.dp)
@@ -244,7 +250,6 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
             TargetStrip(
                 core = config.selectedCore,
                 version = config.mcVersion,
-                ready = isBootstrapped,
                 bedrock = config.selectedCore.isBedrock,
                 detecting = isLoadingVersions
             )
@@ -324,7 +329,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
 
     // 删除核心二次确认：VM 内是整目录 deleteRecursively，会连同世界存档、插件与配置一起永久删除
     pendingDeleteCore?.let { core ->
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { pendingDeleteCore = null },
             title = { Text(stringResource(R.string.dl_core_delete_title), fontWeight = FontWeight.Bold) },
             text = {
@@ -348,7 +353,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     }
 
     if (showImportDialog) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { if (!importingServer) { showImportDialog = false; pendingImport = null } },
             title = { Text(stringResource(R.string.dlx_import_server)) },
             text = {
@@ -374,8 +379,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                             onValueChange = { importName = it },
                             label = { Text(stringResource(R.string.dlx_server_name)) },
                             singleLine = true,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                     }
                     if (importingServer) {
                         Spacer(Modifier.height(10.dp))
@@ -412,44 +416,11 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
 
 // ── 页头 ─────────────────────────────────────────────────────────────
 
-/** 页头：小字眉标 + 18sp 标题 + 一行副标题 + 右侧帮助。含状态栏约 92dp。 */
+/** 页头：标题文字已下线，只剩右侧「帮助」按钮（无底色、无分隔线）。 */
 @Composable
 private fun DownloadHeader(onShowDownloadHelp: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-            .statusBarsPadding()
-            .padding(start = McSpacing.Page, end = McSpacing.Page, top = 10.dp, bottom = 10.dp)
-    ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    stringResource(R.string.eyebrow_download),
-                    color = Indigo,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.8.sp
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    stringResource(R.string.s450),
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(Modifier.height(3.dp))
-                Text(
-                    stringResource(R.string.dl2_subtitle),
-                    color = Muted,
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-            Spacer(Modifier.width(8.dp))
+    PageTopBar(
+        trailing = {
             Box(
                 modifier = Modifier
                     .size(34.dp)
@@ -466,14 +437,17 @@ private fun DownloadHeader(onShowDownloadHelp: () -> Unit) {
                 )
             }
         }
-    }
+    )
 }
 
 // ── 目标细条 ─────────────────────────────────────────────────────────
 
 /**
- * 目标条：42dp 的渐变细条，只放「核心 · 版本 · 环境状态」。
+ * 目标条：42dp 的渐变细条，只放「核心 · 版本」。
  * 替代原来 62dp 的整块摘要卡 —— 信息一样，高度少 20dp，也不抢核心选择的视线。
+ *
+ * 「环境就绪 / 未就绪」的圆点徽标已删除（2026-11-13）：依赖是否装好由第 2 步的按钮
+ * 可用状态与提示表达，细条上再挂一个状态位反而让人以为要在这里等它变绿。
  *
  * [detecting] 为真时版本位显示省略号：此刻列表还在路上，配置里的版本号属于
  * 上一个核心，照原样显示会让人以为「版本检测出错」。
@@ -482,7 +456,6 @@ private fun DownloadHeader(onShowDownloadHelp: () -> Unit) {
 private fun TargetStrip(
     core: ServerCore,
     version: String,
-    ready: Boolean,
     bedrock: Boolean,
     detecting: Boolean
 ) {
@@ -531,21 +504,6 @@ private fun TargetStrip(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
-        )
-        Spacer(Modifier.width(6.dp))
-        Box(
-            modifier = Modifier
-                .size(5.dp)
-                .clip(CircleShape)
-                .background(if (ready) MintBright else Color(0xFFFFC069))
-        )
-        Spacer(Modifier.width(4.dp))
-        Text(
-            stringResource(if (ready) R.string.dl2_ready else R.string.dl2_not_ready),
-            color = Color.White.copy(alpha = 0.85f),
-            fontSize = 8.5.sp,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1
         )
     }
 }

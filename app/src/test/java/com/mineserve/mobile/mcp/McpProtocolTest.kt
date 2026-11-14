@@ -70,7 +70,7 @@ class McpProtocolTest {
             setOf(
                 // 服务器管理 / 控制台 / 文件 / 模组（原有）
                 "get_server_status", "list_servers", "select_server", "start_server", "stop_server",
-                "send_command", "get_console_logs", "run_termux_command",
+                "send_command", "get_console_logs", "get_crash_insight", "run_termux_command",
                 "list_files", "read_file", "write_file", "delete_file", "rename_file", "make_dir",
                 "upload_file", "extract_archive", "import_server",
                 "list_mods", "search_mods", "install_mod",

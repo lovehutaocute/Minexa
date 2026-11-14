@@ -52,6 +52,9 @@ object BdsSupport {
     /** BDS 的配置文件（与 Java 版同名同格式的 key=value） */
     const val PROPERTIES_NAME = "server.properties"
 
+    /** BDS 的世界存档目录（世界在 `worlds/<level-name>`，不是 Java 版的 `world/`）。 */
+    const val WORLDS_DIR = "worlds"
+
     data class Build(val version: String, val url: String)
 
     /** ELF 机器类型（只区分对本项目有意义的几种） */

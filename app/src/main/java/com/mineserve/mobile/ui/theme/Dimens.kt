@@ -50,31 +50,40 @@ object McSpacing {
  * 2026-10 整体加大一档：原先是 12/12/10/10/6/12/20，视觉上偏「方」，
  * 与圆润的磁贴、胶囊混在一起时显得两端风格不一。统一放大后，
  * 相邻两层（卡片 18 / 内部行 14）仍保持 4dp 的差值，同心关系不变。
+ *
+ * 2026-11 起取值来自当前主题包的 `shape` 令牌（默认值与上面这套完全一致），
+ * 用普通 getter 而不是 `@Composable` —— 这些值在 `Modifier.clip(...)`、
+ * 顶层 `Shapes(...)` 之类非组合上下文里也会被读，加 `@Composable` 会连锅端地报错。
  */
 object McShape {
+    private val tokens get() = SkinPalette.current.shape
+
     /** 卡片（McCard）与页面级容器。 */
-    val Card = RoundedCornerShape(18.dp)
+    val Card: RoundedCornerShape get() = RoundedCornerShape(tokens.cardRadius.dp)
 
     /** 按钮、输入框、下拉框等可操作控件（卡片级 / 整行 / 弹窗操作）。 */
-    val Control = RoundedCornerShape(16.dp)
+    val Control: RoundedCornerShape get() = RoundedCornerShape(tokens.controlRadius.dp)
 
     /** 行内紧凑控件（列表行、字段行里与其它内容并排的小按钮）。 */
-    val ControlCompact = RoundedCornerShape(14.dp)
+    val ControlCompact: RoundedCornerShape get() = RoundedCornerShape((tokens.controlRadius - 2f).dp)
 
     /** 卡片内部的行级容器（列表行、地址条、分组标题）。 */
-    val Row = RoundedCornerShape(14.dp)
+    val Row: RoundedCornerShape get() = RoundedCornerShape((tokens.controlRadius - 2f).dp)
 
     /** 步骤点、标签等小圆角。 */
-    val Small = RoundedCornerShape(10.dp)
+    val Small: RoundedCornerShape get() = RoundedCornerShape(10.dp)
 
     /** 状态胶囊 / 分段控件的滑轨。 */
-    val Chip = RoundedCornerShape(18.dp)
+    val Chip: RoundedCornerShape get() = RoundedCornerShape(tokens.navRadius.dp)
 
     /** 弹窗。 */
-    val Dialog = RoundedCornerShape(28.dp)
+    val Dialog: RoundedCornerShape get() = RoundedCornerShape(tokens.dialogRadius.dp)
+
+    /** Hero 卡（主题包可单独给一档）。 */
+    val Hero: RoundedCornerShape get() = RoundedCornerShape(tokens.heroRadius.dp)
 
     /** 完全圆形（状态圆点、头像占位）。 */
-    val Circle = RoundedCornerShape(percent = 50)
+    val Circle: RoundedCornerShape get() = RoundedCornerShape(percent = 50)
 }
 
 /**

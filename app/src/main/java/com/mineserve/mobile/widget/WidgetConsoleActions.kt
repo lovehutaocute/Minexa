@@ -9,6 +9,7 @@ import com.mineserve.mobile.data.ServerEventNotifier
 import com.mineserve.mobile.service.McForegroundService
 import com.mineserve.mobile.server.BackupManager
 import com.mineserve.mobile.server.McServerController
+import com.mineserve.mobile.server.sendSaveWorld
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
@@ -141,7 +142,7 @@ object WidgetConsoleActions {
         val config = repo.configFlow.first()
         val core = config.installedCores.find { it.name == config.activeCoreName } ?: return false
         if (!repo.termuxRuntime.isMcRunning()) return false
-        repo.termuxRuntime.sendCommand(core.core.consoleSaveCommand)
+        repo.termuxRuntime.sendSaveWorld(core.core)
         return true
     }
 
@@ -155,8 +156,8 @@ object WidgetConsoleActions {
             val config = repo.configFlow.first()
             val core = config.installedCores.find { it.name == config.activeCoreName } ?: return false
             if (repo.termuxRuntime.isMcRunning()) {
-                repo.termuxRuntime.sendCommand(core.core.consoleSaveCommand)
-                delay(1_000L)
+                repo.termuxRuntime.sendSaveWorld(core.core)
+                delay(1_800L)
             }
             val path = BackupManager(app.termuxRuntime).backupWorldToExternal(
                 core.dirName, BackupManager.BackupOrigin.Manual, config.maxSnapshots

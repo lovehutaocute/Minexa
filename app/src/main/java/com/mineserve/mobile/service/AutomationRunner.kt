@@ -10,6 +10,7 @@ import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.ServerEventNotifier
 import com.mineserve.mobile.server.BackupManager
 import com.mineserve.mobile.server.McServerController
+import com.mineserve.mobile.server.sendSaveWorld
 import kotlinx.coroutines.delay
 
 /**
@@ -99,8 +100,8 @@ object AutomationRunner {
     /** 服务器运行中时先让核心把世界写盘，再打包，避免备份到未落盘的数据。 */
     private suspend fun saveWorldIfRunning(termux: com.mineserve.mobile.runtime.TermuxRuntime, core: InstalledCore) {
         if (termux.isMcRunning()) {
-            termux.sendCommand(core.core.consoleSaveCommand)
-            delay(1_000L)
+            termux.sendSaveWorld(core.core)
+            delay(1_800L)
         }
     }
 

@@ -52,6 +52,7 @@ import com.mineserve.mobile.R
 import com.mineserve.mobile.ftp.FtpServerManager
 import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
@@ -60,6 +61,8 @@ import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.launch
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
 
 private const val FTP_PREFS = "ftp_prefs"
 private const val KEY_PORT = "port"
@@ -155,7 +158,7 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
         notify(context.getString(R.string.ftp_stopped))
     }
 
-    Scaffold(snackbarHost = { SnackbarHost(snackbarHostState) }, contentWindowInsets = WindowInsets(0.dp)) { padding ->
+    Scaffold(containerColor = pageSurface(), snackbarHost = { SnackbarHost(snackbarHostState) }, contentWindowInsets = WindowInsets(0.dp)) { padding ->
         Column(
             Modifier
                 .fillMaxSize()
@@ -271,8 +274,7 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                                     // 仅在失焦时落盘并重启，避免逐键重启；忽略首次组合的初始 false
                                     if (state.isFocused) credentialsTouched = true
                                     else if (credentialsTouched) commitCredentialsAndRestart()
-                                }
-                        )
+                                }.skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                         OutlinedTextField(
                             value = password,
                             onValueChange = { password = it },
@@ -285,8 +287,7 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                                     // 与用户名行为一致：失焦时才落盘并重启，改动密码立即生效
                                     if (state.isFocused) credentialsTouched = true
                                     else if (credentialsTouched) commitCredentialsAndRestart()
-                                }
-                        )
+                                }.skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                         if (running) {
                             Text(stringResource(R.string.ftp_running_lock), color = Muted, fontSize = 10.sp)
                         }
@@ -309,8 +310,7 @@ fun FtpScreen(vm: McViewModel, onBack: () -> Unit) {
                         singleLine = true,
                         enabled = !running,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                        modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                     if (running) {
                         Spacer(Modifier.height(4.dp))
                         Text(stringResource(R.string.ftp_port_lock), color = Muted, fontSize = 10.sp)

@@ -115,7 +115,12 @@ class McpServerManager(
             if (spec == servingSpec) return
             stopLocked()
             if (!spec.enabled) return
-            val server = McpHttpServer(spec.port) { request -> onRequest(request, spec.token) }
+            val server = McpHttpServer(
+                port = spec.port,
+                preflight = { method, target, headers ->
+                    preflightCheck(method, target, headers, spec.token)
+                }
+            ) { request -> onRequest(request, spec.token) }
             if (server.start(spec.allowLan)) {
                 httpServer = server
                 servingSpec = spec
@@ -139,6 +144,44 @@ class McpServerManager(
 
     // ── HTTP 处理 ─────────────────────────────────────────────
 
+    /**
+     * 读请求体**之前**的预检：Origin 拒绝、OPTIONS 预检、路径、鉴权。
+     *
+     * 这四项判断全部只用请求头，所以可以也必须提前做——否则一个未授权、
+     * 只发了 `Content-Length: 67108864` 的请求就会让服务端在验密码之前
+     * 先分配 64MB（见 [McpHttpServer.Preflight]）。
+     *
+     * [onRequest] 里保留了同样的判断作为二次防护（预检为 null 时仍然成立，
+     * 例如宿主直接调用 handler 的场景）。
+     */
+    private fun preflightCheck(
+        method: String,
+        target: String,
+        headers: Map<String, String>,
+        token: String
+    ): McpHttpServer.Response? {
+        if (headers.containsKey("origin")) {
+            return McpHttpServer.Response.json(
+                403, "{\"error\":\"requests with an Origin header are not accepted\"}"
+            )
+        }
+        if (method == "OPTIONS") {
+            return McpHttpServer.Response(
+                204, McpHttpServer.Response.reasonFor(204), null, ByteArray(0), corsHeaders
+            )
+        }
+        if (target.substringBefore('?') != MCP_PATH) {
+            return McpHttpServer.Response.json(404, "{\"error\":\"not found\"}", corsHeaders)
+        }
+        if (!isAuthorized(headers, token)) {
+            return McpHttpServer.Response.json(
+                401, "{\"error\":\"unauthorized\"}",
+                corsHeaders + listOf("WWW-Authenticate" to "Bearer")
+            )
+        }
+        return null
+    }
+
     private fun onRequest(request: McpHttpServer.Request, token: String): McpHttpServer.Response {
         // 拒绝一切带 Origin 头的请求：MCP 客户端（Claude Desktop、Cursor 等）是原生程序，
         // 不会发 Origin；而浏览器页面（含 DNS rebinding 构造的同源页面）发 fetch/XHR 时
@@ -158,7 +201,7 @@ class McpServerManager(
         if (path != MCP_PATH) {
             return McpHttpServer.Response.json(404, "{\"error\":\"not found\"}", corsHeaders)
         }
-        if (!isAuthorized(request, token)) {
+        if (!isAuthorized(request.headers, token)) {
             return McpHttpServer.Response.json(
                 401, "{\"error\":\"unauthorized\"}",
                 corsHeaders + listOf("WWW-Authenticate" to "Bearer")
@@ -172,9 +215,9 @@ class McpServerManager(
     }
 
     /** 常量时间比较，避免令牌时序泄露 */
-    private fun isAuthorized(request: McpHttpServer.Request, token: String): Boolean {
+    private fun isAuthorized(headers: Map<String, String>, token: String): Boolean {
         if (token.isEmpty()) return false
-        val header = request.headers["authorization"]?.trim() ?: return false
+        val header = headers["authorization"]?.trim() ?: return false
         if (!header.startsWith("Bearer ", ignoreCase = true)) return false
         val presented = header.substring("Bearer ".length).trim()
         if (presented.isEmpty()) return false
@@ -787,7 +830,16 @@ class McpServerManager(
     private suspend fun toolInstallMod(args: JsonObject?): McpToolResult {
         val slug = stringArg(args, "slug")?.trim()?.takeIf { it.isNotEmpty() }
             ?: return McpToolResult("Missing required argument: slug (from search_mods)", isError = true)
-        val (_, core) = requireServer(args)
+        val (config, core) = requireServer(args)
+        // 与 install_plugin / toggle_plugin 一致：运行中不接受改动 mods/。
+        // McpSkillDoc 明确写了「服务端运行中不能启停插件或模组」，缺了这道守卫
+        // 就会出现「按文档应该被拒绝、实际却直接往 mods/ 写 jar」。
+        if (app.termuxRuntime.isMcRunning() && config.activeCoreName == core.name) {
+            return McpToolResult(
+                "'${core.name}' is running; stop it before installing mods (stop_server).",
+                isError = true
+            )
+        }
         if (core.core.isBedrock) {
             return McpToolResult("Bedrock core (${core.core.displayName}) has no mod system.", isError = true)
         }

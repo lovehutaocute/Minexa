@@ -11,10 +11,19 @@ on:
 permissions:
   contents: read
 
+# 同一分支连续 push 只跑最新一次，避免并行构建互相抢 cache 写。
+# 注意：tag 推送必须参与 —— release job 依赖它，cancel-in-progress 只取消同 group 的旧 run。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     name: Build & Test
     runs-on: ubuntu-latest
+    # 没有超时的话，一次卡住的 ./gradlew（1.5.0 发版时 Gradle 下载卡死两次）
+    # 会占满默认 6 小时
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -105,6 +114,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     permissions:
       contents: write
     steps:

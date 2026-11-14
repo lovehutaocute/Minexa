@@ -22,7 +22,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -60,6 +59,7 @@ import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.DebouncedTextField
 import com.mineserve.mobile.ui.HintNote
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.WarnNote
@@ -73,6 +73,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.AppDialog
 
 /**
  * FRP 配置编辑页（全屏子页面）。
@@ -146,6 +150,8 @@ fun FrpProfileEditorScreen(
     )
 
     Scaffold(
+
+        containerColor = pageSurface(),
         // 嵌套在外层 Scaffold 内：insets 已由外层消费，避免顶部重复留白
         contentWindowInsets = WindowInsets(0.dp)
     ) { padding ->
@@ -293,12 +299,11 @@ fun FrpProfileEditorScreen(
                         onBack()
                     }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = RoundedCornerShape(18.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 14.dp)
-            ) {
+                    .padding(horizontal = 14.dp).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(18.dp))) {
                 Text(stringResource(R.string.net_frp_edit_save), color = Color.White)
             }
 
@@ -320,7 +325,7 @@ fun FrpProfileEditorScreen(
     }
 
     if (confirmDelete) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { confirmDelete = false },
             title = { Text(stringResource(R.string.net_frp_delete_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
             text = { Text(stringResource(R.string.net_frp_delete_message, name), fontSize = 13.sp) },
@@ -414,10 +419,9 @@ private fun SakuraTunnelSection(
             Button(
                 onClick = { refresh(withNodes = false) },
                 enabled = token.isNotBlank() && !loading,
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = RoundedCornerShape(16.dp),
-                modifier = Modifier.weight(1f)
-            ) {
+                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp))) {
                 if (loading) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
                     Spacer(Modifier.size(6.dp))
@@ -542,10 +546,9 @@ private fun MeFrpTunnelSection(
         Button(
             onClick = { refresh() },
             enabled = token.isNotBlank() && !loading,
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+            colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
             shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp))) {
             if (loading) {
                 CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = Color.White)
                 Spacer(Modifier.size(6.dp))
@@ -653,7 +656,7 @@ private fun SakuraCreateTunnelDialog(
     var portText by remember { mutableStateOf(defaultPort.toString()) }
     val port = portText.toIntOrNull()
 
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         title = { Text(stringResource(R.string.net_frp_edit_sakura_title), fontSize = 16.sp, fontWeight = FontWeight.SemiBold) },
         text = {
@@ -669,8 +672,7 @@ private fun SakuraCreateTunnelDialog(
                         readOnly = true,
                         label = { Text(stringResource(R.string.net_frp_edit_sakura_node)) },
                         singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
-                    )
+                        modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                     Box(
                         Modifier
                             .matchParentSize()
@@ -698,8 +700,7 @@ private fun SakuraCreateTunnelDialog(
                     onValueChange = { name = it },
                     label = { Text(stringResource(R.string.net_frp_edit_sakura_name)) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf("tcp", "udp").forEach { t ->
                         FilterChip(
@@ -715,18 +716,18 @@ private fun SakuraCreateTunnelDialog(
                     label = { Text(stringResource(R.string.net_frp_edit_sakura_port)) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                    modifier = Modifier.fillMaxWidth()
-                )
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
             }
         },
         confirmButton = {
             Button(
+                modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control),
                 onClick = {
                     val node = selectedNode ?: return@Button
                     onConfirm(node, name.ifBlank { "Minexa" }, type, port ?: defaultPort)
                 },
                 enabled = selectedNode != null && port != null && name.isNotBlank(),
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = McShape.Control
             ) { Text(stringResource(R.string.net_frp_edit_sakura_create)) }
         },

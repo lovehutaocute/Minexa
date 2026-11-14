@@ -196,19 +196,29 @@ object MultiSourceDownload {
             return
         }
         val session = MultiThreadDownloader.DownloadSession()
-        coroutineScope {
-            val job = async(Dispatchers.IO) { downloadRawUnbounded(url, target, onProgress, session) }
-            val finished = withTimeoutOrNull(timeoutMs) {
-                job.await()
-                true
+        try {
+            coroutineScope {
+                val job = async(Dispatchers.IO) { downloadRawUnbounded(url, target, onProgress, session) }
+                val finished = withTimeoutOrNull(timeoutMs) {
+                    job.await()
+                    true
+                }
+                if (finished == null) {
+                    // 先断连接（唤醒阻塞的读），再短暂等它收尾，最后才判定超时
+                    session.cancel()
+                    withTimeoutOrNull(5_000) { runCatching { job.join() } }
+                    target.delete()
+                    throw SocketTimeoutException("下载超时（${timeoutMs / 1000} 秒无进展）")
+                }
             }
-            if (finished == null) {
-                // 先断连接（唤醒阻塞的读），再短暂等它收尾，最后才判定超时
-                session.cancel()
-                withTimeoutOrNull(5_000) { runCatching { job.join() } }
-                target.delete()
-                throw SocketTimeoutException("下载超时（${timeoutMs / 1000} 秒无进展）")
-            }
+        } catch (e: Throwable) {
+            // 外部取消（页面销毁 / 新一轮 startBootstrap 接管 / Service 的 scope 被 cancel）
+            // 也必须断连接：MultiThreadDownloader 只查 session.isCancelled()、不看 isActive，
+            // 阻塞的 socket 读也不响应线程中断。不断连接的话下载会一路跑完整包，
+            // 而 coroutineScope 要等子任务真正结束才把取消抛出去 —— 用户看到的是
+            // 「点了取消后任务挂住不动，还在继续吃流量」。
+            session.cancel()
+            throw e
         }
         if (!target.isFile || target.length() == 0L) {
             throw IllegalStateException("下载结果为空")

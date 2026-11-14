@@ -47,6 +47,16 @@ class McApplication : Application(), Configuration.Provider {
         private set
 
     /**
+     * 主题包仓库（`.mctheme` 的安装、切换、导入导出）。
+     *
+     * 放在 Application 而不是某个页面的 ViewModel：主题是全局状态，
+     * 设置页、主题列表页、桌面组件之外的任意页面都要读同一份；而且 bootstrap
+     * 要在冷启动时把内置包解压好，不能绑在某个页面的生命周期上。
+     */
+    lateinit var skinRepository: com.mineserve.mobile.data.skin.SkinRepository
+        private set
+
+    /**
      * 官方 BDS 的专属运行环境（glibc 容器 + box64 转译器）。
      *
      * 放在 Application 而不是 ViewModel：初始化要下载几十兆、跑几分钟，
@@ -200,6 +210,16 @@ class McApplication : Application(), Configuration.Provider {
         scope().launch { runCatching { bdsEnvironment.refresh() } }
         container = AppContainer(this)
         mcpServerManager = McpServerManager(this, repository)
+
+        // 主题：先同步把「当前生效主题」的 JSON 解析好（只读文本，约 3–8ms），
+        // 让首帧就能拿到正确配色；内置包解压与图片解码留给随后的 IO 协程。
+        // 不能把图片解码也放进同步段：背景图 30–60ms，冷启动会肉眼可见地变慢。
+        skinRepository = com.mineserve.mobile.data.skin.SkinRepository(
+            this, com.mineserve.mobile.data.skin.SkinInstaller(this)
+        )
+        runCatching { skinRepository.primeSync() }
+        scope().launch { runCatching { skinRepository.bootstrap() } }
+
         mcpServerManager.start()
         createNotificationChannel()
 
@@ -241,6 +261,9 @@ class McApplication : Application(), Configuration.Provider {
             kotlinx.coroutines.delay(3_000)
             val prefs = getSharedPreferences(BootReceiver.META_PREFS, Context.MODE_PRIVATE)
             if (prefs.getBoolean(BootReceiver.KEY_KEEP_ALIVE, true)) {
+                // 先排心跳闹钟再拉服务：即便这一次 startForegroundService 因厂商限制失败，
+                // 10 分钟后的心跳仍会重试，不会出现「开了一次没起来就再也没起来」。
+                runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.schedule(this@McApplication) }
                 try {
                     startForegroundService(
                         android.content.Intent(this@McApplication, McForegroundService::class.java)
@@ -261,7 +284,11 @@ class McApplication : Application(), Configuration.Provider {
             }
         }
 
-        // 初始化工作移至后台线程，避免阻塞页面创建；环境检查和 bootstrap 不额外延后。
+        // 初始化工作移至后台线程，避免阻塞页面创建。
+        //
+        // 环境**不再自动下载**：以前只要 `isReady()` 为 false 就立刻 bootstrap，
+        // 用户一开应用就开始吃流量、占满带宽，而它可能只是想看一下日志。
+        // 现在只探测状态，真正的下载由主界面「开始初始化」按钮触发（startBootstrap）。
         scope().launch {
             registerBackgroundWork()
             if (termuxRuntime.isReady()) {
@@ -269,7 +296,8 @@ class McApplication : Application(), Configuration.Provider {
                 _isBootstrapped.value = true
                 repository.updateServerState { it.copy(currentProgress = 100, installSteps = steps) }
             } else {
-                startBootstrap()
+                android.util.Log.i("McApplication", "Termux 环境未就绪：等待用户手动点击初始化")
+                _isBootstrapped.value = false
             }
         }
     }

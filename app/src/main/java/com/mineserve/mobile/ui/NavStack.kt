@@ -16,6 +16,7 @@ enum class SubPage {
     Network,
     Backup,
     WorldManage,
+    Addons,
     DownloadHelp,
     MtGuide,
     KeepAlive,
@@ -31,7 +32,9 @@ enum class SubPage {
     FrpProfileEditor,
     EasyTierGuide,
     More,
-    Automation
+    Automation,
+    /** 外观 → 主题：主题包列表 / 导入 / 导出 / 删除。加在末尾，避免历史返回栈的编码错位。 */
+    Theme
 }
 
 /**

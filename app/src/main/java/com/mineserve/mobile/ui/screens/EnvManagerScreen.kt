@@ -27,7 +27,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -64,6 +63,7 @@ import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.HintNote
 import com.mineserve.mobile.ui.JavaRuntimeGroupList
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegmentedTabs
 import com.mineserve.mobile.ui.StepRow
@@ -74,10 +74,16 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.ui.theme.frostedGlass
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import androidx.compose.material3.MaterialTheme
+import com.mineserve.mobile.ui.components.AppDialog
 
 /** Tab 下标：崩溃页「前往安装」跳转到 Java 模块时使用 */
 const val ENV_TAB_JAVA = 0
@@ -112,6 +118,8 @@ fun EnvManagerScreen(vm: McViewModel, initialTab: Int, onBack: () -> Unit) {
     }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         contentWindowInsets = WindowInsets(0.dp)
     ) { padding ->
@@ -154,7 +162,7 @@ fun EnvManagerScreen(vm: McViewModel, initialTab: Int, onBack: () -> Unit) {
 
     confirmText?.let { text ->
         val action = confirmAction
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { confirmText = null; confirmAction = null },
             title = { Text(stringResource(R.string.env_confirm_title), fontWeight = FontWeight.Bold) },
             text = { Text(text, color = Muted, fontSize = 12.sp) },
@@ -186,26 +194,31 @@ private fun ActionButtonsRow(
     // 重装按钮文案可按模块定制（如 PHP 的重装实际只执行删除，需如实描述行为）
     reinstallLabelRes: Int = R.string.env_reinstall
 ) {
+    // 毛玻璃：只加在描边按钮上（它们本来是透明底，加磨砂最明显）；
+    // 「安装」是填充靛蓝的主操作，套半透明会把强调色冲淡，保持实色。
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         OutlinedButton(
             onClick = onUninstall,
             enabled = uninstallEnabled,
             shape = McShape.ControlCompact,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .frostedGlass(McShape.ControlCompact, withRim = false)
         ) { Text(stringResource(R.string.env_uninstall), color = Coral, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         OutlinedButton(
             onClick = onReinstall,
             enabled = reinstallEnabled,
             shape = McShape.ControlCompact,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .frostedGlass(McShape.ControlCompact, withRim = false)
         ) { Text(stringResource(reinstallLabelRes), color = Indigo, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
         Button(
             onClick = onInstall,
             enabled = installEnabled,
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+            colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
             shape = McShape.ControlCompact,
-            modifier = Modifier.weight(1f)
-        ) { Text(stringResource(R.string.env_install), color = androidx.compose.ui.graphics.Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
+            modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact)) { Text(stringResource(R.string.env_install), color = androidx.compose.ui.graphics.Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold) }
     }
 }
 
@@ -329,7 +342,9 @@ private fun JavaModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> 
                 onClick = { requestConfirm(confirmText) { vm.deleteProotContainer(distro) } },
                 enabled = !busy && !running,
                 shape = McShape.ControlCompact,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .frostedGlass(McShape.ControlCompact, withRim = false)
             ) {
                 Text(
                     stringResource(R.string.env_proot_delete_container_action),
@@ -442,7 +457,7 @@ private fun EasyTierEngineSection(vm: McViewModel) {
     var confirmUninstall by remember { mutableStateOf(false) }
 
     if (confirmUninstall) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { confirmUninstall = false },
             title = { Text(stringResource(R.string.easytier_engine_uninstall)) },
             text = { Text(stringResource(R.string.easytier_engine_uninstall_confirm)) },
@@ -501,7 +516,10 @@ private fun EasyTierEngineSection(vm: McViewModel) {
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             val downloading = download is McViewModel.DownloadState.Downloading
-            Button(onClick = { vm.downloadEasyTierEngine() }, enabled = !downloading, shape = McShape.ControlCompact) {
+            Button(
+                modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, MaterialTheme.colorScheme.primary),
+                onClick = { vm.downloadEasyTierEngine() }, enabled = !downloading, shape = McShape.ControlCompact) {
                 if (downloading) {
                     CircularProgressIndicator(
                         modifier = Modifier.size(14.dp),
@@ -527,7 +545,11 @@ private fun EasyTierEngineSection(vm: McViewModel) {
                 }
             }
             // .so 没有注册的 MIME 类型，OpenDocument + */* 才选得中
-            OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }, shape = McShape.ControlCompact) {
+            OutlinedButton(
+                onClick = { importLauncher.launch(arrayOf("*/*")) },
+                shape = McShape.ControlCompact,
+                modifier = Modifier.frostedGlass(McShape.ControlCompact, withRim = false)
+            ) {
                 Text(
                     stringResource(
                         if (engine.installed) R.string.easytier_engine_replace
@@ -601,7 +623,7 @@ private fun FrpcEngineSection(vm: McViewModel) {
     var confirmUninstall by remember { mutableStateOf(false) }
 
     if (confirmUninstall) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { confirmUninstall = false },
             title = { Text(stringResource(R.string.frpc_engine_uninstall)) },
             text = { Text(stringResource(R.string.frpc_engine_uninstall_confirm)) },
@@ -657,7 +679,10 @@ private fun FrpcEngineSection(vm: McViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             if (vm.frpcOnlineAvailable) {
                 val downloading = download is McViewModel.DownloadState.Downloading
-                Button(onClick = { vm.downloadFrpcEngine() }, enabled = !downloading, shape = McShape.ControlCompact) {
+                Button(
+                    modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, MaterialTheme.colorScheme.primary),
+                    onClick = { vm.downloadFrpcEngine() }, enabled = !downloading, shape = McShape.ControlCompact) {
                     if (downloading) {
                         CircularProgressIndicator(
                             modifier = Modifier.size(14.dp),
@@ -685,7 +710,11 @@ private fun FrpcEngineSection(vm: McViewModel) {
             }
             // OpenDocument 而不是 GetContent：.so 没有注册的 MIME 类型，
             // GetContent 会因类型过滤而选不中文件，只能靠 */* 放开。
-            OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }, shape = McShape.ControlCompact) {
+            OutlinedButton(
+                onClick = { importLauncher.launch(arrayOf("*/*")) },
+                shape = McShape.ControlCompact,
+                modifier = Modifier.frostedGlass(McShape.ControlCompact, withRim = false)
+            ) {
                 Text(
                     stringResource(
                         if (engine.installed) R.string.frpc_engine_replace
@@ -801,7 +830,7 @@ private fun PhpModule(vm: McViewModel, requestConfirm: (String, () -> Unit) -> U
     }
 
     if (showPhpVersionDialog) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showPhpVersionDialog = false },
             title = { Text(stringResource(R.string.env_php_version_title), fontWeight = FontWeight.Bold) },
             text = {

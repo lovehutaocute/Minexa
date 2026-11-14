@@ -82,6 +82,21 @@
       "suggest": "切换到日志和核心官方文档要求的 Java 版本后重新启动。"
     },
     {
+      "id": "java-cacerts-broken",
+      "level": "Identified",
+      "contains": [
+        "trustAnchors parameter must be non-empty",
+        "InvalidAlgorithmParameterException",
+        "sun.security.validator.ValidatorException",
+        "PKIX path building failed",
+        "unable to find valid certification path"
+      ],
+      "label": "Java 证书库缺失或损坏",
+      "detail": "Java 运行环境的根证书库（cacerts）缺失、为空或损坏，JVM 内所有 HTTPS 请求都会握手失败——Forge/Fabric 安装器下载 libraries、补装字体/依赖等操作会全部报下载失败。这不是字体库问题。",
+      "evidence": "检测到 trustAnchors/PKIX 证书校验错误",
+      "suggest": "打开崩溃弹窗「分析」页，点「一键修复」：App 会自动重装当前 Java 与 ca-certificates，软件源不可用时改用本机证书包原地重建 cacerts；修复完成后回核心页重新安装/更新核心即可。也可在「运行环境」里卸载后重新安装当前 Java 版本手动恢复。"
+    },
+    {
       "id": "launch-file-missing",
       "level": "Identified",
       "contains": [

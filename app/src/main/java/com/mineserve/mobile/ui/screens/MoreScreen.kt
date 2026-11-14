@@ -15,11 +15,11 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.HelpOutline
 import androidx.compose.material.icons.outlined.Backup
 import androidx.compose.material.icons.outlined.Cloud
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.HealthAndSafety
+import androidx.compose.material.icons.outlined.Palette
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.SmartToy
 import androidx.compose.material.icons.outlined.Storage
@@ -44,6 +44,7 @@ import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.Line
+import com.mineserve.mobile.ui.theme.LocalSkin
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
@@ -66,9 +67,21 @@ private const val CARD_HEIGHT_BASE = 118f
 private const val TITLE_MAX_LINES = 2
 private const val DESC_MAX_LINES = 3
 
+/**
+ * 「外观」入口的开关（2026-11-14 按用户要求临时关掉）。
+ *
+ * 主题页本身、`SubPage.Theme` 路由、导入导出功能全部保留，只是「更多」网格里不再露出
+ * 这张卡片 —— 想恢复把这里改回 true 即可，不需要动导航。
+ */
+private const val APPEARANCE_ENTRY_VISIBLE = false
+
 @Composable
-fun MoreScreen(onNetwork: () -> Unit, onBackup: () -> Unit, onDiagnostics: () -> Unit, onKeepAlive: () -> Unit, onHelp: () -> Unit, onCrashReports: () -> Unit, onWidgetSettings: () -> Unit, onMcp: () -> Unit, onFtp: () -> Unit, onAutomation: () -> Unit) {
-    val entries = listOf(
+fun MoreScreen(onNetwork: () -> Unit, onBackup: () -> Unit, onDiagnostics: () -> Unit, onKeepAlive: () -> Unit, onTheme: () -> Unit, onCrashReports: () -> Unit, onWidgetSettings: () -> Unit, onMcp: () -> Unit, onFtp: () -> Unit, onAutomation: () -> Unit) {
+    // 外观入口的副标题直接显示当前生效主题名（跟随 LocalSkin，换主题后无需刷新即变）；
+    // 没用主题包时显示本地化的「默认」，而不是内置运行时里写死的中文名。
+    val skin = LocalSkin.current
+    val appearanceDesc = if (skin.id == "builtin") stringResource(R.string.theme_default) else skin.name
+    val entries = listOfNotNull(
         MoreEntry(stringResource(R.string.more_network), stringResource(R.string.more_network_desc), Icons.Outlined.Cloud, onNetwork),
         MoreEntry(stringResource(R.string.more_automation), stringResource(R.string.more_automation_desc), Icons.Outlined.Schedule, onAutomation),
         MoreEntry(stringResource(R.string.more_backup), stringResource(R.string.more_backup_desc), Icons.Outlined.Backup, onBackup),
@@ -77,7 +90,14 @@ fun MoreScreen(onNetwork: () -> Unit, onBackup: () -> Unit, onDiagnostics: () ->
         MoreEntry(stringResource(R.string.more_crash), stringResource(R.string.more_crash_desc), Icons.Outlined.Warning, onCrashReports),
         MoreEntry(stringResource(R.string.more_keepalive), stringResource(R.string.more_keepalive_desc), Icons.Outlined.FavoriteBorder, onKeepAlive),
         MoreEntry(stringResource(R.string.more_mcp), stringResource(R.string.more_mcp_desc), Icons.Outlined.SmartToy, onMcp),
-        MoreEntry(stringResource(R.string.more_help), stringResource(R.string.more_help_desc), Icons.AutoMirrored.Outlined.HelpOutline, onHelp),
+        // 「下载帮助」入口已按要求隐藏（2026-11-13）：页面与设置页里的入口都还在，
+        // 只是「更多」这张网格里不再重复出现。
+        // 「外观」入口 2026-11-14 起临时隐藏（见 APPEARANCE_ENTRY_VISIBLE）。
+        if (APPEARANCE_ENTRY_VISIBLE) {
+            MoreEntry(stringResource(R.string.theme_appearance), appearanceDesc, Icons.Outlined.Palette, onTheme)
+        } else {
+            null
+        },
         MoreEntry(stringResource(R.string.more_widgets), stringResource(R.string.more_widgets_desc), Icons.Outlined.Widgets, onWidgetSettings)
     )
     // 卡片高度跟随系统字号：dp 不随字体缩放变，纯固定值在大字号下会把文字裁掉。

@@ -62,6 +62,13 @@ object McpToolCatalog {
                 "server" to strProp("可选：服务器名称/目录名；缺省为当前活动服务器")
             )
         ),
+        McpToolDef(
+            name = "get_crash_insight",
+            description = "获取结构化崩溃分析报告（与 App 崩溃弹窗「分析」页同源）：根因、置信度、证据行号、可执行修复步骤、知识来源与相似历史案例。crash_id 缺省取最新一份报告。",
+            inputSchema = schema(
+                "crash_id" to strProp("可选：崩溃报告 id 或文件名（如 crash_20260101_101500），缺省为最新一份")
+            )
+        ),
         // ── Termux 运行环境 ─────────────────────────────────────
         McpToolDef(
             name = "run_termux_command",
@@ -250,14 +257,14 @@ object McpToolCatalog {
         ),
         McpToolDef(
             name = "install_dependencies",
-            description = "一键安装运行依赖（wget、字体运行库、frp、rclone、proot），走 apt。" +
+            description = "一键安装运行依赖（字体运行库、frp、proot），走 apt。" +
                 "耗时几分钟，走后台任务，用 get_job 轮询。服务器运行中会被拒绝：" +
                 "apt 与 MC 服务端共用同一个 rootfs，实测运行中安装会把 MC 进程 SIGKILL 掉（exit=137）。",
             inputSchema = longTaskSchema()
         ),
         McpToolDef(
             name = "remove_dependencies",
-            description = "清除已安装的 Termux 依赖（wget/frp/rclone/proot 等），用于验证环境重装流程。服务器运行中会被拒绝。" +
+            description = "清除已安装的 Termux 依赖（字体运行库/frp/proot 等），用于验证环境重装流程。服务器运行中会被拒绝。" +
                 "必须显式传 confirm=true，否则只返回提示。",
             inputSchema = schema(
                 "confirm" to boolProp("必须为 true 才真正执行清除"),

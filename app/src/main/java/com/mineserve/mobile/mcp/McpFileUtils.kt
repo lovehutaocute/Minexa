@@ -82,15 +82,18 @@ object McpFileUtils {
         return lines.map { it.trimEnd('\r') }
     }
 
-    /** 递归删除目录/文件，返回删除的条目数（不含失败的） */
-    fun deleteRecursivelyCounted(file: File): Int {
-        if (file.isDirectory) {
-            var count = 0
-            file.listFiles()?.forEach { count += deleteRecursivelyCounted(it) }
-            return count + if (file.delete()) 1 else 0
-        }
-        return if (file.delete()) 1 else 0
-    }
+    /**
+     * 递归删除目录/文件，返回实际删掉的条目数（不含失败的）。
+     *
+     * **绝不能自己写 `File.isDirectory` + `listFiles()` 递归**：`isDirectory` 会跟随
+     * 符号链接，`listFiles()` 枚举的是链接目标，于是 `delete_file {"path":"world"}`
+     * 会把 `world/xxx -> ../home/snapshots` 指向的沙盒外内容一并删掉。服务器目录里
+     * 这类软链很常见（BDS 的 run 目录本身就是一堆回链），不是理论场景。
+     *
+     * 统一走 [FileOps.deleteRecursivelyCounted]：广度收集、逆序删除、软链只删链接本身。
+     */
+    fun deleteRecursivelyCounted(file: File): Int =
+        com.mineserve.mobile.data.FileOps.deleteRecursivelyCounted(file)
 
     /** 是否疑似二进制内容（前 8KB 出现 NUL 字节） */
     fun looksBinary(file: File): Boolean =

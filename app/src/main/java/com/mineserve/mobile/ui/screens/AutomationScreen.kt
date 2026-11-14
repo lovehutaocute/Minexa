@@ -66,6 +66,7 @@ import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.theme.Coral
@@ -79,6 +80,9 @@ import com.mineserve.mobile.ui.theme.Muted
 import java.util.Calendar
 import java.util.Locale
 import java.util.UUID
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 /**
  * 自动化页：管理定时任务（备份 / 重启 / 广播 / 自定义命令 / 开关服）与停止后自动备份。
@@ -138,10 +142,9 @@ fun AutomationScreen(vm: McViewModel, onBack: () -> Unit) {
                 Spacer(Modifier.height(4.dp))
                 Button(
                     onClick = { editing = null; showEditor = true },
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                     shape = McShape.Control,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                     Icon(Icons.Outlined.Add, contentDescription = null, modifier = Modifier.size(McIcon.Action))
                     Spacer(Modifier.width(6.dp))
                     Text(stringResource(R.string.automation_add_task), fontSize = 13.sp)
@@ -304,7 +307,7 @@ private fun AutomationTaskEditorDialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false)
     ) {
-        Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+        Surface(modifier = Modifier.fillMaxSize(), color = pageSurface()) {
             Column(Modifier.fillMaxSize()) {
                 Row(
                     modifier = Modifier
@@ -348,8 +351,7 @@ private fun AutomationTaskEditorDialog(
                             label = { Text(stringResource(R.string.automation_field_name)) },
                             singleLine = true,
                             shape = McShape.Control,
-                            modifier = Modifier.fillMaxWidth()
-                        )
+                            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
                         if (needsCommand) {
                             Spacer(Modifier.height(8.dp))
                             OutlinedTextField(
@@ -365,8 +367,7 @@ private fun AutomationTaskEditorDialog(
                                 },
                                 singleLine = true,
                                 shape = McShape.Control,
-                                modifier = Modifier.fillMaxWidth()
-                            )
+                                modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
                         }
                         if (isBackup) {
                             Spacer(Modifier.height(10.dp))
@@ -422,8 +423,7 @@ private fun AutomationTaskEditorDialog(
                                         singleLine = true,
                                         shape = McShape.Control,
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.width(120.dp)
-                                    )
+                                        modifier = Modifier.width(120.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
                                     SegPill(text = stringResource(R.string.automation_unit_minutes), selected = !intervalIsHours) { intervalIsHours = false }
                                     SegPill(text = stringResource(R.string.automation_unit_hours), selected = intervalIsHours) { intervalIsHours = true }
                                 }
@@ -449,8 +449,7 @@ private fun AutomationTaskEditorDialog(
                                         singleLine = true,
                                         shape = McShape.Control,
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.width(150.dp)
-                                    )
+                                        modifier = Modifier.width(150.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
                                     SegPill(text = stringResource(R.string.automation_daily), selected = dayIntervalText == "1") { dayIntervalText = "1" }
                                     SegPill(text = "2", selected = dayIntervalText == "2") { dayIntervalText = "2" }
                                 }
@@ -492,8 +491,7 @@ private fun AutomationTaskEditorDialog(
                                         singleLine = true,
                                         shape = McShape.Control,
                                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                                        modifier = Modifier.width(150.dp)
-                                    )
+                                        modifier = Modifier.width(150.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
                                     SegPill(text = stringResource(R.string.automation_weekly), selected = weekIntervalText == "1") { weekIntervalText = "1" }
                                     SegPill(text = stringResource(R.string.automation_biweekly), selected = weekIntervalText == "2") { weekIntervalText = "2" }
                                 }
@@ -509,8 +507,7 @@ private fun AutomationTaskEditorDialog(
                                     singleLine = true,
                                     shape = McShape.Control,
                                     placeholder = { Text("0 4 * * *") },
-                                    modifier = Modifier.fillMaxWidth()
-                                )
+                                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
                                 Spacer(Modifier.height(6.dp))
                                 Text(
                                     stringResource(if (cronValid) R.string.automation_cron_valid else R.string.automation_cron_invalid),
@@ -547,10 +544,9 @@ private fun AutomationTaskEditorDialog(
                     Button(
                         onClick = save,
                         enabled = canSave,
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                         shape = McShape.Control,
-                        modifier = Modifier.weight(1f)
-                    ) {
+                        modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                         Text(stringResource(R.string.automation_save))
                     }
                 }
@@ -579,8 +575,7 @@ private fun TimeOfDayPicker(hour: Int, minute: Int, onChange: (Int, Int) -> Unit
             singleLine = true,
             shape = McShape.Control,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(90.dp)
-        )
+            modifier = Modifier.width(90.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
         OutlinedTextField(
             value = minute.toString().padStart(2, '0'),
             onValueChange = { v -> v.toIntOrNull()?.let { onChange(hour, it.coerceIn(0, 59)) } },
@@ -588,8 +583,7 @@ private fun TimeOfDayPicker(hour: Int, minute: Int, onChange: (Int, Int) -> Unit
             singleLine = true,
             shape = McShape.Control,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-            modifier = Modifier.width(90.dp)
-        )
+            modifier = Modifier.width(90.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Control))
     }
 }
 

@@ -13,12 +13,14 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -27,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -46,7 +49,6 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material.icons.outlined.Public
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.WarningAmber
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -73,12 +75,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
@@ -109,6 +115,15 @@ import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoDark
 import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.Line
+import com.mineserve.mobile.ui.theme.LocalGlassEnabled
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.drawSkinTile
+import com.mineserve.mobile.ui.components.AppDialog
+import com.mineserve.mobile.ui.components.skinSurface
+import com.mineserve.mobile.ui.components.skinTile
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.theme.LocalSkin
+import com.mineserve.mobile.ui.theme.frostedGlass
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
@@ -116,15 +131,77 @@ import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.MintBright
 import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 /**
- * 顶部 Header：参考界面 eyebrow + h1。
- * 默认以白色背景覆盖状态栏区域（配合全屏），内容避开状态栏文字；
- * 若该页面顶部已有返回栏承接状态栏避让，可传 statusBarPadding = false。
+ * 全站统一顶栏：不画底色、不画分隔线，只放右对齐的动作按钮。
  *
- * [reserveBackSlot] 给「没有 BackBar、只有 HeaderBlock」的二级页面用（备份 / 插件 / 更多）：
- * 在标题上方让出一段高度，让 McApp 的悬浮返回键有地方待，不会压住 eyebrow 与标题。
+ * 2026-11-13 改版：原先每个页面顶上都是一条「eyebrow 小字 + 页面大标题 + 右侧按钮」的
+ * 标题栏，高的页面吃掉 90dp 以上，而标题传达的信息与底部导航、Hero 卡片重复。
+ * 现在标题文字下线、白底也去掉，按钮直接浮在页面背景上，内容上移。
+ *
+ * 没有按钮的页面（trailing == null 且不需要给返回键让位）整条顶栏不占位，
+ * 只保留状态栏避让的高度 —— 否则会在状态栏下留一条无意义的空白带。
+ *
+ * 按钮留在顶部而不是跟着内容滚动：手册 / QQ 群 / 环境管理 / 终端菜单是全局动作，
+ * 一旦跟着列表滚走就找不回来。
+ *
+ * [reserveBackSlot] 给「没有独立返回栏、靠 McApp 悬浮返回键返回」的二级页面用
+ * （备份 / 插件 / 更多）：行高至少留出悬浮键的高度，首张卡片不会压在返回键下面。
  */
+@Composable
+fun PageTopBar(
+    modifier: Modifier = Modifier,
+    statusBarPadding: Boolean = true,
+    reserveBackSlot: Boolean = false,
+    trailing: (@Composable () -> Unit)? = null
+) {
+    // 顶栏贴图（v2 `assets.header`）。原本顶栏是**透明的** —— 只留状态栏的高度，
+    // 没有可画的「一条栏」。主题作者画了顶栏图时，这里才给它一个真实高度（56dp）；
+    // 没给图时一点高度都不加，所有页面的版式与改造前完全一致。
+    val headerTile = skinTile(SkinTileSlots.HEADER)
+    val headerSkin = if (headerTile != null) {
+        Modifier.skinTileOverlay(SkinTileSlots.HEADER, RectangleShape)
+    } else {
+        Modifier
+    }
+    val headerBand = if (headerTile != null) Modifier.heightIn(min = 56.dp) else Modifier
+
+    if (trailing == null && !reserveBackSlot) {
+        // 无按钮：不占位，只把状态栏高度让出来，内容紧贴状态栏下沿
+        Spacer(
+            modifier
+                .fillMaxWidth()
+                // 贴图放最前：它画的是**整块**区域（含状态栏留白），
+                // 放到 padding 之后就只能画到状态栏下面那一条。
+                .then(headerSkin)
+                .then(headerBand)
+                .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
+        )
+        return
+    }
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .then(headerSkin)
+            .then(headerBand)
+            .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
+            .heightIn(min = if (reserveBackSlot) ReserveBackSlotHeight + 8.dp else 0.dp)
+            .padding(horizontal = McSpacing.Page, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.End
+    ) {
+        trailing?.invoke()
+    }
+}
+
+/**
+ * 一级页面顶栏（原 eyebrow + h1 + 右侧按钮）。
+ *
+ * 标题文字已下线：[eyebrow] / [title] 只为不改动 ~20 处调用点而保留，
+ * 后续可连同 strings.xml 里的 eyebrow_* 一起清掉。
+ */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun HeaderBlock(
     eyebrow: String,
@@ -134,87 +211,28 @@ fun HeaderBlock(
     reserveBackSlot: Boolean = false,
     trailing: (@Composable () -> Unit)? = null
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .then(if (statusBarPadding) Modifier.statusBarsPadding() else Modifier)
-                // 纵向内边距与行距收紧过一次（10dp→5dp、3dp→1dp、标题 18sp→17sp），
-                // 目的是让头部少占约 12dp 让给内容；三处是同一套视觉节奏，改动时一起调。
-                .padding(horizontal = McSpacing.Page, vertical = 5.dp)
-        ) {
-            if (reserveBackSlot) Spacer(Modifier.height(ReserveBackSlotHeight))
-            Text(
-                text = eyebrow,
-                color = Muted,
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold,
-                letterSpacing = 0.6.sp
-            )
-            Spacer(Modifier.height(1.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = title,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Bold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
-                trailing?.invoke()
-            }
-        }
-    }
+    PageTopBar(
+        modifier = modifier,
+        statusBarPadding = statusBarPadding,
+        reserveBackSlot = reserveBackSlot,
+        trailing = trailing
+    )
 }
 
 /**
- * 子页面统一返回栏：白底延伸到状态栏后面（状态栏透明）+ 返回按钮 + 标题。
+ * 二级页面返回栏：只剩给悬浮返回键让出的高度和右侧按钮，无底色、无分隔线。
  *
- * [trailing] 挂在标题右侧（标题因此会占满剩余宽度并省略）—— 用于放「当前作用域」
- * 这类一眼需要看到、但不该单独占一行的信息（如属性页的核心名与条目数）。
- *
- * 返回按钮本身不在这里画：二级页面的返回键由 McApp 的 [FloatingBackButton] 统一渲染
- * （悬浮、压在所有内容之上、位置固定）。这里只留一块同尺寸的占位，
- * 保证标题的左边缘与改造前完全一致，也让悬浮键正好落在这个空位上。
+ * 返回按钮本身仍由 McApp 的 [FloatingBackButton] 统一渲染（悬浮、压在所有内容之上、位置固定）；
+ * [title] 已下线，保留参数只为不动调用点，[onBack] 由悬浮键负责。
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 fun BackBar(
     title: String,
-    @Suppress("UNUSED_PARAMETER") onBack: () -> Unit,
+    onBack: () -> Unit,
     trailing: (@Composable () -> Unit)? = null
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.surface)
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(start = 8.dp, end = McSpacing.Page, top = 6.dp, bottom = 6.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Spacer(Modifier.size(McIcon.Touch))
-            Text(
-                title,
-                fontSize = 15.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier
-                    .padding(start = 2.dp)
-                    .weight(1f, fill = trailing != null)
-            )
-            trailing?.invoke()
-        }
-    }
+    PageTopBar(reserveBackSlot = true, trailing = trailing)
 }
 
 // ── 悬浮返回键的度量 ────────────────────────────────────────────────
@@ -316,17 +334,86 @@ fun HeroBlock(
     skipStartupProgress: Boolean = false,
     onRefresh: (() -> Unit)? = null
 ) {
+    val skin = LocalSkin.current
+    // 外层不 clip：主题包把 hero 声明成 overflow 时，立绘要能探出卡片上下边缘。
+    // 卡片本体的圆角/裁切由内层负责，描边最后画在外层，保证探出时轮廓不断。
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = McSpacing.Page, vertical = 8.dp)
-            .clip(McShape.Card)
-            .background(
-                Brush.linearGradient(colors = listOf(Indigo, IndigoDark))
-            )
-            .padding(horizontal = 16.dp, vertical = 12.dp)
+            // 描边画在外层（draw modifier 在子内容之后绘制）：溢出立绘压过来时轮廓仍完整。
+            .border(1.dp, skin.ext.cardRim, McShape.Hero)
     ) {
-        Column {
+        // ① 卡片本体：圆角 + 裁切 + 主题渐变兜底。
+        //
+        // 「启动中顶部缺边」的真正原因是两层叠加：
+        // 1. 主题包的 Hero 插画四角自带 ~24px 的**透明**圆角，之前只靠 `scale(1.06f)`
+        //    把透明角推出卡片外 —— 那点放大只在卡片维持插画原始比例时刚好够用；
+        //    「启动中」会把卡片撑高（多出进度条 + 两行阶段文字），Crop 重新映射后
+        //    透明角又回到卡片的圆角内侧，露出后面的页面背景，看起来就是顶部缺了一块。
+        // 2. Hero 卡没有描边时，画面上一旦有 alpha 缺口，轮廓就彻底断了。
+        // 先在卡片底层铺满主题渐变（透明像素透出的是卡片自己的底色），再靠最外层的
+        // 1dp rim 勾完整轮廓。
+        // v2：主题包给了 `assets.heroCard` 就整块换成贴图（九宫格拉伸），
+        // 没给才是渐变 —— 有贴图时插画仍可叠在上面，两者不冲突。
+        val heroTile = skinTile(SkinTileSlots.HERO_CARD)
+        Box(
+            Modifier
+                .matchParentSize()
+                .clip(McShape.Hero)
+                .then(
+                    if (heroTile != null) {
+                        Modifier.drawBehind { drawSkinTile(heroTile, skin.ext.pillStart) }
+                    } else {
+                        Modifier.background(
+                            Brush.linearGradient(colors = listOf(skin.ext.pillStart, skin.ext.pillEnd))
+                        )
+                    }
+                )
+        )
+
+        // ② Hero 插画。两种模式二选一：
+        // - crop（默认）：铺满卡片并裁切，放大 6% 把插画自带的透明圆角推出边界；
+        // - overflow：按卡片高度等比放大、靠右居中，**不裁**，立绘可以探出卡片上下边缘
+        //   （`manifest.assetsMeta.hero.scale = "overflow"`）。
+        val heroArt = skin.assets.hero
+        if (heroArt != null) {
+            if (skin.assets.heroOverflow) {
+                // 放在 matchParentSize 容器里，避免放大的立绘把卡片撑大（参与测量的子项会改尺寸）。
+                Box(Modifier.matchParentSize()) {
+                    Image(
+                        bitmap = heroArt,
+                        contentDescription = null,
+                        contentScale = ContentScale.FillHeight,
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .fillMaxHeight(HERO_OVERFLOW_SCALE)
+                            .aspectRatio(heroArt.width.toFloat() / heroArt.height)
+                    )
+                }
+            } else {
+                Box(Modifier.matchParentSize().clip(McShape.Hero)) {
+                    Image(
+                        bitmap = heroArt,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.matchParentSize().scale(1.06f)
+                    )
+                }
+            }
+            val scrim = skin.metrics.heroScrim
+            if (scrim > 0f) {
+                // 压罩只压在卡片范围内：溢出立绘探出去的部分不能跟着变黑。
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .clip(McShape.Hero)
+                        .background(Color.Black.copy(alpha = scrim.coerceIn(0f, 0.85f)))
+                )
+            }
+        }
+
+        Column(Modifier.padding(horizontal = 16.dp, vertical = 12.dp)) {
             // 启动中：isRunning 且尚未完成启动（runningSinceMs == 0）。
             // 用户开了「跳过启动中进度」就当作已经就绪，不再暴露中间态。
             val isStarting = state.isRunning && state.runningSinceMs == 0L && !skipStartupProgress
@@ -359,7 +446,7 @@ fun HeroBlock(
                             state.isRunning -> stringResource(R.string.hero_running, coreLabel)
                             else -> stringResource(R.string.hero_stopped)
                         },
-                        color = Color.White.copy(alpha = 0.9f),
+                        color = skin.ext.heroOnSoft,
                         fontSize = 12.sp,
                         fontWeight = FontWeight.SemiBold,
                         maxLines = 1,
@@ -475,6 +562,14 @@ fun HeroBlock(
 }
 
 /**
+ * 溢出模式下立绘相对卡片高度的放大倍数（1.12 → 上下各探出 6%）。
+ *
+ * 不给主题包配置项：能探出多少应该由图本身决定（画布留白），
+ * 这个数值只是保证「探出可见」的最小值。
+ */
+private const val HERO_OVERFLOW_SCALE = 1.12f
+
+/**
  * Hero 卡片里的内存水平进度条。
  *
  * - 进度 = 已用内存 / 设置的上限（[ServerState.usedMemoryMb] / `maxHeapMb`）；
@@ -517,6 +612,7 @@ private fun CpuMeterBar(percent: Int?) {
  */
 @Composable
 private fun HeroMeterBar(label: String, ratio: Float, valueText: String) {
+    val hero = LocalSkin.current.ext
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -525,7 +621,7 @@ private fun HeroMeterBar(label: String, ratio: Float, valueText: String) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 label,
-                color = Color.White.copy(alpha = 0.75f),
+                color = hero.heroOnDim,
                 fontSize = 9.sp
             )
             Spacer(Modifier.width(8.dp))
@@ -535,7 +631,7 @@ private fun HeroMeterBar(label: String, ratio: Float, valueText: String) {
                     .weight(1f)
                     .height(7.dp)
                     .clip(RoundedCornerShape(8.dp))
-                    .background(Color.White.copy(alpha = 0.22f))
+                    .background(hero.heroTrack)
             ) {
                 Box(
                     modifier = Modifier
@@ -543,14 +639,14 @@ private fun HeroMeterBar(label: String, ratio: Float, valueText: String) {
                         .height(7.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(
-                            Brush.linearGradient(listOf(MintBright, Mint))
+                            Brush.linearGradient(listOf(hero.heroBarStart, hero.heroBarEnd))
                         )
                 )
             }
             Spacer(Modifier.width(8.dp))
             Text(
                 valueText,
-                color = Color.White,
+                color = hero.heroOnSoft,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 maxLines = 1
@@ -565,6 +661,7 @@ private fun formatMemoryFull(mb: Long): String =
 
 @Composable
 private fun HeroStat(value: String, label: String) {
+    val hero = LocalSkin.current.ext
     Column(
         modifier = Modifier.clearAndSetSemantics {
             contentDescription = "$value, $label"
@@ -572,13 +669,13 @@ private fun HeroStat(value: String, label: String) {
     ) {
         Text(
             value,
-            color = Color.White,
+            color = hero.heroOnSoft,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold
         )
         Text(
             label,
-            color = Color.White.copy(alpha = 0.75f),
+            color = hero.heroOnDim,
             fontSize = 9.sp
         )
     }
@@ -619,8 +716,7 @@ private fun formatRefreshAgo(refreshAtMs: Long): String {
 @Composable
 fun installStepLabel(step: InstallStep): String = when (step) {
     InstallStep.Jdk -> stringResource(R.string.step_jdk)
-    InstallStep.Wget -> stringResource(R.string.step_wget)
-    InstallStep.Rclone -> stringResource(R.string.step_rclone)
+    InstallStep.Fonts -> stringResource(R.string.step_fonts)
     InstallStep.Proot -> stringResource(R.string.step_proot)
 }
 
@@ -658,17 +754,41 @@ fun McCard(
     // 折叠状态由卡片自己持有：标题行整体可点，右侧箭头只做视觉指示。
     // key 用 title，避免同一页面多张卡共用同一个 rememberSaveable 槽位。
     var expanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+    // 卡片底色/描边走主题的玻璃令牌：有背景图时按 glassAlpha 半透（背景能从卡片里透出来），
+    // 没有背景图就不透明。默认主题下 glassTop = surface、cardRim = outlineVariant，与改造前一致。
+    val skin = LocalSkin.current
+    // 毛玻璃开启：卡片自己不填色，改由内容层铺一层「渐变半透明 + 高光边」。
+    // 关闭时走原来的实色 + 1dp 投影，绘制开销与改造前一致。
+    val glass = LocalGlassEnabled.current
+    // 主题包给了组件贴图（v2 `assets.card`）时就整块交给贴图，颜色只作兜底。
+    // 贴图优先级高于毛玻璃：作者既然画了整张卡，再叠一层模糊会把他画的细节糊掉。
+    val tileSlot = if (compact) SkinTileSlots.CARD_COMPACT else SkinTileSlots.CARD
+    val hasTile = skinTile(tileSlot) != null
+    val cardColor = if (skin.assets.background != null) {
+        skin.ext.glassTop.copy(alpha = skin.metrics.glassAlpha.coerceIn(0.7f, 1f))
+    } else {
+        skin.ext.glassTop
+    }
     Card(
         modifier = modifier
             .fillMaxWidth()
             .padding(
                 horizontal = McSpacing.Page,
                 vertical = if (compact) McSpacing.CardGapCompact else McSpacing.CardGap
-            ),
+            )
+            // 毛玻璃：模糊背景 + 薄雾 + 高光边；关闭时不加任何绘制节点。
+            .frostedGlass(McShape.Card, glass && !hasTile)
+            .skinTileOverlay(tileSlot, McShape.Card),
         shape = McShape.Card,
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Line)
+        colors = CardDefaults.cardColors(
+            containerColor = if (glass || hasTile) Color.Transparent else cardColor
+        ),
+        // 毛玻璃靠描边勾出轮廓，投影会给半透明面加一圈脏边，所以开着时不开投影。
+        elevation = CardDefaults.cardElevation(defaultElevation = if (glass) 0.dp else 1.dp),
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            if (glass || hasTile) Color.Transparent else skin.ext.cardRim
+        )
     ) {
         Column(
             Modifier.padding(
@@ -688,7 +808,7 @@ fun McCard(
                     title,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = skin.ext.inkTitle
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     trailing?.invoke()
@@ -806,8 +926,11 @@ fun SegPill(
 ) {
     Box(
         modifier = modifier
-            .clip(McShape.Chip)
-            .background(if (selected) Indigo else unselectedBackground)
+            .skinSurface(
+                SkinTileSlots.CHIP,
+                if (selected) Indigo else unselectedBackground,
+                McShape.Chip
+            )
             .clickable { onClick() }
             .padding(horizontal = if (compact) 10.dp else 14.dp, vertical = if (compact) 6.dp else 8.dp)
     ) {
@@ -844,7 +967,15 @@ fun DebouncedTextField(
     maxLines: Int = Int.MAX_VALUE,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     textStyle: TextStyle = TextStyle.Default,
-    shape: Shape = OutlinedTextFieldDefaults.shape
+    shape: Shape = OutlinedTextFieldDefaults.shape,
+    /**
+     * 由外部发起的一次「在末尾追加文本」请求（如 MOTD 的色板插入）。
+     *
+     * 必须由组件自己拼到**本地**文本上：调用方拿到的 `value` 是已经落盘的外部值，
+     * 在 300ms 防抖窗口内它是旧的 —— 用 `onValueChange(value + code)` 会把用户
+     * 刚敲的字整体丢掉。这里用 id 变化触发，一次请求只应用一次。
+     */
+    insertRequest: Pair<Long, String>? = null
 ) {
     var text by remember { mutableStateOf(value) }
     var isFocused by remember { mutableStateOf(false) }
@@ -866,6 +997,14 @@ fun DebouncedTextField(
             onValueChange(text)
             editing = false
         }
+    }
+
+    // 外部追加请求（色板等）：拼到本地文本上再整体回传，不能用外部的 value 拼
+    LaunchedEffect(insertRequest) {
+        val req = insertRequest ?: return@LaunchedEffect
+        val merged = text + req.second
+        text = merged
+        onValueChange(merged)
     }
 
     // 失焦时立即写回，避免切换页面丢失最后输入
@@ -904,7 +1043,9 @@ fun DebouncedTextField(
         },
         modifier = modifier
             .bringIntoViewRequester(bringIntoViewRequester)
-            .onFocusChanged { isFocused = it.isFocused },
+            .onFocusChanged { isFocused = it.isFocused }
+            // OutlinedTextField 的容器色默认透明（只有描边），所以贴图可以直接垫在底下。
+            .skinTileOverlay(SkinTileSlots.INPUT_FIELD, shape),
         enabled = enabled,
         singleLine = singleLine,
         label = label,
@@ -932,8 +1073,7 @@ fun DebouncedTextField(
 fun StatusPill(text: String, color: Color, modifier: Modifier = Modifier) {
     Box(
         modifier = modifier
-            .clip(McShape.Chip)
-            .background(color.copy(alpha = 0.12f))
+            .skinSurface(SkinTileSlots.CHIP, color.copy(alpha = 0.12f), McShape.Chip)
             .padding(horizontal = 10.dp, vertical = 3.dp)
     ) {
         Text(text, color = color, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
@@ -1023,8 +1163,7 @@ fun HintNote(text: String, icon: ImageVector = Icons.Outlined.Info) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(McShape.Row)
-            .background(FieldBg)
+            .skinSurface(SkinTileSlots.BANNER, FieldBg, McShape.Row)
             .padding(12.dp)
     ) {
         Icon(icon, contentDescription = null, tint = Indigo, modifier = Modifier.size(McIcon.Inline))
@@ -1040,12 +1179,15 @@ fun HintNote(text: String, icon: ImageVector = Icons.Outlined.Info) {
  */
 @Composable
 fun WarnNote(text: String) {
+    // 有 banner 贴图时不再描边：作者图里自带边，再画一条就是双线。
+    val hasBannerTile = skinTile(SkinTileSlots.BANNER) != null
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(McShape.Row)
-            .background(CoralSoft)
-            .border(1.dp, Coral, McShape.Row)
+            .skinSurface(SkinTileSlots.BANNER, CoralSoft, McShape.Row)
+            .then(
+                if (hasBannerTile) Modifier else Modifier.border(1.dp, Coral, McShape.Row)
+            )
             .padding(12.dp)
     ) {
         Icon(
@@ -1097,10 +1239,9 @@ fun QqGroupCard() {
         Spacer(Modifier.height(10.dp))
         Button(
             onClick = { openQqGroup(context) },
-            colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+            colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
             shape = RoundedCornerShape(16.dp),
-            modifier = Modifier.fillMaxWidth()
-        ) {
+            modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp))) {
             Text(
                 stringResource(R.string.s1054),
                 color = Color.White,
@@ -1121,7 +1262,7 @@ fun QqGroupDialog(onDismiss: () -> Unit) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
 
-    AlertDialog(
+    AppDialog(
         onDismissRequest = onDismiss,
         shape = McShape.Dialog,
         containerColor = MaterialTheme.colorScheme.surface,
@@ -1186,8 +1327,9 @@ fun QqGroupDialog(onDismiss: () -> Unit) {
         },
         confirmButton = {
             Button(
+                modifier = Modifier.skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, RoundedCornerShape(16.dp)),
                 onClick = { openQqGroup(context) },
-                colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                 shape = RoundedCornerShape(16.dp)
             ) {
                 Text(
@@ -1288,8 +1430,8 @@ fun SegmentedTabs(
         modifier = modifier
             .fillMaxWidth()
             .height(36.dp)
-            .clip(McShape.Chip)
-            .background(FieldGray)
+            // 贴图只铺轨道；滑块仍是纯色，否则两段一模一样就看不出选中了。
+            .skinSurface(SkinTileSlots.CHIP, FieldGray, McShape.Chip)
             .alpha(if (enabled) 1f else 0.5f)
     ) {
         val segmentWidth = maxWidth / options.size
@@ -1534,4 +1676,20 @@ fun JavaRuntimeGroupList(
             }
         }
     }
+}
+
+/**
+ * 页面级容器色（Scaffold 的 containerColor）。
+ *
+ * 主题包带了整屏背景图时返回**透明**，让 [SkinBackdrop] 的插画透到每个页面里；
+ * 没有背景图时返回 background 色，与改造前完全一致。
+ *
+ * 为什么需要它：各页面几乎都用 `Scaffold`，而 Scaffold 默认容器色是不透明的
+ * `colorScheme.background`。不统一改掉，就会出现「有的页面有背景、有的没有」——
+ * 有背景的那几个恰好是没用 Scaffold 的页面。
+ */
+@Composable
+fun pageSurface(): Color {
+    val skin = LocalSkin.current
+    return if (skin.assets.background != null) Color.Transparent else skin.scheme.background
 }

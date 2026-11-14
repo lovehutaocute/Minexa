@@ -60,13 +60,13 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegPill
 import com.mineserve.mobile.ui.DebouncedTextField
@@ -81,6 +81,10 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
+import com.mineserve.mobile.ui.components.AppDialog
 
 @Composable
 fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
@@ -153,6 +157,8 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
     }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用，避免顶部空白/白色遮挡
         contentWindowInsets = WindowInsets(0.dp)
@@ -213,8 +219,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                     onValueChange = { vm.setMaxSnapshots(it.toIntOrNull() ?: config.maxSnapshots) },
                     label = { Text(stringResource(R.string.bk_keep_count)) },
                     singleLine = true,
-                    modifier = Modifier.width(150.dp)
-                )
+                    modifier = Modifier.width(150.dp).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
             }
             Text(stringResource(R.string.bk_range_hint), color = Muted, fontSize = 11.sp)
 
@@ -260,7 +265,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
 
             // 首次进入未授权：弹框强制引导
             if (showPermDialog) {
-                AlertDialog(
+                AppDialog(
                     onDismissRequest = { showPermDialog = false },
                     title = { Text(stringResource(R.string.backup_ext_perm_title), fontWeight = FontWeight.Bold) },
                     text = {
@@ -288,15 +293,22 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(
                         onClick = {
-                            vm.sendCommand(
-                                config.installedCores.find { it.name == config.activeCoreName }?.core?.consoleSaveCommand ?: "save-all"
-                            )
-                            scope.launch { snackbarHostState.showSnackbar(context.getString(R.string.s327)) }
+                            val core = config.installedCores
+                                .find { it.name == config.activeCoreName }?.core
+                            scope.launch {
+                                // 基岩版需要 hold + resume 成对发送，不能只发 head。
+                                val cmds = core?.consoleSaveCommands ?: listOf("save-all")
+                                for (c in cmds) {
+                                    vm.sendCommand(c)
+                                    if (cmds.size > 1) delay(600)
+                                }
+                                val text = core?.consoleSaveCommandText ?: "save-all"
+                                snackbarHostState.showSnackbar(context.getString(R.string.s327, text))
+                            }
                         },
                         enabled = isBootstrapped,
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f)
-                    ) { Text(stringResource(R.string.s328), color = Color.White, fontSize = 12.sp) }
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
+                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact)) { Text(stringResource(R.string.s328), color = Color.White, fontSize = 12.sp) }
                     Button(
                         onClick = {
                             isSnapshotting = true
@@ -309,9 +321,8 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                             }
                         },
                         enabled = isBootstrapped && !isSnapshotting,
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f)
-                    ) {
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
+                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact)) {
                         if (isSnapshotting) CircularProgressIndicator(Modifier.size(16.dp), Color.White, strokeWidth = 2.dp)
                         else Text(stringResource(R.string.s331), color = Color.White, fontSize = 12.sp)
                     }
@@ -326,9 +337,8 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
                     Button(
                         onClick = { vm.backupWorldToExternal() },
                         enabled = isBootstrapped && hasStoragePerm,
-                        colors = ButtonDefaults.buttonColors(containerColor = Indigo),
-                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f)
-                    ) { Text(stringResource(R.string.backup_ext_world), color = Color.White, fontSize = 12.sp) }
+                        colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
+                        shape = McShape.ControlCompact, modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.ControlCompact)) { Text(stringResource(R.string.backup_ext_world), color = Color.White, fontSize = 12.sp) }
                     Button(
                         onClick = { vm.backupServerToExternal() },
                         enabled = isBootstrapped && hasStoragePerm,
@@ -407,7 +417,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
 
             // 删除外部备份二次确认
             if (pendingDeleteBackup != null) {
-                AlertDialog(
+                AppDialog(
                     onDismissRequest = { pendingDeleteBackup = null },
                     title = { Text(stringResource(R.string.backup_ext_delete_title), fontWeight = FontWeight.Bold) },
                     text = {
@@ -435,7 +445,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
 
             // 私有快照还原二次确认（会用旧快照覆盖当前服务器数据）
             pendingRestoreSnapshot?.let { name ->
-                AlertDialog(
+                AppDialog(
                     onDismissRequest = { pendingRestoreSnapshot = null },
                     title = { Text(stringResource(R.string.backup_snapshot_restore_title), fontWeight = FontWeight.Bold) },
                     text = {
@@ -465,7 +475,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
 
             // 私有快照删除二次确认
             pendingDeleteSnapshot?.let { name ->
-                AlertDialog(
+                AppDialog(
                     onDismissRequest = { pendingDeleteSnapshot = null },
                     title = { Text(stringResource(R.string.backup_snapshot_delete_title), fontWeight = FontWeight.Bold) },
                     text = {
@@ -497,7 +507,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
             // 服务器还原重名冲突对话框
             val conflict by vm.restoreConflict.collectAsState()
             if (conflict != null) {
-                AlertDialog(
+                AppDialog(
                     onDismissRequest = { vm.dismissRestoreConflict() },
                     title = { Text(stringResource(R.string.backup_conflict_title), fontWeight = FontWeight.Bold) },
                     text = {
@@ -576,7 +586,7 @@ fun BackupScreen(vm: McViewModel, onBack: () -> Unit = {}) {
 
     // 删除世界文件夹二次确认
     if (showDeleteWorldConfirm) {
-        AlertDialog(
+        AppDialog(
             onDismissRequest = { showDeleteWorldConfirm = false },
             title = { Text(stringResource(R.string.ui_world_delete), fontSize = 15.sp, fontWeight = FontWeight.Bold) },
             text = { Text(stringResource(R.string.ui_world_delete_hint), fontSize = 13.sp) },

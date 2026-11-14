@@ -47,6 +47,7 @@ import com.mineserve.mobile.ui.BackBar
 import com.mineserve.mobile.ui.HeaderBlock
 import com.mineserve.mobile.ui.HintNote
 import com.mineserve.mobile.ui.McCard
+import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.components.QrCodeImage
 import com.mineserve.mobile.ui.theme.FieldBg
@@ -58,6 +59,9 @@ import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.MintSoft
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.flow.collectLatest
+import com.mineserve.mobile.data.skin.SkinTileSlots
+import com.mineserve.mobile.ui.components.skinTileOverlay
+import com.mineserve.mobile.ui.components.skinButtonColors
 
 /**
  * 组网引导页：把「玩家该做什么」交给玩家。
@@ -97,6 +101,8 @@ fun EasyTierGuideScreen(vm: McViewModel, onBack: () -> Unit) {
     val shareText = remember(networkName, secret, address) { vm.easyTierShareText() }
 
     Scaffold(
+
+        containerColor = pageSurface(),
         snackbarHost = { SnackbarHost(snackbarHostState) },
         contentWindowInsets = WindowInsets(0.dp)
     ) { paddingValues ->
@@ -173,10 +179,9 @@ fun EasyTierGuideScreen(vm: McViewModel, onBack: () -> Unit) {
             Column(modifier = Modifier.padding(horizontal = McSpacing.Page)) {
                 Button(
                     onClick = { vm.copyEasyTierGuide(context) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Indigo),
+                    colors = skinButtonColors(SkinTileSlots.PRIMARY_BUTTON, Indigo),
                     shape = McShape.Control,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
+                    modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.PRIMARY_BUTTON, McShape.Control)) {
                     Icon(
                         Icons.Outlined.ContentCopy,
                         contentDescription = null, tint = Color.White, modifier = Modifier.size(18.dp)

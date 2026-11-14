@@ -97,6 +97,8 @@ object McpSkillDoc {
             |   布尔值接受 true/false/yes/no/on/off/1/0，其余取值会明确报错。
             |4. **日志排查**：`get_console_logs {lines}` 看控制台尾部，`get_last_run_log` 看上一次运行的完整输出，
             |   `get_app_log` 看应用自身日志（安装、修复流程的真实输出都在这里），`wait_for_log {pattern}` 轮询等特征行。
+            |   崩溃先调 `get_crash_insight`：直接返回结构化根因、置信度、证据行号、可执行修复步骤与相似历史案例，
+            |   和 App 崩溃弹窗「分析」页同源，不需要自己解析 stack trace。
             |   技巧：复现前先 `clear_app_log`，日志就干净了。
             |5. **读写文件**：`list_files` → `read_file` / `write_file`（单次上限 1 MB；更大的文件用
             |   `upload_file` 分块 base64，`append: true` 追加）→ `extract_archive` 解压（自带路径穿越防护）。

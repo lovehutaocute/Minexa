@@ -1,6 +1,5 @@
 package com.mineserve.mobile.service
 
-import android.app.AlarmManager
 import android.app.Notification
 import android.app.PendingIntent
 import android.app.Service
@@ -26,6 +25,7 @@ import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.TermuxRuntime
 import com.mineserve.mobile.server.BackupManager
 import com.mineserve.mobile.server.ExternalBackupStore
+import com.mineserve.mobile.server.sendSaveWorld
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,6 +64,13 @@ class McForegroundService : Service() {
     @Volatile private var cachedDirName: String? = null
     /** 是否已调用过 startForeground（幂等护栏，见 [ensureForeground]） */
     @Volatile private var foregroundStarted = false
+    /**
+     * 用户主动点了「停止服务」。
+     *
+     * onDestroy 里默认会补一次重启闹钟（防止被系统回收后一睡不醒），但用户
+     * 手动停止时必须不补 —— 否则「停止」按钮会变成 5 秒后自动复活。
+     */
+    @Volatile private var stopRequestedByUser = false
 
     /**
      * 常驻通知正文来自 `getString`，Service 的 base Context 不走 Application 那层覆盖，
@@ -188,6 +195,32 @@ class McForegroundService : Service() {
                 ensureForeground()
                 scope.launch { refreshServerStatusNow() }
             }
+            ACTION_HEARTBEAT -> {
+                // 保活心跳（AlarmManager 每 10 分钟一次）。它的唯一职责是「让进程活着」：
+                // 进程已被系统冻结/回收时，这条闹钟会把 App 重新拉起来并恢复前台，
+                // 顺带重持唤醒锁、补一次状态刷新。
+                // 先 ensureForeground：任何一条 startForegroundService 进来的 intent
+                // 都必须 5 秒内进前台，否则系统会抛 RemoteServiceException 杀整个进程。
+                ensureForeground()
+                if (!KeepAliveWatchdog.isEnabled(this)) {
+                    // 用户关闭保活后残留的闹钟（取消与投递之间的竞态）：不续排。
+                    // 没有服务端在跑时顺手收摊，别让服务空转耗电；
+                    // 服务端还在跑就保持现状 —— 停服务会连带影响服务器。
+                    val alive = runCatching { termux.isMcRunning() }.getOrDefault(false)
+                    if (!alive && !termux.isStartupPending() && stopSelfResult(startId)) {
+                        stopForegroundInternal()
+                        return START_NOT_STICKY
+                    }
+                } else {
+                    // 必须在这里显式续排：ensureForeground 对已在前台的服务是幂等的，
+                    // 里面那次排期不会执行，不补这一句心跳链走完一次就断了。
+                    KeepAliveWatchdog.schedule(this)
+                    scope.launch {
+                        syncLocksFromConfig()
+                        refreshServerStatusNow()
+                    }
+                }
+            }
             ACTION_WIDGET_ACTION -> {
                 // 桌面组件/定时闹钟的长任务统一在这里执行。
                 //
@@ -210,10 +243,21 @@ class McForegroundService : Service() {
                 scope.launch { runAutomationTask(taskId) }
             }
             ACTION_STOP -> {
+                stopRequestedByUser = true
+                // 用户主动停止：撤掉保活闹钟，别再把它拉回来。
+                KeepAliveWatchdog.cancel(this)
                 scope.launch {
-                    termux.stopMc()
-                    stopForegroundInternal()
-                    stopSelf()
+                    // 必须 try/finally：stopMc() 内部写 stdin、读 /proc、kill 任一步抛出都会
+                    // 跳过下面两行，而此处 stopRequestedByUser 已置 true、闹钟也已取消，
+                    // 结果就是「用户点了停止，前台通知和运行中状态却永远挂着」。
+                    try {
+                        termux.stopMc()
+                    } catch (e: Throwable) {
+                        Log.w(TAG, "ACTION_STOP: stopMc 抛出，仍继续收尾: ${e.message}")
+                    } finally {
+                        runCatching { stopForegroundInternal() }
+                        stopSelf()
+                    }
                 }
                 return START_NOT_STICKY
             }
@@ -246,6 +290,10 @@ class McForegroundService : Service() {
             startForeground(NOTIF_ID, notif)
         }
         foregroundStarted = true
+        // 续上保活心跳。放在这里而不是只在启动入口：心跳自己、桌面组件动作、开机自启、
+        // 系统重启（START_STICKY 的 null intent）都会经过 ensureForeground，
+        // 任何一条路径都能把闹钟链接上，不会因为漏排一处而整条链路失效。
+        if (KeepAliveWatchdog.isEnabled(this)) KeepAliveWatchdog.schedule(this)
         // 配置读取（DataStore）移到 IO 线程，避免主线程磁盘 I/O。
         // 注意：这里只按「MC 是否在跑」决定是否持锁，没有服务器时不再空持唤醒锁。
         scope.launch { syncLocksFromConfig() }
@@ -433,59 +481,76 @@ class McForegroundService : Service() {
     private fun startWatchdog() {
         // 只跑一条 watchdog：每条重复启动都会多一个「每 30 秒 list/tps」的轮询源。
         if (!watchdogStarted.compareAndSet(false, true)) return
-        scope.launch {
+        val job = scope.launch {
             var tick = 0
             while (true) {
-                val app = McApplication.get(this@McForegroundService)
-                // 运行中、或状态可能陈旧（上轮探到存活）时每 tick 都探；否则隔一个 tick 探。
-                val shouldProbe = app.repository.serverState.value.isRunning || mcAlive || tick % 2 == 0
-                if (shouldProbe) {
-                    val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
-                    // 「启动在途」期间（装依赖 / 修 rootfs / 下载核心 / 刚 spawn 的缓冲期）
-                    // 进程本来就不在，不能据此判停止，也不该释放唤醒锁。
-                    val startupPending = termux.isStartupPending()
-                    // 锁跟随 MC 实际存活状态：没在跑就释放，跑起来（或正在启动）再拿。
-                    syncLocks(alive || startupPending)
-                    app.repository.updateServerState {
-                        when {
-                            alive -> {
-                                // A live Java process is not proof that the server has finished loading.
-                                // The console's ready signal sets runningSinceMs once the core is usable.
-                                it.copy(isRunning = true)
-                            }
-                            startupPending -> it
-                            else -> it.copy(isRunning = false, runningSinceMs = 0L)
-                        }
-                    }
-                    // 服务器运行时，每 60 秒（2 个 tick）发送一次查询命令获取真实数据
-                    if (alive && tick % 2 == 0) {
-                        try {
-                            val config = runCatching {
-                                app.repository.configFlow.first()
-                            }.getOrNull()
-                            if (config != null) {
-                                maybeAutoBackup(config)
-                                // list 命令获取在线玩家数（所有核心支持）
-                                termux.sendCommand("list")
-                                // Paper 核心额外发送 tps 命令
-                                if (config.selectedCore == com.mineserve.mobile.data.ServerCore.Paper) {
-                                    termux.sendCommand("tps")
+                // 一轮巡检的任何异常都不能让循环退出。逃出这条 launch 会走进程级
+                // uncaught handler 崩掉整个 App（正在跑的 MC 一起没）；即便被吞，
+                // watchdogStarted 已经是 true，ensureForeground 再调 startWatchdog()
+                // 会被 compareAndSet 挡回，锁同步 / 玩家数 / 自动备份从此静默停摆。
+                try {
+                    val app = McApplication.get(this@McForegroundService)
+                    // 运行中、或状态可能陈旧（上轮探到存活）时每 tick 都探；否则隔一个 tick 探。
+                    val shouldProbe = app.repository.serverState.value.isRunning || mcAlive || tick % 2 == 0
+                    if (shouldProbe) {
+                        val alive = try { termux.isMcRunning() } catch (e: Exception) { false }
+                        // 「启动在途」期间（装依赖 / 修 rootfs / 下载核心 / 刚 spawn 的缓冲期）
+                        // 进程本来就不在，不能据此判停止，也不该释放唤醒锁。
+                        val startupPending = termux.isStartupPending()
+                        // 锁跟随 MC 实际存活状态：没在跑就释放，跑起来（或正在启动）再拿。
+                        syncLocks(alive || startupPending)
+                        app.repository.updateServerState {
+                            when {
+                                alive -> {
+                                    // A live Java process is not proof that the server has finished loading.
+                                    // The console's ready signal sets runningSinceMs once the core is usable.
+                                    it.copy(isRunning = true)
                                 }
+                                startupPending -> it
+                                else -> it.copy(isRunning = false, runningSinceMs = 0L)
                             }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "watchdog query failed: ${e.message}")
+                        }
+                        // 服务器运行时，每 60 秒（2 个 tick）发送一次查询命令获取真实数据
+                        if (alive && tick % 2 == 0) {
+                            try {
+                                val config = runCatching {
+                                    app.repository.configFlow.first()
+                                }.getOrNull()
+                                if (config != null) {
+                                    maybeAutoBackup(config)
+                                    // list 命令获取在线玩家数（所有核心支持）
+                                    termux.sendCommand("list")
+                                    // Paper 核心额外发送 tps 命令
+                                    if (config.selectedCore == com.mineserve.mobile.data.ServerCore.Paper) {
+                                        termux.sendCommand("tps")
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                Log.w(TAG, "watchdog query failed: ${e.message}")
+                            }
+                        }
+                        // 仅在服务器运行中周期刷新组件：组件展示的是 TPS/内存/在线人数等运行时数据，
+                        // 停止状态下这些值不会变，盲刷只是白白重建 4 个 RemoteViews。
+                        // 停止、崩溃、状态切换等事件已由 ServerRepository.updateServerState 的
+                        // 字段 diff 钩子驱动刷新，这里不刷新也不会漏掉状态变化。
+                        if (alive) {
+                            com.mineserve.mobile.data.WidgetUpdater.refresh(this@McForegroundService)
                         }
                     }
-                    // 仅在服务器运行中周期刷新组件：组件展示的是 TPS/内存/在线人数等运行时数据，
-                    // 停止状态下这些值不会变，盲刷只是白白重建 4 个 RemoteViews。
-                    // 停止、崩溃、状态切换等事件已由 ServerRepository.updateServerState 的
-                    // 字段 diff 钩子驱动刷新，这里不刷新也不会漏掉状态变化。
-                    if (alive) {
-                        com.mineserve.mobile.data.WidgetUpdater.refresh(this@McForegroundService)
-                    }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    Log.e(TAG, "watchdog tick failed: ${e.message}", e)
                 }
                 tick++
                 kotlinx.coroutines.delay(30_000L)
+            }
+        }
+        // 协程真的退出（取消除外）时复位标记，否则这把锁会一直关着、巡检再也起不来
+        job.invokeOnCompletion { cause ->
+            if (cause != null && cause !is kotlinx.coroutines.CancellationException) {
+                watchdogStarted.set(false)
+                Log.e(TAG, "watchdog 异常退出，已复位标记以便重建: ${cause.message}")
             }
         }
     }
@@ -513,8 +578,8 @@ class McForegroundService : Service() {
             try {
                 val typeName = config.autoBackupType.displayName
                 termux.emitLog("[backup] 正在自动$typeName: ${active.name}")
-                termux.sendCommand(active.core.consoleSaveCommand)
-                kotlinx.coroutines.delay(1_000L)
+                termux.sendSaveWorld(active.core)
+                kotlinx.coroutines.delay(1_800L)
                 val path = when (config.autoBackupType) {
                     com.mineserve.mobile.data.AutoBackupType.World -> backupManager.backupWorldToExternal(
                         active.dirName,
@@ -569,7 +634,18 @@ class McForegroundService : Service() {
      *  - 服务器未运行时释放 → 待机不再空耗电。
      * 前台服务与常驻通知保持不变，用户无感知。
      */
-    private fun syncLocks(alive: Boolean) {
+    /**
+     * 锁状态的互斥保护。
+     *
+     * [syncLocks] 至少有 5 个调用点（配置订阅、refreshServerStatusNow、watchdog、
+     * syncLocksFromConfig 等），全都在 `Dispatchers.IO` 的协程里并发执行。两个线程
+     * 同时通过 `wakeLock?.isHeld != true` 判断会各建一个 WakeLock，后赋值的覆盖字段、
+     * 先拿到的失去引用永久持锁；反向时序下则是重复 release 抛 under-locked。
+     * [releaseLocks] 与它改同一组字段，必须共用同一把锁。
+     */
+    private val lockGuard = Any()
+
+    private fun syncLocks(alive: Boolean): Unit = synchronized(lockGuard) {
         mcAlive = alive
 
         if (alive && keepCpuWakelock) {
@@ -611,7 +687,7 @@ class McForegroundService : Service() {
         syncLocks(alive)
     }
 
-    private fun releaseLocks() {
+    private fun releaseLocks(): Unit = synchronized(lockGuard) {
         wakeLock?.let { if (it.isHeld) it.release() }
         wifiLock?.let { if (it.isHeld) it.release() }
     }
@@ -641,25 +717,20 @@ class McForegroundService : Service() {
             if (alive || startupPending) st else st.copy(isRunning = false, runningSinceMs = 0L)
         }
         com.mineserve.mobile.data.WidgetUpdater.refresh(this)
-        Log.i(TAG, "onTaskRemoved: mcAlive=$alive, scheduling restart via inexact alarm")
-        scheduleRestart()
-    }
-
-    private fun scheduleRestart() {
-        val am = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        val intent = Intent(this, McForegroundService::class.java).apply {
-            action = ACTION_START
+        // 划掉卡片后大部分国产 ROM 会立刻杀进程，而且 START_STICKY 在「用户主动划掉」
+        // 场景下不一定生效。先把「1.5 秒后重新拉起」的闹钟立好，进程死掉之后由系统
+        // 重新拉起 —— 这是划掉卡片后唯一还能自救的路径。
+        //
+        // 旧实现用 `PendingIntent.getService` 排这个闹钟：targetSdk ≥ 26 时后台
+        // `startService()` 会被系统拒绝（异常抛在 system_server 侧，App 完全不知情），
+        // 闹钟到点了但服务永远起不来 —— 表现就是「划掉之后再也没保活」。
+        // KeepAliveWatchdog 统一改用 getForegroundService，并带重启退避防止死循环。
+        if (KeepAliveWatchdog.isEnabled(this)) {
+            KeepAliveWatchdog.scheduleRestart(this)
+            Log.i(TAG, "onTaskRemoved: mcAlive=$alive, 已排重启闹钟")
+        } else {
+            Log.i(TAG, "onTaskRemoved: mcAlive=$alive, 保活已关闭，不排重启")
         }
-        val pi = PendingIntent.getService(
-            this, 0, intent,
-            PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
-        )
-        // Android 12+：使用 setAndAllowWhileIdle（非精确，规避 SCHEDULE_EXACT_ALARM 限制）
-        am.setAndAllowWhileIdle(
-            AlarmManager.RTC_WAKEUP,
-            System.currentTimeMillis() + 2000L,
-            pi
-        )
     }
 
     private fun buildNotification(title: String, content: String): Notification {
@@ -677,12 +748,20 @@ class McForegroundService : Service() {
             .setOngoing(true)
             .setContentIntent(pi)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            // 部分 ROM 会把「延迟显示」的前台通知当成后台服务处理并提前清理，
+            // IMMEDIATE 让通知立刻上屏，服务同时立刻算作前台。
+            .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
             .build()
     }
 
     override fun onDestroy() {
         super.onDestroy()
         isRunning = false
+        // 非用户主动停止 → 补一次「5 秒后拉起」的闹钟。心跳最长 10 分钟才来一次，
+        // 这里补短的能让服务立刻回来；重启过于频繁时 KeepAliveWatchdog 会自行退避。
+        if (!stopRequestedByUser && KeepAliveWatchdog.isEnabled(this)) {
+            KeepAliveWatchdog.scheduleRestart(this, 5_000L)
+        }
         scope.cancel()
         releaseLocks()
         StatusOverlay.hide(this)
@@ -696,6 +775,8 @@ class McForegroundService : Service() {
         const val ACTION_STOP = "com.mineserve.mobile.action.STOP"
         const val ACTION_REFRESH_KEEP_ALIVE = "com.mineserve.mobile.action.REFRESH_KEEP_ALIVE"
         const val ACTION_REFRESH_STATUS = "com.mineserve.mobile.action.REFRESH_STATUS"
+        /** 保活心跳（由 [KeepAliveWatchdog] 的闹钟投递）。 */
+        const val ACTION_HEARTBEAT = KeepAliveWatchdog.ACTION_HEARTBEAT
         /** 执行一个桌面组件动作（组件/闹钟 Receiver 把长任务转交到这里）。 */
         const val ACTION_WIDGET_ACTION = "com.mineserve.mobile.action.WIDGET_ACTION"
         /** 要执行的组件动作名（[com.mineserve.mobile.widget.WidgetActionReceiver] 的 ACTION_*）。 */

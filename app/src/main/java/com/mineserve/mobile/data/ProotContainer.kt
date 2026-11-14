@@ -110,6 +110,21 @@ data class ProotContainerProfile(
         File(prefix, "var/lib/mineserve/${distro.dirName}.ready")
 
     /**
+     * **按 Java 版本**分的就绪标记（`<dirName>-<aptPackage>.ready`）。
+     *
+     * 为什么不能只用 [readyMarker] 一个：它是发行版级的，而同一个 rootfs 可以装多个
+     * JDK。旧实现在「安装某个版本前」会无条件删掉发行版级标记，于是
+     * 「focal 里已有 Java 8 → 再装 Java 17 失败」会把 Java 8 一起判成未安装
+     * （[TermuxRuntime.isContainerJavaReady] 要求标记存在）。
+     *
+     * 现在每个版本各写一个文件：装 v17 只动 v17 的标记，失败也只删 v17 的。
+     * 发行版级标记继续写（老版本 APK 仍读它），判定时两者任一存在即可 ——
+     * 真正的就绪与否仍由容器内实测 java / libjvm 决定。
+     */
+    fun versionMarker(prefix: File): File =
+        File(prefix, "var/lib/mineserve/${distro.dirName}-${aptPackage}.ready")
+
+    /**
      * PRoot 的 glue 文件目录（`PROOT_TMP_DIR`）。
      *
      * 必须留在**应用自己的前缀**内：PRoot 会在 rootfs 之外创建胶水文件，
