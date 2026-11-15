@@ -171,12 +171,12 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     val versionHints by vm.versionHints.collectAsState()
     val isLoadingVersions by vm.isLoadingVersions.collectAsState()
     val isDownloadingCore by vm.isDownloadingCore.collectAsState()
-    // 性能修改理由（2026-11-15）：这里**不再** collect downloadProgress / consolePreviewLines。
-    // 两者都是高频流（进度每 500ms 回调一次，预览每 750ms 且下载日志持续推进），订阅写在
-    // 页面顶层等于每次发布都把整页重画一遍 —— 18 个核心磁贴、已安装列表、版本行、输入框
-    // 全都跟着重算。现在它们只在 [DownloadProgressBlock] / [DownloadConsolePreview] 订阅。
+    // 性能修改理由（2026-11-15）：这里**不再** collect downloadProgress / consolePreviewLines /
+    // importProgress。三者都是高频流（进度每 500ms 回调一次，预览每 750ms 且下载日志持续推进，
+    // 导入进度每帧变化），订阅写在页面顶层等于每次发布都把整页重画一遍 —— 18 个核心磁贴、
+    // 已安装列表、版本行、输入框全都跟着重算。现在它们分别在 [DownloadProgressBlock] /
+    // [DownloadConsolePreview] / [ImportProgressRow] 订阅。
     val importingServer by vm.isImportingServer.collectAsState()
-    val importProgress by vm.importProgress.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val usesCoreVersion = config.selectedCore.isBedrock
@@ -383,13 +383,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                             modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                     }
                     if (importingServer) {
-                        Spacer(Modifier.height(10.dp))
-                        SpecProgress(((importProgress ?: 0f) * 100).toInt())
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            stringResource(R.string.dlx_importing, ((importProgress ?: 0f) * 100).toInt()),
-                            color = Muted, fontSize = 11.sp
-                        )
+                        ImportProgressRow(vm)
                     }
                 }
             },
@@ -1139,6 +1133,26 @@ private fun DownloadConsolePreview(vm: McViewModel) {
             )
         }
     }
+}
+
+/**
+ * 导入进度条。订阅下沉到这一层：importProgress 在导入期间每帧变化，
+ * 放在页面顶层会让整个 DownloadScreen（1700+ 行）跟着重组 —— 版本选择条、
+ * 十几张核心卡片、已安装列表、下载进度块全都白算一遍，表现为导入时整页卡顿。
+ */
+@Composable
+private fun ImportProgressRow(vm: McViewModel) {
+    val importProgress by vm.importProgress.collectAsState()
+    val percent = ((importProgress ?: 0f) * 100).toInt()
+
+    Spacer(Modifier.height(10.dp))
+    SpecProgress(percent)
+    Spacer(Modifier.height(4.dp))
+    Text(
+        stringResource(R.string.dlx_importing, percent),
+        color = Muted,
+        fontSize = 11.sp
+    )
 }
 
 @Composable
