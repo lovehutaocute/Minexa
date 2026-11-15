@@ -1,4 +1,4 @@
-# Minexa（MineServe Mobile）
+# Minexa（旧名:MineServe Mobile）
 
 <div align="center">
 
@@ -22,7 +22,7 @@ Minexa is a native Android app that runs Minecraft **Java and Bedrock** servers 
 - **Import**: separate entries for folders, archives, a single JAR, and Modrinth `.mrpack`, with automatic core and version detection.
 - **Plugins and mods**: scan, enable/disable, SAF upload, URL install, and Modrinth search.
 - **Networking**: self-hosted frp, SakuraFrp, and ME Frp; plus STUN hole punching and EasyTier mesh as two independent lanes. The dashboard shows both LAN and public addresses.
-- **Automation**: daily start/stop, periodic tasks (start / stop / restart / world backup / full backup / broadcast / custom command), and interval-based auto backup.
+- **自动化**: daily start/stop, periodic tasks (start / stop / restart / world backup / full backup / broadcast / custom command), and interval-based auto backup.
 - **Backup and crash reports**: world and full-server backups with SAF export; abnormal exits capture key log excerpts and native reports, and the crash screen aggregates every server's `crash-reports/`.
 - **File manager**: create, rename, copy/paste, multi-select delete, sorting, hidden files, details, and path copy.
 - **Remote control**: embedded MCP server (Streamable HTTP, 57 tools, Bearer auth) and an FTP server (default port 2121).
