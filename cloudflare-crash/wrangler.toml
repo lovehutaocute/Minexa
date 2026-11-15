@@ -1,0 +1,37 @@
+# 部署配置（Cloudflare Worker + D1）
+#
+# 数据库已建好，database_id 已填。
+# 完整步骤见同目录 README.md
+
+name = "minexa-crash"
+main = "worker.js"
+compatibility_date = "2025-01-01"
+
+# D1 数据库绑定：代码里通过 env.DB 访问
+[[d1_databases]]
+binding = "DB"
+database_name = "minexa-crash"
+database_id = "72517b7b-04ca-462d-a2e8-bc777f1896f8"
+
+# KV 绑定：只用来做限流计数（防脚本狂刷上报、防暴力猜密码）。
+# 和 D1 里的崩溃记录完全分开，出问题也不影响数据。
+[[kv_namespaces]]
+binding = "RATE"
+id = "c099e0b05124483e93c7b6729344e273"
+
+# 运行时密钥（用 npx wrangler secret put 设置，不写在这里）：
+#   REPORT_KEY     上报密钥。会随 APK 分发，只能写、不能读。
+#                  不设置时 /report 直接拒绝（fail-closed）。
+#   VIEW_PASSWORD  查看密码。只有你知道，不随 APK 分发。
+#                  不设置时会回退用 REPORT_KEY（兼容旧部署，但不推荐）。
+#
+# 注意：本文件会被提交进仓库（database_id 和 KV id 都不是秘密），
+#       但 REPORT_KEY / VIEW_PASSWORD 千万不要写在这里——它们存在 Cloudflare 那边。
+
+# 部署：
+#   npx wrangler deploy
+#
+# 部署后打印的地址形如：
+#   https://minexa-crash.<你的子域>.workers.dev
+# 实际使用的是绑定好的自有域名：
+#   https://crash.xn--fjqu03a.top

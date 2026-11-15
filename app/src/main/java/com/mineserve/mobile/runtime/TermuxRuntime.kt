@@ -1932,34 +1932,27 @@ class TermuxRuntime(context: Context) {
                 profile.hostResolvConf(installer.rootDir),
                 "${profile.distro.dirName}-resolv.conf"
             )
-            val args = mutableListOf("proot")
-            if (tuning.killOnExit) args += "--kill-on-exit"
-            args += "--link2symlink"
-            if (tuning.sysvipc) args += "--sysvipc"
-            args += listOf(
-                "-L",
-                "--change-id=0:0",
-                "--rootfs=${rootfs.absolutePath}",
-                "--cwd=/root",
-                "--bind=/dev",
-                "--bind=/proc",
-                "--bind=/sys",
-                "--bind=/dev/urandom:/dev/random",
-                "--bind=${shm.absolutePath}:/dev/shm",
-                "--bind=${resolver.absolutePath}:/etc/resolv.conf"
-            )
-            extraBinds.forEach { args += "--bind=$it" }
-            args += listOf(
-                "/usr/bin/env",
-                "-i",
-                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                "HOME=/root",
-                "TMPDIR=/tmp",
-                "LANG=C.UTF-8",
-                "DEBIAN_FRONTEND=noninteractive",
-                "/bin/sh",
-                "-c",
-                command
+            val args = ProotCommandBuilder.build(
+                ProotCommandBuilder.Spec(
+                    // 注意这里传的是字面量 "proot" 而不是绝对路径：
+                    // 这条路径靠 prootEnvironment() 注入的 PATH 来解析，历史上就是这样，
+                    // 换成绝对路径会改变命令内容（见 ProotCommandBuilderTest 的对应用例）。
+                    prootPath = "proot",
+                    rootfs = rootfs.absolutePath,
+                    sharedMemoryPath = shm.absolutePath,
+                    resolvConfPath = resolver.absolutePath,
+                    workDir = "/root",
+                    killOnExit = tuning.killOnExit,
+                    sysvipc = tuning.sysvipc,
+                    extraBinds = extraBinds,
+                    includeDebianFrontend = true,
+                    // 历史上 runUbuntu 不注入 TZ（一次性命令不需要），保持不变
+                    includeTimeZone = false,
+                    shellMode = ProotCommandBuilder.ShellMode.COMMAND,
+                    command = command,
+                    equalsStyle = true,
+                ),
+                timeZoneId = null,
             )
             executor.execOnceWithTimeoutCapture(
                 timeoutMs, *args.toTypedArray(), env = prootEnvironment(tuning)
@@ -4006,28 +3999,28 @@ class TermuxRuntime(context: Context) {
             profile.hostResolvConf(installer.rootDir),
             "${profile.distro.dirName}-resolv.conf"
         )
-        val proot = listOf(
-            File(installer.rootDir, "bin/proot"),
-            File(installer.rootDir, "usr/bin/proot")
-        ).firstOrNull { it.isFile && it.canExecute() }
-            ?: throw RuntimeException("proot is not available")
+        val proot = ProotCommandBuilder.resolveProot(installer.rootDir)
+        val shellArgs = ProotCommandBuilder.build(
+            ProotCommandBuilder.Spec(
+                prootPath = proot.absolutePath,
+                rootfs = rootfs.absolutePath,
+                sharedMemoryPath = sharedMemory.absolutePath,
+                resolvConfPath = resolver.absolutePath,
+                workDir = "/root",
+                killOnExit = true,
+                sysvipc = true,
+                extraBinds = listOf("${serverDir.absolutePath}:$guestDir"),
+                includeDebianFrontend = true,
+                includeTimeZone = true,
+                shellMode = ProotCommandBuilder.ShellMode.LOGIN,
+                command = command,
+                equalsStyle = false,
+            ),
+            timeZoneId = systemTimeZoneId(),
+        )
         val process = ProcessBuilder(
             "/system/bin/sh", "-c",
-            "export PROOT_TMP_DIR='${prootTmp.absolutePath}'; " +
-                "export TMPDIR='${prootTmp.absolutePath}'; exec " +
-                listOf(
-                    proot.absolutePath, "--kill-on-exit", "--link2symlink", "--sysvipc", "-L", "--change-id=0:0",
-            "--rootfs=${rootfs.absolutePath}", "--cwd=/root",
-            "--bind=/dev", "--bind=/proc", "--bind=/sys", "--bind=/dev/urandom:/dev/random",
-            "--bind=${sharedMemory.absolutePath}:/dev/shm", "--bind=${resolver.absolutePath}:/etc/resolv.conf",
-            "--bind=${serverDir.absolutePath}:$guestDir",
-            "/usr/bin/env", "-i",
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HOME=/root", "TMPDIR=/tmp", "LANG=C.UTF-8", "DEBIAN_FRONTEND=noninteractive",
-            // Android 无 /etc/localtime，容器内同样需要显式给时区
-            (systemTimeZoneId()?.let { "TZ=$it" } ?: "TZ=UTC"),
-            "/bin/sh", "-lc", command
-                ).joinToString(" ") { shellQuote(it) }
+            ProotCommandBuilder.toShellScript(shellArgs, prootTmp.absolutePath) { shellQuote(it) }
         ).apply {
             redirectErrorStream(true)
             directory(serverDir)
@@ -4977,31 +4970,34 @@ class TermuxRuntime(context: Context) {
                 "SSL_CERT_DIR=/etc/ssl/certs"
             )
         } else emptyList()
-        val proot = listOf(
-            File(prefix, "bin/proot"),
-            File(prefix, "usr/bin/proot")
-        ).firstOrNull { it.isFile && it.canExecute() }
-            ?: throw RuntimeException("proot is not available")
+        val proot = ProotCommandBuilder.resolveProot(prefix)
         val bdsRoot = com.mineserve.mobile.server.BdsRuntime.rootDir(prefix)
+        val shellArgs = ProotCommandBuilder.build(
+            ProotCommandBuilder.Spec(
+                prootPath = proot.absolutePath,
+                rootfs = rootfs.absolutePath,
+                sharedMemoryPath = sharedMemory.absolutePath,
+                resolvConfPath = resolver.absolutePath,
+                workDir = "/root",
+                killOnExit = true,
+                sysvipc = true,
+                extraBinds = listOf(
+                    "${bdsRoot.absolutePath}:${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}",
+                    "${serverDir.absolutePath}:$GUEST_SERVER_DIR",
+                ),
+                // caEnv 是 BDS 特有的证书环境变量，必须插在标准环境变量之后、TZ 之前
+                extraEnv = caEnv,
+                includeDebianFrontend = true,
+                includeTimeZone = true,
+                shellMode = ProotCommandBuilder.ShellMode.LOGIN,
+                command = command,
+                equalsStyle = false,
+            ),
+            timeZoneId = systemTimeZoneId(),
+        )
         val process = ProcessBuilder(
             "/system/bin/sh", "-c",
-            "export PROOT_TMP_DIR='${prootTmp.absolutePath}'; " +
-                "export TMPDIR='${prootTmp.absolutePath}'; exec " +
-                listOf(
-                    proot.absolutePath, "--kill-on-exit", "--link2symlink", "--sysvipc", "-L", "--change-id=0:0",
-                    "--rootfs=${rootfs.absolutePath}", "--cwd=/root",
-                    "--bind=/dev", "--bind=/proc", "--bind=/sys", "--bind=/dev/urandom:/dev/random",
-                    "--bind=${sharedMemory.absolutePath}:/dev/shm",
-                    "--bind=${resolver.absolutePath}:/etc/resolv.conf",
-                    "--bind=${bdsRoot.absolutePath}:${com.mineserve.mobile.server.BdsRuntime.GUEST_ROOT}",
-                    "--bind=${serverDir.absolutePath}:$GUEST_SERVER_DIR",
-                    "/usr/bin/env", "-i",
-                    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-                    "HOME=/root", "TMPDIR=/tmp", "LANG=C.UTF-8", "DEBIAN_FRONTEND=noninteractive",
-                    *caEnv.toTypedArray(),
-                    (systemTimeZoneId()?.let { "TZ=$it" } ?: "TZ=UTC"),
-                    "/bin/sh", "-lc", command
-                ).joinToString(" ") { shellQuote(it) }
+            ProotCommandBuilder.toShellScript(shellArgs, prootTmp.absolutePath) { shellQuote(it) }
         ).apply {
             redirectErrorStream(true)
             directory(serverDir)
@@ -5117,30 +5113,37 @@ class TermuxRuntime(context: Context) {
             done
         """.trimIndent()
 
-        val args = mutableListOf(
-            proot.absolutePath, "--kill-on-exit", "--link2symlink", "--sysvipc", "-L", "--change-id=0:0",
-            "--rootfs=${rootfs.absolutePath}", "--cwd=/root",
-            "--bind=/dev", "--bind=/proc", "--bind=/sys", "--bind=/dev/urandom:/dev/random",
-            "--bind=${sharedMemory.absolutePath}:/dev/shm",
-            "--bind=${resolver.absolutePath}:/etc/resolv.conf"
-        )
-        dirName?.let { name ->
-            val serverDir = serverDirFor(name)
-            if (serverDir.isDirectory) args += "--bind=${serverDir.absolutePath}:$GUEST_SERVER_DIR"
+        // 服务器目录的绑定只在目录存在时才加——历史上是这样，不能改成无条件绑
+        val conditionalBinds = buildList {
+            dirName?.let { name ->
+                val serverDir = serverDirFor(name)
+                if (serverDir.isDirectory) add("${serverDir.absolutePath}:$GUEST_SERVER_DIR")
+            }
         }
-        args += listOf(
-            "/usr/bin/env", "-i",
-            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-            "HOME=/root", "TMPDIR=/tmp", "LANG=C.UTF-8",
-            "/bin/sh", "-lc", script
+        val args = ProotCommandBuilder.build(
+            ProotCommandBuilder.Spec(
+                prootPath = proot.absolutePath,
+                rootfs = rootfs.absolutePath,
+                sharedMemoryPath = sharedMemory.absolutePath,
+                resolvConfPath = resolver.absolutePath,
+                workDir = "/root",
+                killOnExit = true,
+                sysvipc = true,
+                extraBinds = conditionalBinds,
+                // 这里历史上没有 DEBIAN_FRONTEND，也没有 TZ，保持原样
+                includeDebianFrontend = false,
+                includeTimeZone = false,
+                shellMode = ProotCommandBuilder.ShellMode.LOGIN,
+                command = script,
+                equalsStyle = false,
+            ),
+            timeZoneId = null,
         )
 
         val process = try {
             ProcessBuilder(
                 "/system/bin/sh", "-c",
-                "export PROOT_TMP_DIR='${prootTmp.absolutePath}'; " +
-                    "export TMPDIR='${prootTmp.absolutePath}'; exec " +
-                    args.joinToString(" ") { shellQuote(it) }
+                ProotCommandBuilder.toShellScript(args, prootTmp.absolutePath) { shellQuote(it) }
             ).apply {
                 redirectErrorStream(true)
                 environment().putAll(executor.termuxEnv())

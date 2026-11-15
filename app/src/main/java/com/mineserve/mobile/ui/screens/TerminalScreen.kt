@@ -16,7 +16,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -78,7 +79,6 @@ import com.mineserve.mobile.ui.theme.LocalTerminalPalette
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.TerminalPalette
-import kotlinx.coroutines.flow.conflate
 import kotlinx.coroutines.flow.distinctUntilChanged
 import com.mineserve.mobile.ui.components.AppDialog
 
@@ -152,7 +152,11 @@ private fun TerminalPane(
     // 会话列表由 VM 维护，理论上进来时至少有一条；真为空时给一帧空态，
     // 不用 first() 硬取（否则整棵组合树会抛异常）。
     val active = sessions.firstOrNull { it.id == activeId } ?: sessions.firstOrNull() ?: return
-    val mcLines by vm.terminalConsoleLines.collectAsState()
+    // 性能修改理由（2026-11-15）：这里**不再** collect terminalConsoleLines。
+    // 日志每 200ms 发布一次，在这里订阅等于每次刷新都让整个 TerminalPane 重组 ——
+    // 标题栏、会话标签、22 个快捷指令胶囊、底部输入框全部跟着重算，配合下面的
+    // 强制滚动（每次都把 300 行全量测量一遍）就是「终端页卡得动不了」的成因。
+    // 现在日志只在 [MinecraftConsoleArea] 这一层订阅，只有日志区重组。
     val serverProps by vm.serverProperties.collectAsState()
     val context = LocalContext.current
     val pal = LocalTerminalPalette.current
@@ -165,58 +169,12 @@ private fun TerminalPane(
     var autoScrollPaused by rememberSaveable { mutableStateOf(false) }
     var pendingDangerousCommand by remember { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
-    val rawLines = if (active.type == TerminalSessionType.Minecraft) mcLines else active.lines
     LaunchedEffect(Unit) {
         vm.setLogTranslationEnabled(translateLogs && isChineseUi)
         vm.loadRecentTerminalLog()
         // 「allow-cheats=false 时玩家命令会静默失效」这条提示要读 server.properties，
         // 而属性只在属性页/网络页加载过，直接进控制台会读到空表、提示永不出现。
         vm.loadServerProperties()
-    }
-    // Keep the full session history for copy/export, but cap Compose nodes on low-end devices.
-    val renderedLines = remember(rawLines) { rawLines.takeLast(MAX_RENDERED_LINES) }
-    // 追踪用户是否手动向上滚动；用户在底部附近时自动滚动跟随新日志
-    var userScrolledUp by remember { mutableStateOf(false) }
-    LaunchedEffect(listState) {
-        snapshotFlow {
-            val layout = listState.layoutInfo
-            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
-            lastVisible < layout.totalItemsCount - 2
-        }.distinctUntilChanged().collect { scrolledUp -> userScrolledUp = scrolledUp }
-    }
-    // 切换会话时重置滚动状态并跳到底部
-    LaunchedEffect(activeId) {
-        userScrolledUp = false
-        if (renderedLines.isNotEmpty()) listState.scrollToItem(renderedLines.lastIndex)
-    }
-    // 新日志到达时，若用户未手动上滑，自动滚动到底部。
-    //
-    // 不用 `LaunchedEffect(rawLines.lastOrNull())`：那是以「最后一行文本」为 key，
-    // 服务端刷日志（BDS 启动阶段一秒几十行）就等于每秒触发几十次
-    // `scrollToItem`，全部排在主线程 —— 这是启动后/切控制台瞬间卡住（ANR）的
-    // 主要嫌疑之一。
-    //
-    // key 必须包含 rawLines 本身：它是 ImmutableList，每次更新都是**新实例**，
-    // 而 `snapshotFlow { rawLines.size }` 里的 size 不是快照状态 —— 闭包持有首次
-    // 组合时的那个列表，不换 key 就只在启动时发射一次，日志再多也不跟随。
-    // 按批次换 key 正好实现「一次更新滚一次」，与上面的意图一致。
-    LaunchedEffect(listState, autoScrollPaused, rawLines) {
-        snapshotFlow { rawLines.size }
-            .conflate()
-            .collect {
-                if (!userScrolledUp && !autoScrollPaused) {
-                    // 等一帧再滚：避免和同帧的列表更新抢主线程
-                    withFrameNanos { }
-                    val last = (renderedLines.size - 1).coerceAtLeast(0)
-                    if (renderedLines.isNotEmpty()) listState.scrollToItem(last, Int.MAX_VALUE)
-                }
-            }
-    }
-
-    LaunchedEffect(autoScrollPaused) {
-        if (!autoScrollPaused && renderedLines.isNotEmpty()) {
-            listState.scrollToItem(renderedLines.lastIndex, Int.MAX_VALUE)
-        }
     }
 
     val sendCommand: (String) -> Unit = { command ->
@@ -281,7 +239,13 @@ private fun TerminalPane(
                 onTogglePause = { autoScrollPaused = !autoScrollPaused },
                 onCopy = {
                     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(active.name, rawLines.joinToString("\n") { it.text }))
+                    // 复制按需取当前全量历史（不进组合订阅，避免日志刷新带着整页重组）。
+                    val allLines = if (active.type == TerminalSessionType.Minecraft) {
+                        vm.terminalConsoleLines.value
+                    } else {
+                        vm.terminalSessions.value.firstOrNull { it.id == active.id }?.lines.orEmpty()
+                    }
+                    clipboard.setPrimaryClip(android.content.ClipData.newPlainText(active.name, allLines.joinToString("\n") { it.text }))
                     android.widget.Toast.makeText(context, context.getString(R.string.tm_copied), android.widget.Toast.LENGTH_SHORT).show()
                 },
                 onClear = clearSession,
@@ -312,35 +276,25 @@ private fun TerminalPane(
                     )
                 }
             }
-            if (renderedLines.isEmpty()) {
-                EmptyTerminalState(pal = pal, modifier = Modifier.weight(1f))
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 14.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(1.dp)
-                ) {
-                    itemsIndexed(
-                        renderedLines,
-                        key = { _, line -> line.id },
-                        contentType = { _, _ -> "terminal-log" }
-                    ) { _, line ->
-                        val color = pal.colorFor(line.tone)
-                        val displayText = remember(line.text) { line.text.forTerminalDisplay() }
-                        Text(
-                            displayText,
-                            color = color,
-                            fontSize = 11.5.sp,
-                            // 显式给出 lineHeight：一条日志自动折行时行距由它决定。
-                            // 不写会按字体默认值走，多行日志挤成一片，读不出是一句还是两句。
-                            lineHeight = 16.5.sp,
-                            fontFamily = terminalLogFontFamily,
-                            softWrap = true
-                        )
-                    }
+            // key(active.id)：切换会话时把「用户是否上滑过」「渲染窗口」这些本地状态
+            // 连同滚动跟随协程一起重建成初始值，不需要再单开一个 LaunchedEffect 去重置。
+            key(active.id) {
+                if (active.type == TerminalSessionType.Minecraft) {
+                    MinecraftConsoleArea(
+                        vm = vm,
+                        listState = listState,
+                        autoScrollPaused = autoScrollPaused,
+                        pal = pal,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    TerminalLines(
+                        rawLines = active.lines,
+                        listState = listState,
+                        autoScrollPaused = autoScrollPaused,
+                        pal = pal,
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
         }
@@ -403,6 +357,102 @@ private fun TerminalPane(
                 ) { Text(stringResource(R.string.tm_danger_confirm)) }
             }
         )
+    }
+}
+
+/**
+ * 控制台（Minecraft）日志区：全页唯一订阅 [McViewModel.terminalConsoleLines] 的地方。
+ *
+ * 性能修改理由（2026-11-15）：日志每 200ms 发布一次。原先订阅写在 TerminalPane 上，
+ * 等于每次刷新都让整页重组 —— 标题栏、会话标签、22 个快捷指令胶囊（含 emoji 排版）、
+ * 底部 BasicTextField 全部跟着重算，输入法打开时还会反复触发布局。订阅收进这一层后，
+ * 日志刷新只影响日志区本身。
+ */
+@Composable
+private fun MinecraftConsoleArea(
+    vm: McViewModel,
+    listState: LazyListState,
+    autoScrollPaused: Boolean,
+    pal: TerminalPalette,
+    modifier: Modifier
+) {
+    val lines by vm.terminalConsoleLines.collectAsState()
+    TerminalLines(lines, listState, autoScrollPaused, pal, modifier)
+}
+
+/**
+ * 日志列表 + 置底跟随。
+ *
+ * 性能修改理由（2026-11-15）：
+ * 1. 自动滚动不再以 `rawLines` 为 key。rawLines 每次发布都是新实例（VM 每 200ms 重建），
+ *    把它当 key 等于每 200ms 把协程连根销毁重建一次，snapshotFlow 的订阅也被反复拆装。
+ *    现在以「最后一行 id」为 key：只在真的来了新日志时触发一次。
+ * 2. 去掉 `scrollToItem(index, Int.MAX_VALUE)`。为了「消化」2^31 的偏移，LazyColumn
+ *    会从目标位置一格一格往后量到列表末尾，等于每次滚动都把 300 行全量测量一遍。
+ *    日志一密集就是持续占满主线程 —— 这是「卡得动不了」的主因。滚到最后一项即可，
+ *    列表到底会自然钳位，观感一致。
+ * 3. 字号/行高/字体收敛到同一个 [logTextStyle]，不再每行各建一个 TextStyle。
+ */
+@Composable
+private fun TerminalLines(
+    rawLines: List<TerminalDisplayLine>,
+    listState: LazyListState,
+    autoScrollPaused: Boolean,
+    pal: TerminalPalette,
+    modifier: Modifier
+) {
+    // 保留完整历史用于复制/导出，但只把最近 MAX_RENDERED_LINES 行交给 Compose。
+    val renderedLines = remember(rawLines) { rawLines.takeLast(MAX_RENDERED_LINES) }
+    val tailId = renderedLines.lastOrNull()?.id ?: 0L
+    // 用户是否手动上滑：置底跟随只在「用户仍在底部附近」时生效
+    var userScrolledUp by remember { mutableStateOf(false) }
+    LaunchedEffect(listState) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            val lastVisible = layout.visibleItemsInfo.lastOrNull()?.index ?: -1
+            lastVisible < layout.totalItemsCount - 2
+        }.distinctUntilChanged().collect { userScrolledUp = it }
+    }
+    // 新日志 / 恢复跟随 / 首次进入：都只走这一条路径，一次刷新最多滚一次。
+    // 等一帧再滚，避免和同帧的列表更新抢主线程。
+    LaunchedEffect(listState, autoScrollPaused, tailId) {
+        // 用户正在拖/惯性滑动时不抢滚动权：否则手指被一次次拽回底部，表现就是「拖不动」。
+        if (autoScrollPaused || userScrolledUp || listState.isScrollInProgress) return@LaunchedEffect
+        if (renderedLines.isEmpty()) return@LaunchedEffect
+        withFrameNanos { }
+        listState.scrollToItem(renderedLines.lastIndex)
+    }
+    // 用户点「恢复滚动」时无条件回到底部（此时可能还停在上滑位置）。
+    LaunchedEffect(autoScrollPaused) {
+        if (!autoScrollPaused && renderedLines.isNotEmpty()) {
+            userScrolledUp = false
+            listState.scrollToItem(renderedLines.lastIndex)
+        }
+    }
+    if (renderedLines.isEmpty()) {
+        EmptyTerminalState(pal = pal, modifier = modifier)
+        return
+    }
+    LazyColumn(
+        state = listState,
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(1.dp)
+    ) {
+        items(
+            count = renderedLines.size,
+            key = { index -> renderedLines[index].id },
+            contentType = { "terminal-log" }
+        ) { index ->
+            val line = renderedLines[index]
+            Text(
+                remember(line.text) { line.text.forTerminalDisplay() },
+                color = pal.colorFor(line.tone),
+                style = logTextStyle,
+                softWrap = true
+            )
+        }
     }
 }
 
@@ -766,7 +816,14 @@ private val CommandFieldHeight = 44.dp
 private const val MAX_RENDERED_LINES = 300
 private const val MAX_DISPLAY_LOG_CHARS = 400
 
-private val terminalLogFontFamily = FontFamily.Monospace
+/** 日志行样式：所有行共用一份，避免每行各建一个 TextStyle 触发重测。 */
+private val logTextStyle = TextStyle(
+    fontFamily = FontFamily.Monospace,
+    fontSize = 11.5.sp,
+    // 显式给出 lineHeight：一条日志自动折行时行距由它决定。
+    // 不写会按字体默认值走，多行日志挤成一片，读不出是一句还是两句。
+    lineHeight = 16.5.sp
+)
 
 /**
  * 日志语义色。取值全部来自 [TerminalPalette]，浅/深两套各自保证对比度：

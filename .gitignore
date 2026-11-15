@@ -46,3 +46,6 @@ app/.cxx*/
 # 本地 AI 会话记忆（public 仓库不该带）
 .workbuddy/
 
+# Cloudflare 部署本地缓存（含账号/项目绑定信息）
+.wrangler/
+

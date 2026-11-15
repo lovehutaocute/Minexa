@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.StrictMode
 import androidx.work.Configuration
 import androidx.work.WorkManager
+import com.mineserve.mobile.crash.CrashReporter
 import com.mineserve.mobile.data.DownloadPrefs
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.UsageTracker
@@ -128,6 +129,14 @@ class McApplication : Application(), Configuration.Provider {
     override fun onCreate() {
         super.onCreate()
         instance = this
+
+        // 崩溃自动上报：先落盘、下次启动补发（见 CrashReporter 的文件头说明）。
+        // 位置必须尽早——晚于任何可能抛异常的代码，早崩的那次就抓不到了。
+        // install() 只接管一次，装完立即把异常交回原来的处理链，所以下面那个
+        // 「全局崩溃捕获」写 crash_log.txt 的逻辑仍然照常生效，两者是接力关系不是替换。
+        CrashReporter.install(this)
+        // 只是往 WorkManager 排一个后台任务，不在这儿做网络请求，不会拖慢冷启动。
+        CrashReporter.uploadPending(this)
 
         // Debug 构建启用 StrictMode：尽早发现主线程磁盘/网络违规
         if (BuildConfig.DEBUG) {

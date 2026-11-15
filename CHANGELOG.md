@@ -1,5 +1,20 @@
 # 更新日志
 
+## 1.5.2（versionCode 63）
+
+修复了一些已知问题。
+
+- 终端页：日志订阅下移到日志区，标题栏/会话标签/快捷指令/输入框不再随每 200ms 一次的
+  日志刷新整页重组；自动跟随改为日志区内 `snapshotFlow` + `withFrameNanos`（缓解启动后与
+  切控制台时的卡顿）。复制仍按需取全量历史。
+- PRoot 启动参数统一到 `runtime/ProotCommandBuilder`：`runUbuntu` / `startMcInProot` /
+  `startBdsViaBox64` / `probeBdsNetwork` 四处原本各写一份，改一处漏一处会表现为
+  「只有某种启动方式起不来」。逐字兼容（各差异点保留，产出字节与改造前一致），
+  新增 `ProotCommandBuilderTest` 锁住。
+- 崩溃上报：新增 `crash/CrashReporter`（上报前脱敏、失败静默不阻塞启动）；
+  配套服务端 `cloudflare-crash/`（Cloudflare Worker + D1：分页查询、每 IP 双层限流、
+  登录态 Cookie、无删除接口）。
+
 ## 1.5.1（versionCode 62）
 
 主题：**崩溃智能诊断、世界与内容包管理补全、保活重做**。
