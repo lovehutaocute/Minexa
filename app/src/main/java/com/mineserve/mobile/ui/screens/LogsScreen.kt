@@ -84,12 +84,9 @@ import com.mineserve.mobile.ui.components.AppDialog
  */
 @Composable
 fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
-    val lines by vm.consoleLines.collectAsState()
     var input by remember { mutableStateOf("") }
     // 会话面板状态
     val serverState by vm.serverState.collectAsState()
-    val termuxLines by vm.termuxLines.collectAsState()
-    val termuxBusy by vm.termuxBusy.collectAsState()
     var termuxInput by remember { mutableStateOf("") }
     var mcExpanded by remember { mutableStateOf(true) }
     // Termux 会话默认收起（高级功能，默认折叠避免占用主界面）
@@ -101,48 +98,15 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
     var showLogSettings by remember { mutableStateOf(false) }
     val isChineseLocale = java.util.Locale.getDefault().language == "zh"
 
-    // 日志每 200ms 批量刷新一次。显示文本和颜色的计算放到后台线程完成，
-    // 避免每次刷新都在主线程对全量行做汉化映射，导致触摸输入/滚动掉帧。
-    var displayLines by remember { mutableStateOf(emptyList<Pair<String, Color>>()) }
-    LaunchedEffect(lines, logLocalized, isChineseLocale) {
-        if (lines.isEmpty()) {
-            displayLines = emptyList()
-        } else {
-            displayLines = withContext(Dispatchers.Default) {
-                lines.map { line ->
-                    val text = if (logLocalized && isChineseLocale) localizeLogLine(line) else line
-                    text to consoleLineColor(line)
-                }
-            }
-        }
-    }
+    // 性能修改理由（2026-11-15）：原先这里是 `val lines by vm.consoleLines.collectAsState()`，
+    // 而 consoleLines 每 200ms 发布一次 → 整页（返回键、12 个快捷指令、两个面板的标题栏与
+    // 输入框、下面那一整套日志派生状态）每 200ms 全部重组，输入框里每个字符都要重算。
+    // 现在页面顶层**不读日志的值**：只保留订阅本身（flush 循环靠 subscriptionCount 判断要不
+    // 要发布），并把「有没有日志」收敛成一个布尔供面板可见性使用；真正渲染日志的订阅在
+    // [McConsoleArea] 那一层。
+    val linesState = vm.consoleLines.collectAsState()
+    val hasLines by remember { derivedStateOf { linesState.value.isNotEmpty() } }
 
-    // 日志行 → 稳定 id：日志缓冲是有界的，写满后会从头部裁剪旧行，用下标作 LazyColumn 的 key
-    // 会在裁剪时把同一 key 指向不同内容，导致行内容闪变与滚动跳动。
-    // 这里维护一份自增 id，并在每次刷新时按「上一帧尾部 ↔ 新一帧头部」的重叠区间复用旧 id。
-    var logLineIds by remember { mutableStateOf(emptyList<Long>()) }
-    var prevLogLines by remember { mutableStateOf<List<String>>(emptyList()) }
-    var nextLogId by remember { mutableStateOf(0L) }
-    var termuxLineIds by remember { mutableStateOf(emptyList<Long>()) }
-    var prevTermuxLines by remember { mutableStateOf<List<String>>(emptyList()) }
-    var nextTermuxId by remember { mutableStateOf(0L) }
-
-    LaunchedEffect(lines) {
-        if (lines.isEmpty()) {
-            logLineIds = emptyList(); prevLogLines = emptyList(); nextLogId = 0L
-        } else {
-            val (ids, next) = assignStableLineIds(prevLogLines, logLineIds, lines, nextLogId)
-            logLineIds = ids; nextLogId = next; prevLogLines = lines.toList()
-        }
-    }
-    LaunchedEffect(termuxLines) {
-        if (termuxLines.isEmpty()) {
-            termuxLineIds = emptyList(); prevTermuxLines = emptyList(); nextTermuxId = 0L
-        } else {
-            val (ids, next) = assignStableLineIds(prevTermuxLines, termuxLineIds, termuxLines, nextTermuxId)
-            termuxLineIds = ids; nextTermuxId = next; prevTermuxLines = termuxLines.toList()
-        }
-    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // 与其它子页面统一的顶栏度量：左侧 8dp 承接 40dp 返回键，右侧 16dp 与卡片对齐。
@@ -213,200 +177,40 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
         }
 
         // ── 会话面板 1：MC 终端（服务器运行中，或已有日志（含下载/初始化 bootstrap 日志）时显示） ──
-        if (serverState.isRunning || lines.isNotEmpty()) {
-            TerminalPanel(
-                title = stringResource(R.string.mc_terminal),
-                statusColor = Color(0xFFA6E3A1),
+        if (serverState.isRunning || hasLines) {
+            McTerminalPanel(
+                vm = vm,
                 expanded = mcExpanded,
                 onToggle = { mcExpanded = !mcExpanded },
-                onCopy = {
-                    if (lines.isNotEmpty()) {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("MCServer Logs", lines.joinToString("\n")))
-                        Toast.makeText(context, context.getString(R.string.s558, lines.size), Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.s559), Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = if (mcExpanded) Modifier.weight(1f) else Modifier
-            ) {
-        // 日志列表
-        val listState = rememberLazyListState()
-        // 进入页面时定位到最新日志（底部），而非顶部
-        LaunchedEffect(Unit) {
-            if (lines.isNotEmpty()) listState.scrollToItem(lines.size - 1)
-        }
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .clip(McShape.Card)
-                .background(Color(0xFF1E1E2E))
-        ) {
-            if (lines.isEmpty()) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(stringResource(R.string.s561), color = Color(0xFF8888AA), fontSize = 12.sp)
-                }
-            } else {
-                // 自动滚动：仅当用户已位于底部附近时才跟随（瞬时，不打扰上翻）
-                val atBottom by remember {
-                    derivedStateOf {
-                        val info = listState.layoutInfo
-                        val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
-                        lastVisible >= info.totalItemsCount - 3
-                    }
-                }
-                androidx.compose.runtime.LaunchedEffect(lines.size, atBottom) {
-                    if (lines.isNotEmpty() && atBottom) listState.scrollToItem(lines.size - 1)
-                }
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().padding(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    itemsIndexed(
-                        displayLines,
-                        // id 列表与文本列表由不同 Effect 更新，短暂错位时用负数兜底，避免与真实 id 撞车导致重复 key 崩溃
-                        key = { index, _ -> logLineIds.getOrNull(index) ?: (-1L - index) },
-                        contentType = { _, _ -> "console-log" }
-                    ) { _, (text, color) ->
-                        Text(
-                            text,
-                            color = color, fontSize = 10.sp, fontFamily = FontFamily.Monospace
-                        )
-                    }
-                }
-            }
-        }
-
-        // 控制台输入框（受控，非交互式 UI 入口）
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .background(Card)
-                .padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedTextField(
-                value = input,
-                onValueChange = { input = it },
-                placeholder = { Text(stringResource(R.string.s562), fontSize = 12.sp) },
-                singleLine = true,
-                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
-            Spacer(Modifier.height(0.dp))
-            IconButton(
-                onClick = {
+                input = input,
+                onInputChange = { input = it },
+                onSend = {
                     if (input.isNotBlank()) {
                         vm.sendCommand(input)
                         input = ""
                     }
                 },
-                modifier = Modifier.size(McIcon.Touch)
-            ) {
-                Icon(
-                    Icons.AutoMirrored.Outlined.Send,
-                    contentDescription = stringResource(R.string.s563),
-                    tint = Indigo,
-                    modifier = Modifier.size(McIcon.Item)
-                )
-            }
-        }
-            }  // MC 终端面板结束
-        } // if (serverState.isRunning || lines.isNotEmpty()) — MC 终端在服务器运行时或有日志（含下载/初始化）时显示
+                logLocalized = logLocalized,
+                isChineseLocale = isChineseLocale,
+                modifier = if (mcExpanded) Modifier.weight(1f) else Modifier
+            )
+        } // if (serverState.isRunning || hasLines) — MC 终端在服务器运行时或有日志（含下载/初始化）时显示
 
         // ── 会话面板 2：Termux 终端（始终显示） ──
-            TerminalPanel(
-                title = stringResource(R.string.termux_terminal),
-                statusColor = Color(0xFF89B4FA),
-                expanded = termuxExpanded,
-                onToggle = { termuxExpanded = !termuxExpanded },
-                onCopy = {
-                    if (termuxLines.isNotEmpty()) {
-                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                        clipboard.setPrimaryClip(ClipData.newPlainText("Termux Logs", termuxLines.joinToString("\n")))
-                        Toast.makeText(context, context.getString(R.string.s558, termuxLines.size), Toast.LENGTH_SHORT).show()
-                    } else {
-                        Toast.makeText(context, context.getString(R.string.s559), Toast.LENGTH_SHORT).show()
-                    }
-                },
-                modifier = if (termuxExpanded) Modifier.weight(1f) else Modifier
-            ) {
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
-                        .clip(McShape.Card)
-                        .background(Color(0xFF1E1E2E))
-                ) {
-                    if (termuxLines.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(stringResource(R.string.termux_placeholder), color = Color(0xFF8888AA), fontSize = 12.sp)
-                        }
-                    } else {
-                        val tState = rememberLazyListState()
-                        LaunchedEffect(termuxLines.size) {
-                            if (termuxLines.isNotEmpty()) tState.scrollToItem(termuxLines.size - 1)
-                        }
-                        LazyColumn(
-                            state = tState,
-                            modifier = Modifier.fillMaxSize().padding(6.dp),
-                            verticalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            itemsIndexed(
-                                termuxLines,
-                                key = { index, _ -> termuxLineIds.getOrNull(index) ?: (-1L - index) },
-                                contentType = { _, _ -> "termux-log" }
-                            ) { _, line ->
-                                Text(
-                                    line,
-                                    color = if (line.startsWith("$ ")) Color(0xFFA6E3A1) else Color(0xFFCDD6F4),
-                                    fontSize = 10.sp,
-                                    fontFamily = FontFamily.Monospace
-                                )
-                            }
-                        }
-                    }
+        TermuxSessionPanel(
+            vm = vm,
+            expanded = termuxExpanded,
+            onToggle = { termuxExpanded = !termuxExpanded },
+            input = termuxInput,
+            onInputChange = { termuxInput = it },
+            onSend = {
+                if (termuxInput.isNotBlank() && !vm.termuxBusy.value) {
+                    vm.execTermuxCommand(termuxInput)
+                    termuxInput = ""
                 }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(Card)
-                        .padding(12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    OutlinedTextField(
-                        value = termuxInput,
-                        onValueChange = { termuxInput = it },
-                        placeholder = { Text(stringResource(R.string.termux_hint), fontSize = 12.sp) },
-                        singleLine = true,
-                        enabled = !termuxBusy,
-                        modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
-                    Spacer(Modifier.height(0.dp))
-                    IconButton(
-                        onClick = {
-                            if (termuxInput.isNotBlank() && !termuxBusy) {
-                                vm.execTermuxCommand(termuxInput)
-                                termuxInput = ""
-                            }
-                        },
-                        enabled = !termuxBusy,
-                        modifier = Modifier.size(McIcon.Touch)
-                    ) {
-                        if (termuxBusy) {
-                            CircularProgressIndicator(modifier = Modifier.size(McIcon.Action), strokeWidth = 2.dp, color = Indigo)
-                        } else {
-                            Icon(
-                                Icons.AutoMirrored.Outlined.Send,
-                                contentDescription = stringResource(R.string.s563),
-                                tint = Indigo,
-                                modifier = Modifier.size(McIcon.Item)
-                            )
-                        }
-                    }
-                }
-        }
+            },
+            modifier = if (termuxExpanded) Modifier.weight(1f) else Modifier
+        )
     }
 
     // 日志设置弹窗（汉化开关）
@@ -435,6 +239,303 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                 }
             }
         )
+    }
+}
+
+/**
+ * MC 终端面板外壳：标题栏、复制按钮、底部输入框。
+ *
+ * 性能修改理由（2026-11-15）：这里**不订阅** consoleLines。外壳与输入框必须留在订阅层之外 ——
+ * 日志每 200ms 刷新一次，若外壳也订阅，`onValueChange` 每次都是新 lambda，OutlinedTextField
+ * 不可跳过，打字会跟着掉帧。日志只在 [McConsoleArea] 那一层订阅。
+ */
+@Composable
+private fun McTerminalPanel(
+    vm: McViewModel,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onSend: () -> Unit,
+    logLocalized: Boolean,
+    isChineseLocale: Boolean,
+    modifier: Modifier
+) {
+    val context = LocalContext.current
+    TerminalPanel(
+        title = stringResource(R.string.mc_terminal),
+        statusColor = Color(0xFFA6E3A1),
+        expanded = expanded,
+        onToggle = onToggle,
+        onCopy = {
+            // 复制按需取当前全量历史，不进组合订阅（与 TerminalScreen 同一写法）。
+            val all = vm.consoleLines.value
+            if (all.isNotEmpty()) {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("MCServer Logs", all.joinToString("\n")))
+                Toast.makeText(context, context.getString(R.string.s558, all.size), Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, context.getString(R.string.s559), Toast.LENGTH_SHORT).show()
+            }
+        },
+        modifier = modifier
+    ) {
+        McConsoleArea(
+            vm = vm,
+            logLocalized = logLocalized,
+            isChineseLocale = isChineseLocale,
+            modifier = Modifier.weight(1f)
+        )
+
+        // 控制台输入框（受控，非交互式 UI 入口）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Card)
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInputChange,
+                placeholder = { Text(stringResource(R.string.s562), fontSize = 12.sp) },
+                singleLine = true,
+                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
+            Spacer(Modifier.height(0.dp))
+            IconButton(
+                onClick = onSend,
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Outlined.Send,
+                    contentDescription = stringResource(R.string.s563),
+                    tint = Indigo,
+                    modifier = Modifier.size(McIcon.Item)
+                )
+            }
+        }
+    }
+}
+
+/**
+ * MC 日志区：全页唯一订阅 [McViewModel.consoleLines] 的地方。
+ *
+ * 由它派生的汉化文本/颜色、行 id 三件套、滚动跟随全部留在这里 —— 这些都以 `lines` 为 key
+ * 或直接读 `lines`，留在页面顶层会把整页重新拉回 200ms 重组。
+ */
+@Composable
+private fun McConsoleArea(
+    vm: McViewModel,
+    logLocalized: Boolean,
+    isChineseLocale: Boolean,
+    modifier: Modifier
+) {
+    val lines by vm.consoleLines.collectAsState()
+
+    // 日志每 200ms 批量刷新一次。显示文本和颜色的计算放到后台线程完成，
+    // 避免每次刷新都在主线程对全量行做汉化映射，导致触摸输入/滚动掉帧。
+    var displayLines by remember { mutableStateOf(emptyList<Pair<String, Color>>()) }
+    LaunchedEffect(lines, logLocalized, isChineseLocale) {
+        if (lines.isEmpty()) {
+            displayLines = emptyList()
+        } else {
+            displayLines = withContext(Dispatchers.Default) {
+                lines.map { line ->
+                    val text = if (logLocalized && isChineseLocale) localizeLogLine(line) else line
+                    text to consoleLineColor(line)
+                }
+            }
+        }
+    }
+
+    // 日志行 → 稳定 id：日志缓冲是有界的，写满后会从头部裁剪旧行，用下标作 LazyColumn 的 key
+    // 会在裁剪时把同一 key 指向不同内容，导致行内容闪变与滚动跳动。
+    // 这里维护一份自增 id，并在每次刷新时按「上一帧尾部 ↔ 新一帧头部」的重叠区间复用旧 id。
+    var logLineIds by remember { mutableStateOf(emptyList<Long>()) }
+    var prevLogLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var nextLogId by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(lines) {
+        if (lines.isEmpty()) {
+            logLineIds = emptyList(); prevLogLines = emptyList(); nextLogId = 0L
+        } else {
+            val (ids, next) = assignStableLineIds(prevLogLines, logLineIds, lines, nextLogId)
+            logLineIds = ids; nextLogId = next; prevLogLines = lines.toList()
+        }
+    }
+
+    // 日志列表
+    val listState = rememberLazyListState()
+    // 进入页面时定位到最新日志（底部），而非顶部
+    LaunchedEffect(Unit) {
+        if (lines.isNotEmpty()) listState.scrollToItem(lines.size - 1)
+    }
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(McShape.Card)
+            .background(Color(0xFF1E1E2E))
+    ) {
+        if (lines.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(stringResource(R.string.s561), color = Color(0xFF8888AA), fontSize = 12.sp)
+            }
+        } else {
+            // 自动滚动：仅当用户已位于底部附近时才跟随（瞬时，不打扰上翻）
+            val atBottom by remember {
+                derivedStateOf {
+                    val info = listState.layoutInfo
+                    val lastVisible = info.visibleItemsInfo.lastOrNull()?.index ?: 0
+                    lastVisible >= info.totalItemsCount - 3
+                }
+            }
+            androidx.compose.runtime.LaunchedEffect(lines.size, atBottom) {
+                if (lines.isNotEmpty() && atBottom) listState.scrollToItem(lines.size - 1)
+            }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize().padding(8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                itemsIndexed(
+                    displayLines,
+                    // id 列表与文本列表由不同 Effect 更新，短暂错位时用负数兜底，避免与真实 id 撞车导致重复 key 崩溃
+                    key = { index, _ -> logLineIds.getOrNull(index) ?: (-1L - index) },
+                    contentType = { _, _ -> "console-log" }
+                ) { _, (text, color) ->
+                    Text(
+                        text,
+                        color = color, fontSize = 10.sp, fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Termux 面板外壳：标题栏、复制按钮、底部输入框。
+ * 同 [McTerminalPanel]：外壳不订阅 termuxLines，日志只在 [TermuxLinesArea] 订阅。
+ */
+@Composable
+private fun TermuxSessionPanel(
+    vm: McViewModel,
+    expanded: Boolean,
+    onToggle: () -> Unit,
+    input: String,
+    onInputChange: (String) -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier
+) {
+    val context = LocalContext.current
+    val termuxBusy by vm.termuxBusy.collectAsState()
+    TerminalPanel(
+        title = stringResource(R.string.termux_terminal),
+        statusColor = Color(0xFF89B4FA),
+        expanded = expanded,
+        onToggle = onToggle,
+        onCopy = {
+            val all = vm.termuxLines.value
+            if (all.isNotEmpty()) {
+                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Termux Logs", all.joinToString("\n")))
+                Toast.makeText(context, context.getString(R.string.s558, all.size), Toast.LENGTH_SHORT).show()
+            } else {
+                Toast.makeText(context, context.getString(R.string.s559), Toast.LENGTH_SHORT).show()
+            }
+        },
+        modifier = modifier
+    ) {
+        TermuxLinesArea(vm = vm, modifier = Modifier.weight(1f))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Card)
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            OutlinedTextField(
+                value = input,
+                onValueChange = onInputChange,
+                placeholder = { Text(stringResource(R.string.termux_hint), fontSize = 12.sp) },
+                singleLine = true,
+                enabled = !termuxBusy,
+                modifier = Modifier.weight(1f).skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
+            Spacer(Modifier.height(0.dp))
+            IconButton(
+                onClick = onSend,
+                enabled = !termuxBusy,
+                modifier = Modifier.size(McIcon.Touch)
+            ) {
+                if (termuxBusy) {
+                    CircularProgressIndicator(modifier = Modifier.size(McIcon.Action), strokeWidth = 2.dp, color = Indigo)
+                } else {
+                    Icon(
+                        Icons.AutoMirrored.Outlined.Send,
+                        contentDescription = stringResource(R.string.s563),
+                        tint = Indigo,
+                        modifier = Modifier.size(McIcon.Item)
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Termux 日志区：唯一订阅 [McViewModel.termuxLines] 的地方。 */
+@Composable
+private fun TermuxLinesArea(vm: McViewModel, modifier: Modifier) {
+    val termuxLines by vm.termuxLines.collectAsState()
+
+    var termuxLineIds by remember { mutableStateOf(emptyList<Long>()) }
+    var prevTermuxLines by remember { mutableStateOf<List<String>>(emptyList()) }
+    var nextTermuxId by remember { mutableStateOf(0L) }
+
+    LaunchedEffect(termuxLines) {
+        if (termuxLines.isEmpty()) {
+            termuxLineIds = emptyList(); prevTermuxLines = emptyList(); nextTermuxId = 0L
+        } else {
+            val (ids, next) = assignStableLineIds(prevTermuxLines, termuxLineIds, termuxLines, nextTermuxId)
+            termuxLineIds = ids; nextTermuxId = next; prevTermuxLines = termuxLines.toList()
+        }
+    }
+
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+            .clip(McShape.Card)
+            .background(Color(0xFF1E1E2E))
+    ) {
+        if (termuxLines.isEmpty()) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(stringResource(R.string.termux_placeholder), color = Color(0xFF8888AA), fontSize = 12.sp)
+            }
+        } else {
+            val tState = rememberLazyListState()
+            LaunchedEffect(termuxLines.size) {
+                if (termuxLines.isNotEmpty()) tState.scrollToItem(termuxLines.size - 1)
+            }
+            LazyColumn(
+                state = tState,
+                modifier = Modifier.fillMaxSize().padding(6.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                itemsIndexed(
+                    termuxLines,
+                    key = { index, _ -> termuxLineIds.getOrNull(index) ?: (-1L - index) },
+                    contentType = { _, _ -> "termux-log" }
+                ) { _, line ->
+                    Text(
+                        line,
+                        color = if (line.startsWith("$ ")) Color(0xFFA6E3A1) else Color(0xFFCDD6F4),
+                        fontSize = 10.sp,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            }
+        }
     }
 }
 

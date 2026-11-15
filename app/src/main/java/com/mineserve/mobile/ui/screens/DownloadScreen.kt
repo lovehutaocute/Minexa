@@ -171,8 +171,10 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     val versionHints by vm.versionHints.collectAsState()
     val isLoadingVersions by vm.isLoadingVersions.collectAsState()
     val isDownloadingCore by vm.isDownloadingCore.collectAsState()
-    val downloadProgress by vm.downloadProgress.collectAsState()
-    val consoleLines by vm.consolePreviewLines.collectAsState()
+    // 性能修改理由（2026-11-15）：这里**不再** collect downloadProgress / consolePreviewLines。
+    // 两者都是高频流（进度每 500ms 回调一次，预览每 750ms 且下载日志持续推进），订阅写在
+    // 页面顶层等于每次发布都把整页重画一遍 —— 18 个核心磁贴、已安装列表、版本行、输入框
+    // 全都跟着重算。现在它们只在 [DownloadProgressBlock] / [DownloadConsolePreview] 订阅。
     val importingServer by vm.isImportingServer.collectAsState()
     val importProgress by vm.importProgress.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
@@ -272,14 +274,13 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                 summary = null
             ) {
                 VersionLaunchPanel(
+                    vm = vm,
                     core = config.selectedCore,
                     version = config.mcVersion,
                     hints = versionHints,
                     loadingVersions = isLoadingVersions,
                     ready = isBootstrapped,
                     downloading = isDownloadingCore,
-                    progress = downloadProgress,
-                    consoleLines = consoleLines,
                     name = customCoreName,
                     onNameChange = { customCoreName = it },
                     onOpenVersionSheet = { showVersionSheet = true },
@@ -868,14 +869,13 @@ private fun CapabilityChip(enabled: Boolean, onRes: Int, offRes: Int) {
  */
 @Composable
 private fun VersionLaunchPanel(
+    vm: McViewModel,
     core: ServerCore,
     version: String,
     hints: Map<String, String?>,
     loadingVersions: Boolean,
     ready: Boolean,
     downloading: Boolean,
-    progress: McViewModel.DownloadProgress,
-    consoleLines: List<String>,
     name: String,
     onNameChange: (String) -> Unit,
     onOpenVersionSheet: () -> Unit,
@@ -1004,45 +1004,9 @@ private fun VersionLaunchPanel(
 
         // ── 名称 + 下载（同行） ──
         if (downloading) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    stringResource(R.string.s485) + " " + progress.percent + "%",
-                    color = Indigo,
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(Modifier.weight(1f))
-                Text(progress.speedText, color = Indigo, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
-            }
-            Spacer(Modifier.height(4.dp))
-            SpecProgress(progress.percent)
-            Spacer(Modifier.height(3.dp))
-            Text(
-                progress.downloadedText + " / " + progress.totalText,
-                color = Muted,
-                fontSize = 9.sp
-            )
-            if (consoleLines.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(FieldGray)
-                        .padding(horizontal = 7.dp, vertical = 5.dp)
-                ) {
-                    consoleLines.takeLast(4).forEach { line ->
-                        Text(
-                            line,
-                            color = Muted,
-                            fontSize = 8.5.sp,
-                            lineHeight = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-                }
-            }
+            // 进度与预览各自订阅、各自重组：本面板的版本行、说明、输入框不受牵连。
+            DownloadProgressBlock(vm = vm)
+            DownloadConsolePreview(vm = vm)
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 // 输入框必须和右侧按钮同高（42dp）。OutlinedTextField 有 56dp 的硬性最小高度，
@@ -1098,6 +1062,84 @@ private fun VersionLaunchPanel(
 }
 
 // ── 已安装核心 ───────────────────────────────────────────────────────
+
+/**
+ * 下载进度：唯一订阅 [McViewModel.downloadProgress] 的地方。
+ *
+ * 下载器每 500ms 回调一次进度，订阅写在页面上等于每 500ms 重画整页。
+ * 这里把对象拆成几个数值交给纯展示层，订阅范围只覆盖这几行文字与进度条。
+ */
+@Composable
+private fun DownloadProgressBlock(vm: McViewModel) {
+    val progress by vm.downloadProgress.collectAsState()
+    DownloadProgressContent(
+        percent = progress.percent,
+        speedText = progress.speedText,
+        downloadedText = progress.downloadedText,
+        totalText = progress.totalText
+    )
+}
+
+/** 纯展示：只吃数值，不订阅任何状态。 */
+@Composable
+private fun DownloadProgressContent(
+    percent: Int,
+    speedText: String,
+    downloadedText: String,
+    totalText: String
+) {
+    Column {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                stringResource(R.string.s485) + " " + percent + "%",
+                color = Indigo,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+            Spacer(Modifier.weight(1f))
+            Text(speedText, color = Indigo, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+        }
+        Spacer(Modifier.height(4.dp))
+        SpecProgress(percent)
+        Spacer(Modifier.height(3.dp))
+        Text(
+            downloadedText + " / " + totalText,
+            color = Muted,
+            fontSize = 9.sp
+        )
+    }
+}
+
+/**
+ * 下载日志预览：唯一订阅 [McViewModel.consolePreviewLines] 的地方。
+ *
+ * 预览每 750ms 换一次实例，且只在下载中随 `[download] …` 日志变化 —— 内容为空时不占高度。
+ * 非下载态不订阅，flush 循环的 `subscriptionCount` 判据会让它连发布都省掉。
+ */
+@Composable
+private fun DownloadConsolePreview(vm: McViewModel) {
+    val consoleLines by vm.consolePreviewLines.collectAsState()
+    if (consoleLines.isEmpty()) return
+    Spacer(Modifier.height(6.dp))
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(FieldGray)
+            .padding(horizontal = 7.dp, vertical = 5.dp)
+    ) {
+        consoleLines.takeLast(4).forEach { line ->
+            Text(
+                line,
+                color = Muted,
+                fontSize = 8.5.sp,
+                lineHeight = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
 
 @Composable
 private fun InstalledSection(
