@@ -1,4 +1,4 @@
-# Minexa（MineServe Mobile）
+# Minexa（旧名:MineServe Mobile）
 
 <div align="center">
 
