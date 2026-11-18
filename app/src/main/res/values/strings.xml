@@ -2671,4 +2671,11 @@
 
     <string name="theme_default">默认配色</string>
     <string name="theme_default_desc">不使用主题包，回到 App 自带的配色。</string>
+
+    <!-- 危险操作二次确认（2026-11 UI 改造：统一 ConfirmDialog 文案） -->
+    <string name="player_ban_confirm_content">封禁后「%1$s」将无法进入服务器，除非管理员手动解除。确定现在封禁吗？</string>
+    <string name="automation_delete_confirm_title">删除定时任务</string>
+    <string name="automation_delete_confirm_content">删除「%1$s」后，它将不再按计划自动执行。</string>
+    <string name="tm_clear_confirm_content">清空后本次会话的输出历史将无法找回，确定清空吗？</string>
+    <string name="diag_crash_clear_confirm">崩溃日志是排查闪退问题的唯一现场，清除后将无法找回。确定清除吗？</string>
 </resources>

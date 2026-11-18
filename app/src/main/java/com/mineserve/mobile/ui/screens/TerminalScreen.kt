@@ -511,6 +511,20 @@ private fun TerminalTopBar(
     onMenuOpenChange: (Boolean) -> Unit,
     pal: TerminalPalette
 ) {
+    // 清屏二次确认：清掉的是本次运行的全部控制台历史（不可恢复），值得拦一道。
+    // 放在 TopBar 内部：只有这里的菜单会触发它，状态不需要上提到页面级。
+    var confirmClear by remember { mutableStateOf(false) }
+    if (confirmClear) {
+        com.mineserve.mobile.ui.ConfirmDialog(
+            title = stringResource(R.string.tm_clear_session),
+            message = stringResource(R.string.tm_clear_confirm_content),
+            onDismiss = { confirmClear = false },
+            onConfirm = {
+                confirmClear = false
+                onClear()
+            }
+        )
+    }
     Column(
         Modifier
             .fillMaxWidth()
@@ -559,7 +573,8 @@ private fun TerminalTopBar(
                         leadingIcon = { Icon(Icons.Outlined.Delete, null, modifier = Modifier.size(McIcon.Item), tint = pal.logError) },
                         onClick = {
                             onMenuOpenChange(false)
-                            onClear()
+                            // 清屏不可恢复（会话历史即本次运行的唯一现场），加一道二次确认
+                            confirmClear = true
                         }
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -633,11 +648,11 @@ private fun SessionTabs(
                         .then(if (session.type == TerminalSessionType.Termux) Modifier.padding(end = 2.dp) else Modifier)
                 )
                 if (session.type == TerminalSessionType.Termux) {
-                    // 关闭按钮单独 28dp 命中区：原先整个会话标签可点关闭，
+                    // 关闭按钮单独 32dp 命中区：原先整个会话标签可点关闭，
                     // 想切会话却关掉会话是这里最常见的一次误操作。
                     Box(
                         modifier = Modifier
-                            .size(28.dp)
+                            .size(32.dp)
                             .clip(CircleShape)
                             .clickable { onClose(session.id) },
                         contentAlignment = Alignment.Center
@@ -655,7 +670,9 @@ private fun SessionTabs(
     }
 }
 
-private val SessionChipHeight = 34.dp
+// 会话胶囊高度 38dp + 行内 2/10dp 上下留白：点中胶囊任意位置都有 ≥38dp 的命中区，
+// 逼近 [McIcon.Touch] 的 40dp 标准而不至于让标签行吃掉太多终端可视高度。
+private val SessionChipHeight = 38.dp
 
 /** 快捷指令行（仅 Minecraft 控制台）。 */
 @Composable

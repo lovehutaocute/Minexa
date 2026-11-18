@@ -6,6 +6,9 @@ import com.mineserve.mobile.data.ServerCore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -70,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.server.PlayerManager
+import com.mineserve.mobile.ui.ConfirmDialog
 import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.ui.PageTopBar
 import com.mineserve.mobile.ui.McCard
@@ -81,6 +85,7 @@ import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McMotion
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
@@ -160,6 +165,8 @@ fun PlayersScreen(
 
     var activeTab by remember { mutableStateOf(PlayerListTab.Online) }
     var detailPlayer by remember { mutableStateOf<DetailInfo?>(null) }
+    // 等待二次确认的封禁目标玩家名：null = 没有待确认的封禁
+    var pendingBanPlayer by remember { mutableStateOf<String?>(null) }
     var showHistory by remember { mutableStateOf(false) }
     val historyExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri -> uri?.let(vm::exportPlayerHistory) }
 
@@ -248,7 +255,14 @@ fun PlayersScreen(
                 onSelect = { index -> playerTabs.getOrNull(index)?.let { activeTab = it } }
             )
 
-            when (activeTab) {
+            // Tab 内容切换带 220ms 交叉淡入：四个列表之间没有层级关系，
+            // 不用位移动画；有淡入过程才能把「点了上面的分段」和「下面换了」联系起来。
+            Crossfade(
+                targetState = activeTab,
+                animationSpec = tween(McMotion.DurationMedium, easing = FastOutSlowInEasing),
+                label = "players-tab"
+            ) { tabState ->
+                when (tabState) {
                 PlayerListTab.Online -> OnlineTab(
                     players = onlinePlayers,
                     isRunning = isRunning,
@@ -290,6 +304,7 @@ fun PlayersScreen(
                     },
                     onShowDetail = { detailPlayer = DetailInfo.Banned(it) }
                 )
+                }
             }
             Spacer(Modifier.height(16.dp))
         }
@@ -306,9 +321,25 @@ fun PlayersScreen(
             onWhitelistRemove = { vm.whitelistRemove(it); detailPlayer = null },
             onPardon = { vm.pardonPlayer(it); detailPlayer = null },
             onKick = { vm.kickPlayer(it, context.getString(R.string.s675)); detailPlayer = null },
-            onBan = { vm.banPlayer(it, context.getString(R.string.s676)); detailPlayer = null },
+            // 封禁是三类操作里唯一影响持久的：踢出会立刻回来、封禁要管理员手动 pardon。
+            // 手滑点中「封禁」后玩家会莫名其妙进不了服，所以这里拦一道二次确认。
+            onBan = { pendingBanPlayer = it },
             onSetGameMode = { name, mode -> vm.setGameMode(name, mode) },
             onGiveXp = { name, amount -> vm.giveXp(name, amount) }
+        )
+    }
+
+    // 封禁二次确认：详情弹窗点「封禁」后先弹这里，确认才真正落指令。
+    pendingBanPlayer?.let { name ->
+        ConfirmDialog(
+            title = stringResource(R.string.s728),
+            message = stringResource(R.string.player_ban_confirm_content, name),
+            onDismiss = { pendingBanPlayer = null },
+            onConfirm = {
+                vm.banPlayer(name, context.getString(R.string.s676))
+                pendingBanPlayer = null
+                detailPlayer = null
+            }
         )
     }
 
@@ -437,12 +468,16 @@ private fun ServerStatusBanner(
         title = stringResource(R.string.s679),
         trailing = {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Outlined.Refresh,
-                    contentDescription = stringResource(R.string.s333),
-                    tint = Indigo,
-                    modifier = Modifier.size(14.dp).clickable { onRefresh() }
-                )
+                // 刷新入口：原先是一个 14dp 的图标直接 clickable，命中区远低于
+                // 40dp 标准，用户实际很难点中。改成标准图标按钮（36dp 命中区）。
+                IconButton(onClick = onRefresh, modifier = Modifier.size(McIcon.TouchCompact)) {
+                    Icon(
+                        Icons.Outlined.Refresh,
+                        contentDescription = stringResource(R.string.s333),
+                        tint = Indigo,
+                        modifier = Modifier.size(McIcon.Action)
+                    )
+                }
             }
         }
     ) {

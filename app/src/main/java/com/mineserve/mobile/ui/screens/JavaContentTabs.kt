@@ -40,6 +40,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.mineserve.mobile.R
+import com.mineserve.mobile.ui.EmptyHint
 import com.mineserve.mobile.server.JavaResourcePack
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.McCard
@@ -101,7 +102,8 @@ fun JavaDataPackTab(vm: McViewModel) {
 
         McCard(title = stringResource(R.string.jv_datapacks_installed, packs.size)) {
             if (packs.isEmpty()) {
-                Text(stringResource(R.string.jv_empty), color = Muted, fontSize = 12.sp)
+                // 与全站空态一致：图标 + 灰字的 EmptyHint，而不是一行裸 Text
+                EmptyHint(icon = Icons.Outlined.FolderZip, text = stringResource(R.string.jv_empty))
             } else {
                 packs.forEachIndexed { index, pack ->
                     if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))

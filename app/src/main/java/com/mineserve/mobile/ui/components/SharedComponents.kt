@@ -7,7 +7,12 @@ import androidx.compose.ui.res.stringResource
 import com.mineserve.mobile.R
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
@@ -123,7 +128,10 @@ import com.mineserve.mobile.ui.components.skinSurface
 import com.mineserve.mobile.ui.components.skinTile
 import com.mineserve.mobile.ui.components.skinTileOverlay
 import com.mineserve.mobile.ui.theme.LocalSkin
+import com.mineserve.mobile.ui.theme.McMotion
 import com.mineserve.mobile.ui.theme.frostedGlass
+import com.mineserve.mobile.ui.theme.pressScale
+import com.mineserve.mobile.ui.theme.rememberTickHaptic
 import com.mineserve.mobile.ui.theme.McIcon
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
@@ -262,6 +270,7 @@ private val ReserveBackSlotHeight = 40.dp
 @Composable
 fun FloatingBackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     val label = stringResource(R.string.s404)
+    val haptic = rememberTickHaptic()
     Box(
         modifier = modifier
             .statusBarsPadding()
@@ -270,11 +279,12 @@ fun FloatingBackButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
         Box(
             modifier = Modifier
                 .size(BackChipSize)
+                .pressScale(pressedScale = 0.92f)
                 .shadow(elevation = 6.dp, shape = CircleShape, clip = false)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.94f))
                 .border(1.dp, Line.copy(alpha = 0.9f), CircleShape)
-                .clickable(role = Role.Button, onClickLabel = label, onClick = onClick),
+                .clickable(role = Role.Button, onClickLabel = label, onClick = { haptic(); onClick() }),
             contentAlignment = Alignment.Center
         ) {
             Icon(
@@ -426,7 +436,21 @@ fun HeroBlock(
                     modifier = Modifier.weight(1f, fill = false),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 状态指示点：启动中橙色，运行中亮绿，未运行半透明白
+                    // 状态指示点：启动中橙色，运行中亮绿，未运行半透明白。
+                    // 运行中带呼吸（透明度 1 ↔ 0.45，1s 往返）：这是**功能性**动效——
+                    // 「灯还亮着」是服务器存活的持续确认，静态圆点无法区分
+                    // 「活着」和「最后采集时刻活着」。启动中不呼吸：
+                    // 橙色由下方进度条负责交代推进状态。
+                    val pulse = rememberInfiniteTransition(label = "hero-status-pulse")
+                    val dotAlpha by pulse.animateFloat(
+                        initialValue = 1f,
+                        targetValue = 0.45f,
+                        animationSpec = infiniteRepeatable(
+                            animation = tween(durationMillis = 1000, easing = FastOutSlowInEasing),
+                            repeatMode = RepeatMode.Reverse
+                        ),
+                        label = "hero-status-pulse-alpha"
+                    )
                     Box(
                         modifier = Modifier
                             .size(8.dp)
@@ -434,7 +458,9 @@ fun HeroBlock(
                             .background(
                                 when {
                                     isStarting -> Color(0xFFFFA726)
-                                    state.isRunning -> MintBright
+                                    state.isRunning -> MintBright.copy(
+                                        alpha = if (state.runningSinceMs > 0L) dotAlpha else 1f
+                                    )
                                     else -> Color.White.copy(alpha = 0.5f)
                                 }
                             )
@@ -887,10 +913,19 @@ fun StepRow(
 }
 
 /**
- * 进度条（参考界面 progress-track）
+ * 进度条（参考界面 progress-track）。
+ *
+ * 填充宽度带 [McMotion.DurationMedium] 的平滑过渡：安装/下载进度是离散上报的
+ * （每一段数据到达才 +N%），不补间的话进度条是一格一格跳的，看起来像卡顿。
  */
 @Composable
 fun ProgressTrack(percent: Int) {
+    val target = (percent.coerceIn(0, 100)) / 100f
+    val animated by animateFloatAsState(
+        targetValue = target,
+        animationSpec = tween(durationMillis = McMotion.DurationMedium, easing = FastOutSlowInEasing),
+        label = "progress-track"
+    )
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -900,7 +935,7 @@ fun ProgressTrack(percent: Int) {
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(percent / 100f)
+                .fillMaxWidth(animated)
                 .height(8.dp)
                 .clip(RoundedCornerShape(8.dp))
                 .background(
@@ -926,6 +961,7 @@ fun SegPill(
 ) {
     Box(
         modifier = modifier
+            .pressScale(pressedScale = 0.94f)
             .skinSurface(
                 SkinTileSlots.CHIP,
                 if (selected) Indigo else unselectedBackground,
@@ -1692,4 +1728,47 @@ fun JavaRuntimeGroupList(
 fun pageSurface(): Color {
     val skin = LocalSkin.current
     return if (skin.assets.background != null) Color.Transparent else skin.scheme.background
+}
+
+/**
+ * 危险操作二次确认弹窗：全站统一实现。
+ *
+ * 背景：仓库里已有 10+ 处「删除/覆盖/清空」确认弹窗，各页面手写 AppDialog 组装，
+ * 标题字重、正文颜色、确认按钮色号各自微调过，同一动作在不同页面长不一样。
+ * 新加的危险操作（自动化任务删除、玩家封禁、终端清屏）直接复用本组件，
+ * 老弹窗不动——它们工作正常，批量改写只会引入回归风险。
+ *
+ * 视觉约定与既有弹窗保持一致：确认用 [Coral]（与全站危险色一致），
+ * 取消用 [Muted]；确认触发一次轻触觉反馈（删除类操作值得一次实体确认感）。
+ *
+ * @param title 弹窗标题
+ * @param message 正文说明（建议讲清「会失去什么」，而不是「确定吗」）
+ * @param confirmLabel 确认按钮文案，默认「确认删除」
+ */
+@Composable
+fun ConfirmDialog(
+    title: String,
+    message: String,
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit,
+    confirmLabel: String = stringResource(R.string.s401)
+) {
+    val haptic = rememberTickHaptic()
+    AppDialog(
+        onDismissRequest = onDismiss,
+        shape = McShape.Dialog,
+        containerColor = MaterialTheme.colorScheme.surface,
+        title = { Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp) },
+        text = { Text(message, color = Muted, fontSize = 12.sp, lineHeight = 18.sp) },
+        confirmButton = {
+            TextButton(onClick = { haptic(); onConfirm() }) {
+                Text(confirmLabel, color = Coral, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.s402), color = Muted)
+            }
+        }
+    )
 }

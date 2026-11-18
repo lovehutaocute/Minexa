@@ -112,11 +112,26 @@ fun DiagnosticsScreen(vm: McViewModel, onBack: () -> Unit) {
                     val preview = if (expanded) crashLog!! else crashLog!!.lines().takeLast(6).joinToString("\n")
                     Text(preview, color = Color(0xFFE8E8E8), fontSize = 10.sp, fontFamily = FontFamily.Monospace, lineHeight = 14.sp)
                     Spacer(Modifier.height(4.dp))
+                    // 清除崩溃日志的二次确认：这份日志是排查闪退的唯一现场，
+                    // 清掉后无处找回，与其它删除类操作保持同一交互约定。
+                    var confirmClearLog by remember { mutableStateOf(false) }
+                    if (confirmClearLog) {
+                        com.mineserve.mobile.ui.ConfirmDialog(
+                            title = stringResource(R.string.diag_crash_clear),
+                            message = stringResource(R.string.diag_crash_clear_confirm),
+                            onDismiss = { confirmClearLog = false },
+                            onConfirm = {
+                                vm.clearAppCrashLog()
+                                crashLog = null
+                                confirmClearLog = false
+                            }
+                        )
+                    }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         TextButton(onClick = { expanded = !expanded }) {
                             Text(if (expanded) stringResource(R.string.diag_crash_collapse) else stringResource(R.string.diag_crash_expand), color = Indigo, fontSize = 11.sp)
                         }
-                        TextButton(onClick = { vm.clearAppCrashLog(); crashLog = null }) {
+                        TextButton(onClick = { confirmClearLog = true }) {
                             Text(stringResource(R.string.diag_crash_clear), color = Coral, fontSize = 11.sp)
                         }
                     }

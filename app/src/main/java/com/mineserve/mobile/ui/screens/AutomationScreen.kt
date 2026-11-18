@@ -98,6 +98,9 @@ fun AutomationScreen(vm: McViewModel, onBack: () -> Unit) {
     // editing == null 且 showEditor == true 表示「新建」
     var showEditor by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<AutomationTask?>(null) }
+    // 等待二次确认的删除目标：定时任务承载「到点自动备份/重启」等计划，
+    // 手滑误删后服务器在无人值守时段的行为就变了，值得拦一道确认。
+    var pendingDeleteTask by remember { mutableStateOf<AutomationTask?>(null) }
 
     Column(Modifier.fillMaxSize()) {
         BackBar(title = stringResource(R.string.automation_title), onBack = onBack)
@@ -134,7 +137,7 @@ fun AutomationScreen(vm: McViewModel, onBack: () -> Unit) {
                             onToggle = { vm.setAutomationTaskEnabled(task.id, it) },
                             onRunNow = { vm.runAutomationTaskNow(task.id) },
                             onEdit = { editing = task; showEditor = true },
-                            onDelete = { vm.deleteAutomationTask(task.id) }
+                            onDelete = { pendingDeleteTask = task }
                         )
                         Spacer(Modifier.height(8.dp))
                     }
@@ -173,6 +176,19 @@ fun AutomationScreen(vm: McViewModel, onBack: () -> Unit) {
             onSave = { task ->
                 if (editing == null) vm.addAutomationTask(task) else vm.updateAutomationTask(task)
                 showEditor = false
+            }
+        )
+    }
+
+    // 删除任务二次确认
+    pendingDeleteTask?.let { task ->
+        com.mineserve.mobile.ui.ConfirmDialog(
+            title = stringResource(R.string.automation_delete_confirm_title),
+            message = stringResource(R.string.automation_delete_confirm_content, task.name),
+            onDismiss = { pendingDeleteTask = null },
+            onConfirm = {
+                vm.deleteAutomationTask(task.id)
+                pendingDeleteTask = null
             }
         )
     }

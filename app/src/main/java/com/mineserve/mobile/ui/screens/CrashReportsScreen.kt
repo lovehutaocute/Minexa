@@ -1,5 +1,9 @@
 package com.mineserve.mobile.ui.screens
 
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
+
 import android.content.ClipData
 import android.content.Context
 import android.content.Intent
@@ -42,6 +46,7 @@ import com.mineserve.mobile.ui.TrustStoreRepairUi
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.McIcon
+import com.mineserve.mobile.ui.theme.McMotion
 import com.mineserve.mobile.ui.theme.Muted
 import kotlinx.coroutines.launch
 import com.mineserve.mobile.data.skin.SkinTileSlots
@@ -184,7 +189,15 @@ fun CrashReportDialog(
                 )
                 Spacer(Modifier.height(8.dp))
                 Box(Modifier.weight(1f)) {
-                    when (mode) {
+                    // 三个视图（解析 / 关键日志 / 完整日志）切换带交叉淡入。
+                    // 从「解析」点关键行跳到「完整日志」时尤其需要：
+                    // 有淡入过程用户才能意识到视图真的换了，而不是同屏内滚动。
+                    Crossfade(
+                        targetState = mode,
+                        animationSpec = tween(McMotion.DurationMedium, easing = FastOutSlowInEasing),
+                        label = "crash-view-mode"
+                    ) { modeState ->
+                        when (modeState) {
                         CrashViewMode.Analysis -> AnalysisTab(
                             analysis = analysis,
                             insight = insight,
@@ -214,6 +227,7 @@ fun CrashReportDialog(
                             onScrolled = { scrollTarget = null },
                             fallbackText = content
                         )
+                        }
                     }
                 }
             }

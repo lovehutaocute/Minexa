@@ -661,16 +661,16 @@ private fun CorePicker(selected: ServerCore, onPick: (ServerCore) -> Unit) {
     }
 }
 
-/** 家族分段：选中为家族色实心，未选为浅底 + 家族色圆点。高 30dp。 */
+/** 家族分段：选中为家族色实心，未选为浅底 + 家族色圆点。高 36dp（手指可点中）。 */
 @Composable
 private fun GroupTab(label: String, accent: Color, selected: Boolean, onClick: () -> Unit) {
     Row(
         modifier = Modifier
-            .height(30.dp)
+            .height(36.dp)
             .clip(RoundedCornerShape(16.dp))
             .background(if (selected) accent else FieldGray)
             .clickable { onClick() }
-            .padding(horizontal = 9.dp),
+            .padding(horizontal = 10.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
         if (!selected) {
@@ -1365,7 +1365,7 @@ private fun InstalledRow(
     }
 }
 
-/** 行内动作：图标 + 文字，30dp 高，浅底无描边。 */
+/** 行内动作：图标 + 文字，36dp 高（保证手指能点中），浅底无描边。 */
 @Composable
 private fun RowAction(
     icon: androidx.compose.ui.graphics.vector.ImageVector,
@@ -1377,16 +1377,16 @@ private fun RowAction(
     val ink = if (enabled) tint else tint.copy(alpha = 0.35f)
     Row(
         modifier = Modifier
-            .height(30.dp)
+            .height(36.dp)
             .clip(RoundedCornerShape(12.dp))
             .background(if (enabled) tint.copy(alpha = 0.08f) else Color.Transparent)
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 7.dp),
+            .padding(horizontal = 9.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(11.dp))
-        Spacer(Modifier.width(3.dp))
-        Text(label, color = ink, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold)
+        Icon(icon, contentDescription = null, tint = ink, modifier = Modifier.size(13.dp))
+        Spacer(Modifier.width(4.dp))
+        Text(label, color = ink, fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold)
     }
 }
 
