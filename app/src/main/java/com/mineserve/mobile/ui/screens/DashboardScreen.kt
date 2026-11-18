@@ -145,6 +145,7 @@ import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
 import com.mineserve.mobile.ui.theme.Muted
+import com.mineserve.mobile.ui.theme.rememberTickHaptic
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -1233,6 +1234,9 @@ private fun StartStopBar(
     onStop: () -> Unit,
     onForceStop: () -> Unit
 ) {
+    // 启停是全 App 权重最高的操作：按下给一次轻触觉，手指在屏幕外也能
+    // 确认「确实点到了」——启动耗时数十秒，没点中的代价是干等。
+    val haptic = rememberTickHaptic()
     val split by animateFloatAsState(
         targetValue = if (isRunning) 1f else 0f,
         animationSpec = tween(durationMillis = 460, easing = FastOutSlowInEasing),
@@ -1302,7 +1306,10 @@ private fun StartStopBar(
                 .border(BorderStroke(1.5.dp, leftBorder), shape)
                 .clickable(
                     enabled = if (isRunning) !forceStopInFlight else startEnabled,
-                    onClick = { if (isRunning) onForceStop() else onStart() }
+                    onClick = {
+                        haptic()
+                        if (isRunning) onForceStop() else onStart()
+                    }
                 ),
             contentAlignment = Alignment.Center
         ) {
@@ -1366,7 +1373,10 @@ private fun StartStopBar(
                 // 没图时仍是 Coral；有图时由作者画的图承担底色，文字恒为白色，
                 // 位置恒在右侧、恒在「运行中」才出现 —— 危险操作的辨识度不靠颜色也能成立。
                 .skinSurface(SkinTileSlots.STOP_BUTTON, Coral, shape)
-                .clickable(enabled = split > 0.6f && !stopInFlight, onClick = onStop)
+                .clickable(
+                    enabled = split > 0.6f && !stopInFlight,
+                    onClick = { haptic(); onStop() }
+                )
         ) {
             // 内层固定半宽并贴右：外层宽度增长时文字原地不动、由左向右被"揭开"，
             // 不会随着宽度变化左右滑动。

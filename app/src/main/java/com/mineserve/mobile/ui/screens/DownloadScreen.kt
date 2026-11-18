@@ -1457,6 +1457,14 @@ private fun VersionSheet(
             }
             Spacer(Modifier.height(8.dp))
 
+            if (versions.isEmpty() && loading) {
+                // 版本列表从镜像拉取需要几秒：给出与全站一致的加载占位，
+                // 不再让抽屉上半部分空着（原先只靠外部一行小字提示）。
+                com.mineserve.mobile.ui.LoadingHint(
+                    text = stringResource(R.string.s472),
+                    modifier = Modifier.padding(vertical = 8.dp)
+                )
+            }
             if (versions.isEmpty() && !loading) {
                 Text(stringResource(R.string.s473), color = Muted, fontSize = 11.sp)
                 Spacer(Modifier.height(6.dp))

@@ -591,13 +591,17 @@ private fun OnlineTab(
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 items(filteredPlayers, key = { it }) { name ->
-                    OnlinePlayerRow(
-                        name = name,
-                        onShowDetail = { onShowDetail(name) },
-                        onCopy = { onCopy(name) },
-                        onKick = { onKick(name) },
-                        onSetGameMode = { mode -> onSetGameMode(name, mode) }
-                    )
+                    // animateItem：玩家进服/离服时新行滑入、旧行平滑退出，
+                    // 不再是整列表硬跳；key 已按玩家名稳定。
+                    Box(Modifier.animateItem()) {
+                        OnlinePlayerRow(
+                            name = name,
+                            onShowDetail = { onShowDetail(name) },
+                            onCopy = { onCopy(name) },
+                            onKick = { onKick(name) },
+                            onSetGameMode = { mode -> onSetGameMode(name, mode) }
+                        )
+                    }
                 }
             }
         }

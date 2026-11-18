@@ -314,6 +314,39 @@ fun EmptyHint(icon: ImageVector, text: String, modifier: Modifier = Modifier) {
 }
 
 /**
+ * 统一加载占位：居中进度圈 + 一句可选说明文案（2026-11 动效层二阶段）。
+ *
+ * 背景：仓库里 17 个文件各自摆着 10–18dp 的小 spinner，块级加载场景
+ * （世界列表扫描中、版本抽屉拉取中）要么没有占位、要么一行裸灰字，
+ * 用户无法区分「加载中」与「空列表」。与 [EmptyHint] 同外形同尺寸，
+ * 「加载中」和「这里是空的」从此是一对可对照的状态表达。
+ *
+ * 行内繁忙指示（按钮里 10dp 小圈、某一行右侧的进度圈）**不要**换成本组件——
+ * 那是「局部在忙」的语义，保留原样。
+ *
+ * @param text 可选说明文案（如「正在扫描世界目录…」）；null 时只显示进度圈
+ */
+@Composable
+fun LoadingHint(text: String? = null, modifier: Modifier = Modifier) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(McIcon.Display),
+            strokeWidth = 2.5.dp,
+            color = Indigo
+        )
+        if (text != null) {
+            Spacer(Modifier.height(McSpacing.Row))
+            Text(text, color = Muted, fontSize = 12.sp)
+        }
+    }
+}
+
+/**
  * Hero 卡片：渐变背景 + 状态行 + 紧凑指标行（TPS / 在线 / 进程内存 / 运行时长）
  */
 @Composable

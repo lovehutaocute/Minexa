@@ -67,6 +67,7 @@ import com.mineserve.mobile.server.WorldGenLedger
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.BackBar
+import com.mineserve.mobile.ui.LoadingHint
 import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
@@ -195,18 +196,22 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                 }
             ) {
                 if (worlds.isEmpty()) {
-                    Text(
-                        if (loading) stringResource(R.string.wl_loading_usage) else stringResource(R.string.wl_empty),
-                        color = Muted,
-                        fontSize = 12.sp
-                    )
+                    if (loading) {
+                        // 扫描是磁盘 IO，大目录会卡几秒：给出「在加载」的明确占位，
+                        // 不再与「一个世界都没有」的空文案混用同一行灰字。
+                        LoadingHint(text = stringResource(R.string.wl_loading_usage))
+                    } else {
+                        Text(stringResource(R.string.wl_empty), color = Muted, fontSize = 12.sp)
+                    }
                 } else {
                     // key 用世界名：目录扫描结果天然唯一；重命名 / 激活切换后
                     // 列表能按行做增量重组，而不是整卡重建。
+                    // animateItem：导入 / 删除世界时新旧行平滑让位，不再是整列硬跳。
                     LazyColumn(Modifier.weight(1f)) {
                         itemsIndexed(worlds, key = { _, w -> w.name }) { index, world ->
-                            if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
-                            WorldRow(
+                            Column(Modifier.animateItem()) {
+                                if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
+                                WorldRow(
                                 world = world,
                                 java = isJava,
                                 onActivate = { vm.setActiveWorld(world.name) },
@@ -219,7 +224,8 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                                 },
                                 onReset = { pendingReset = world },
                                 onRename = { pendingRename = world }
-                            )
+                                )
+                            }
                         }
                     }
                 }
