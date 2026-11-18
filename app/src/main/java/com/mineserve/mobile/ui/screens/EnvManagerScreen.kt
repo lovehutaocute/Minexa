@@ -1,9 +1,5 @@
 package com.mineserve.mobile.ui.screens
 
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -74,7 +70,6 @@ import com.mineserve.mobile.ui.StepRow
 import com.mineserve.mobile.ui.installStepLabel
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.Indigo
-import com.mineserve.mobile.ui.theme.McMotion
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
@@ -149,24 +144,18 @@ fun EnvManagerScreen(vm: McViewModel, initialTab: Int, onBack: () -> Unit) {
             )
 
             Column(
-                Modifier
+                modifier = Modifier
                     .fillMaxSize()
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 4.dp)
             ) {
-                // 五个环境模块切换带交叉淡入，与全站 Tab 切换节奏一致
-                Crossfade(
-                    targetState = tab,
-                    animationSpec = tween(McMotion.DurationMedium, easing = FastOutSlowInEasing),
-                    label = "env-tab"
-                ) { tabIndex ->
-                    when (tabIndex) {
-                        ENV_TAB_JAVA -> JavaModule(vm, ::requestConfirm)
-                        ENV_TAB_DEPS -> DependenciesModule(vm, ::requestConfirm)
-                        ENV_TAB_PHP -> PhpModule(vm, ::requestConfirm)
-                        ENV_TAB_BDS -> BdsEnvironmentModule(vm, ::requestConfirm)
-                        else -> TermuxModule(vm, ::requestConfirm)
-                    }
+                // 五个环境模块直接切换（2026-11-18 按用户要求移除交叉淡入）
+                when (tab) {
+                    ENV_TAB_JAVA -> JavaModule(vm, ::requestConfirm)
+                    ENV_TAB_DEPS -> DependenciesModule(vm, ::requestConfirm)
+                    ENV_TAB_PHP -> PhpModule(vm, ::requestConfirm)
+                    ENV_TAB_BDS -> BdsEnvironmentModule(vm, ::requestConfirm)
+                    else -> TermuxModule(vm, ::requestConfirm)
                 }
             }
         }

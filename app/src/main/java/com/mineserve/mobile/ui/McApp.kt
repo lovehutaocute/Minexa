@@ -2,15 +2,6 @@ package com.mineserve.mobile.ui
 
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
-import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.SizeTransform
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.slideInHorizontally
-import androidx.compose.animation.slideOutHorizontally
-import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
@@ -84,7 +75,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.MoreVert
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
-import com.mineserve.mobile.ui.theme.McMotion
 import com.mineserve.mobile.ui.theme.Muted
 import com.mineserve.mobile.ui.theme.frostedGlass
 import com.mineserve.mobile.ui.theme.rememberTickHaptic
@@ -116,17 +106,8 @@ fun McApp() {
     // 二级页面返回栈：栈底是「当前 Tab」，每进一层压一条，返回就弹一条
     var stack by rememberSaveable(stateSaver = NavStackSaver) { mutableStateOf(emptyList<NavEntry>()) }
 
-    /**
-     * 最近一次导航的方向，供页面转场动画取用：
-     * - [NavDirection.Forward] —— 压栈下钻，新页从右缘滑入；
-     * - [NavDirection.Backward] —— 出栈返回，新页从左缘滑入；
-     * - [NavDirection.Peer] —— 同级切换（Tab ↔ Tab），只淡入淡出不做位移。
-     *
-     * Material 导航规范不建议同级页面用位移动画：左右滑动在语义上表示层级，
-     * Tab 之间不存在层级关系。方向在 navigate / goBack / selectTab 里写入，
-     * transitionSpec 在转场开始的那一刻读取，不需要做 key→深度的反推。
-     */
-    var navDirection by remember { mutableStateOf(NavDirection.Peer) }
+    // 底部导航切换的轻触觉反馈（2026-11-18：页面切换转场动画已按用户要求移除，
+    // 页面间恢复瞬时切换，触觉反馈保留）
     val tabHaptic = rememberTickHaptic()
 
     val current = stack.lastOrNull()
@@ -147,7 +128,6 @@ fun McApp() {
     fun navigate(page: SubPage, arg: String = "") {
         val top = stack.lastOrNull()
         if (top != null && top.page == page && top.arg == arg) return
-        navDirection = if (stack.isEmpty() && page == SubPage.More) NavDirection.Peer else NavDirection.Forward
         stack = stack + NavEntry(page, arg)
         showLogs = false
     }
@@ -164,7 +144,6 @@ fun McApp() {
             stack.isNotEmpty() -> stack = stack.dropLast(1)
             tab != McTab.Dashboard -> tab = McTab.Dashboard
         }
-        navDirection = NavDirection.Backward
     }
 
     /** 切 Tab 等于「回到一级页面」：栈必须清空，否则返回键会把人送回刚才那个 Tab 的子页。 */
@@ -173,8 +152,6 @@ fun McApp() {
         tab = target
         stack = emptyList()
         showLogs = false
-        // 覆盖此前的方向：Tab ↔ Tab 是同级切换，中途进过子页不影响这一次的语义
-        navDirection = NavDirection.Peer
     }
 
     // 悬浮返回键不复刻一遍返回逻辑，而是直接派发系统返回事件：
@@ -358,47 +335,16 @@ fun McApp() {
                 current != null -> "page:${current.key}"
                 else -> "page:tab:${tab.name}"
             }
-            // 页面级转场（2026-11 动效层）：
-            // - 前进：新页从右缘滑入 1/4 屏宽 + 淡入，旧页向左退 1/5 屏宽 + 淡出（更短，保证跟手）；
-            // - 返回：方向镜像；
-            // - Tab ↔ Tab：纯淡入淡出（同级页面不用位移，位移只表达层级）。
-            // 动画期间新旧两页同时组合，时长控制在 280ms / 200ms 以内，
-            // 低端机的双页并存窗口足够短，不会造成可感知的卡顿。
-            // 分发按 key 解析而不是读当前状态：退出中的旧页必须按「它自己的 key」渲染，
-            // 否则转场期间两页内容相同，动画等于没放。
-            AnimatedContent(
-                targetState = pageKey,
-                transitionSpec = {
-                    val enter = when (navDirection) {
-                        NavDirection.Forward -> slideInHorizontally(
-                            tween(McMotion.DurationPage, easing = FastOutSlowInEasing)
-                        ) { it / 4 } + fadeIn(tween(McMotion.DurationPage))
-                        NavDirection.Backward -> slideInHorizontally(
-                            tween(McMotion.DurationPage, easing = FastOutSlowInEasing)
-                        ) { -it / 4 } + fadeIn(tween(McMotion.DurationPage))
-                        NavDirection.Peer -> fadeIn(tween(McMotion.DurationPage))
-                    }
-                    val exit = when (navDirection) {
-                        NavDirection.Forward -> slideOutHorizontally(
-                            tween(McMotion.DurationPageExit, easing = FastOutSlowInEasing)
-                        ) { -it / 5 } + fadeOut(tween(McMotion.DurationPageExit))
-                        NavDirection.Backward -> slideOutHorizontally(
-                            tween(McMotion.DurationPageExit, easing = FastOutSlowInEasing)
-                        ) { it / 5 } + fadeOut(tween(McMotion.DurationPageExit))
-                        NavDirection.Peer -> fadeOut(tween(McMotion.DurationPageExit))
-                    }
-                    (enter togetherWith exit).using(SizeTransform(clip = false))
-                },
-                label = "page-transition"
-            ) { key ->
-                pageStates.SaveableStateProvider(key) {
-                    PageForKey(
-                        key = key,
-                        vm = vm,
-                        onNavigate = { page, arg -> navigate(page, arg) },
-                        onBack = { goBack() }
-                    )
-                }
+            // 页面切换（2026-11-18 按用户要求移除渐隐渐现转场）：瞬时切换，无动画。
+            // 分发仍按 key 解析（[PageForKey]）：key 的生成规则与上面的 pageKey 一致，
+            // 与「读导航状态分发」行为等价，且这套解析逻辑已在任务里验证过。
+            pageStates.SaveableStateProvider(pageKey) {
+                PageForKey(
+                    key = pageKey,
+                    vm = vm,
+                    onNavigate = { page, arg -> navigate(page, arg) },
+                    onBack = { goBack() }
+                )
             }
 
             // 全局悬浮返回键：只在二级及更深层级出现，固定在左上角、压在所有滚动内容之上。
@@ -530,12 +476,6 @@ private fun SubPageContent(
         )
     }
 }
-
-/**
- * 导航方向：压栈 = 前进，出栈 = 返回，Tab 切换 = 同级。
- * 只在 [com.mineserve.mobile.ui.McApp] 内部使用，转场动画按它选择滑入方向。
- */
-private enum class NavDirection { Forward, Backward, Peer }
 
 /**
  * 按 [SaveableStateProvider][androidx.compose.runtime.saveable.SaveableStateHolder.SaveableStateProvider]

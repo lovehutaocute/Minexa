@@ -1,9 +1,5 @@
 package com.mineserve.mobile.ui.screens
 
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
-
 import androidx.compose.ui.res.stringResource
 import com.mineserve.mobile.R
 
@@ -106,7 +102,6 @@ import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.McIcon
-import com.mineserve.mobile.ui.theme.McMotion
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
@@ -459,13 +454,8 @@ fun PluginsScreen(vm: McViewModel) {
             } else if (resourceType == ResourceType.ResourcePack) {
                 JavaResourcePackTab(vm)
             } else if (resourceType == ResourceType.Plugin) {
-            // 已装/上传两个 Tab 用交叉淡入：与玩家页、崩溃报告页的切换节奏一致
-            Crossfade(
-                targetState = activeTab,
-                animationSpec = tween(McMotion.DurationMedium, easing = FastOutSlowInEasing),
-                label = "plugins-tab"
-            ) { tabState ->
-                when (tabState) {
+            // 已装/上传两个 Tab 直接切换（2026-11-18 按用户要求移除交叉淡入）
+                when (activeTab) {
                 PluginTab.Installed -> InstalledTab(
                     installed = installedPlugins,
                     conflicts = pluginConflicts,
@@ -484,7 +474,6 @@ fun PluginsScreen(vm: McViewModel) {
                     onGotoInstalled = { activeTab = PluginTab.Installed }
                 )
                 }
-            }
             } else {
                 ModsTab(
                     mods = mods,

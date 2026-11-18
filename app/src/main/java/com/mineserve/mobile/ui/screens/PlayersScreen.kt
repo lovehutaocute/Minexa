@@ -6,9 +6,6 @@ import com.mineserve.mobile.data.ServerCore
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 
-import androidx.compose.animation.Crossfade
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
@@ -87,7 +84,6 @@ import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoSoft
 import com.mineserve.mobile.ui.theme.McIcon
-import com.mineserve.mobile.ui.theme.McMotion
 import com.mineserve.mobile.ui.theme.McShape
 import com.mineserve.mobile.ui.theme.McSpacing
 import com.mineserve.mobile.ui.theme.Mint
@@ -260,17 +256,11 @@ fun PlayersScreen(
                 onSelect = { index -> playerTabs.getOrNull(index)?.let { activeTab = it } }
             )
 
-            // Tab 内容切换带 220ms 交叉淡入：四个列表之间没有层级关系，
-            // 不用位移动画；有淡入过程才能把「点了上面的分段」和「下面换了」联系起来。
+            // Tab 内容直接切换（2026-11-18 按用户要求移除交叉淡入）。
             // weight(1f)：Tab 内容区吃掉剩余高度——在线列表在其中懒加载（卡片填满、
             // 行虚拟化滚动），其余三个表单型 Tab 交给 [ScrollableTabBody] 自行滚动。
-            Crossfade(
-                targetState = activeTab,
-                modifier = Modifier.weight(1f),
-                animationSpec = tween(McMotion.DurationMedium, easing = FastOutSlowInEasing),
-                label = "players-tab"
-            ) { tabState ->
-                when (tabState) {
+            Box(Modifier.weight(1f)) {
+                when (activeTab) {
                 PlayerListTab.Online -> OnlineTab(
                     players = onlinePlayers,
                     isRunning = isRunning,
