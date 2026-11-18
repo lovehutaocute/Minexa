@@ -7,6 +7,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -21,8 +23,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.CheckCircle
@@ -159,49 +159,52 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                 }
                 return@Scaffold
             }
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(rememberScrollState())
-                    .padding(bottom = 18.dp)
-            ) {
-                ActiveWorldCard(
-                    name = activeName.ifBlank { "world" },
-                    isJava = isJava,
-                    meta = activeMeta,
-                    javaMeta = javaMeta,
-                    plan = activePlan,
-                    dims = javaDims,
-                    onClearSeed = { vm.clearWorldSeed() },
-                    onResetDimension = { pendingDimReset = it }
-                )
 
-                McCard(
-                    title = stringResource(R.string.wl_card_list),
-                    trailing = {
-                        if (loading) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        } else {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                IconAction(Icons.Outlined.Add, stringResource(R.string.wl_create)) { showCreate = true }
-                                Spacer(Modifier.width(10.dp))
-                                IconAction(Icons.Outlined.FileUpload, stringResource(R.string.wl_import)) {
-                                    importLauncher.launch(
-                                        arrayOf("application/zip", "application/octet-stream", "*/*")
-                                    )
-                                }
+            // 页面不再整体滚动（2026-11 列表懒加载改造）：
+            // 当前世界卡固定在顶部，世界列表占满剩余高度、行在卡内虚拟化滚动——
+            // 世界多的用户（批量导入 / 多存档）只组合可见行；导出说明固定在底部。
+            ActiveWorldCard(
+                name = activeName.ifBlank { "world" },
+                isJava = isJava,
+                meta = activeMeta,
+                javaMeta = javaMeta,
+                plan = activePlan,
+                dims = javaDims,
+                onClearSeed = { vm.clearWorldSeed() },
+                onResetDimension = { pendingDimReset = it }
+            )
+
+            McCard(
+                title = stringResource(R.string.wl_card_list),
+                // 有列表才占满剩余高度；空列表保持紧凑卡片，不出「一张巨大的空卡」
+                modifier = if (worlds.isNotEmpty()) Modifier.weight(1f) else Modifier,
+                trailing = {
+                    if (loading) {
+                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconAction(Icons.Outlined.Add, stringResource(R.string.wl_create)) { showCreate = true }
+                            Spacer(Modifier.width(10.dp))
+                            IconAction(Icons.Outlined.FileUpload, stringResource(R.string.wl_import)) {
+                                importLauncher.launch(
+                                    arrayOf("application/zip", "application/octet-stream", "*/*")
+                                )
                             }
                         }
                     }
-                ) {
-                    if (worlds.isEmpty()) {
-                        Text(
-                            if (loading) stringResource(R.string.wl_loading_usage) else stringResource(R.string.wl_empty),
-                            color = Muted,
-                            fontSize = 12.sp
-                        )
-                    } else {
-                        worlds.forEachIndexed { index, world ->
+                }
+            ) {
+                if (worlds.isEmpty()) {
+                    Text(
+                        if (loading) stringResource(R.string.wl_loading_usage) else stringResource(R.string.wl_empty),
+                        color = Muted,
+                        fontSize = 12.sp
+                    )
+                } else {
+                    // key 用世界名：目录扫描结果天然唯一；重命名 / 激活切换后
+                    // 列表能按行做增量重组，而不是整卡重建。
+                    LazyColumn(Modifier.weight(1f)) {
+                        itemsIndexed(worlds, key = { _, w -> w.name }) { index, world ->
                             if (index > 0) HorizontalDivider(modifier = Modifier.padding(vertical = 8.dp))
                             WorldRow(
                                 world = world,
@@ -220,15 +223,16 @@ fun WorldsScreen(vm: McViewModel, onBack: () -> Unit) {
                         }
                     }
                 }
-
-                // 导出/导入的注意事项：只保留一句，不再单独占一张卡片
-                Text(
-                    stringResource(R.string.wl_export_note),
-                    color = Muted,
-                    fontSize = 10.sp,
-                    modifier = Modifier.padding(horizontal = 22.dp, vertical = 2.dp)
-                )
             }
+
+            // 导出/导入的注意事项：只保留一句，不再单独占一张卡片
+            Text(
+                stringResource(R.string.wl_export_note),
+                color = Muted,
+                fontSize = 10.sp,
+                modifier = Modifier.padding(horizontal = 22.dp, vertical = 2.dp)
+            )
+            Spacer(Modifier.height(10.dp))
         }
     }
 

@@ -11,6 +11,8 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -202,11 +204,14 @@ fun PlayersScreen(
         // 嵌套在外层 McApp Scaffold 内：insets 已由外层消费，这里不再重复应用，避免顶部空白/白色遮挡
         contentWindowInsets = WindowInsets(0.dp)
     ) { padding ->
+        // 页面不再整体滚动（2026-11 列表懒加载改造）：
+        // 状态横幅与分段 Tab 固定在顶部，Tab 内容区拿到剩余高度（weight）——
+        // 在线玩家列表在卡内虚拟化滚动，百人在线时只组合可见行，滚动帧率与 10 人在线一致；
+        // 附带收益：分段 Tab 永远可达，不会被滚走。
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .verticalScroll(rememberScrollState())
         ) {
             // 右上角「进服/离服记录」入口。
             // 必须交给 PageTopBar 承载：它把 statusBarsPadding 加在**容器**上，按钮因此排在状态栏下沿。
@@ -257,8 +262,11 @@ fun PlayersScreen(
 
             // Tab 内容切换带 220ms 交叉淡入：四个列表之间没有层级关系，
             // 不用位移动画；有淡入过程才能把「点了上面的分段」和「下面换了」联系起来。
+            // weight(1f)：Tab 内容区吃掉剩余高度——在线列表在其中懒加载（卡片填满、
+            // 行虚拟化滚动），其余三个表单型 Tab 交给 [ScrollableTabBody] 自行滚动。
             Crossfade(
                 targetState = activeTab,
+                modifier = Modifier.weight(1f),
                 animationSpec = tween(McMotion.DurationMedium, easing = FastOutSlowInEasing),
                 label = "players-tab"
             ) { tabState ->
@@ -276,37 +284,42 @@ fun PlayersScreen(
                     onKick = { name -> vm.kickPlayer(name) },
                     onSetGameMode = { name, mode -> vm.setGameMode(name, mode) }
                 )
-                PlayerListTab.Ops -> OpsTab(
-                    ops = ops,
-                    isRunning = isRunning,
-                    defaultOpLevel = defaultOpLevel,
-                    supportsOpLevel = !isBds,
-                    onOpAddDefault = { vm.opPlayer(it) },
-                    onOpAdd = { name, level -> vm.opPlayerWithLevel(name, level) },
-                    onNavigateProperties = onNavigateProperties,
-                    onNavigateOpGuide = onNavigateOpGuide,
-                    onShowDetail = { detailPlayer = DetailInfo.Op(it) }
-                )
-                PlayerListTab.Whitelist -> WhitelistTab(
-                    whitelist = whitelist,
-                    isRunning = isRunning,
-                    whitelistEnabled = whitelistEnabled,
-                    onToggle = { vm.toggleWhitelist(it) },
-                    onWhitelistAdd = { vm.whitelistAdd(it) },
-                    onShowDetail = { detailPlayer = DetailInfo.Whitelist(it) }
-                )
-                PlayerListTab.Banned -> BannedTab(
-                    banned = banned,
-                    isRunning = isRunning,
-                    onBan = { name, duration, reason ->
-                        if (duration.isBlank()) vm.banPlayer(name, reason)
-                        else vm.tempBanPlayer(name, duration, reason)
-                    },
-                    onShowDetail = { detailPlayer = DetailInfo.Banned(it) }
-                )
+                PlayerListTab.Ops -> ScrollableTabBody {
+                    OpsTab(
+                        ops = ops,
+                        isRunning = isRunning,
+                        defaultOpLevel = defaultOpLevel,
+                        supportsOpLevel = !isBds,
+                        onOpAddDefault = { vm.opPlayer(it) },
+                        onOpAdd = { name, level -> vm.opPlayerWithLevel(name, level) },
+                        onNavigateProperties = onNavigateProperties,
+                        onNavigateOpGuide = onNavigateOpGuide,
+                        onShowDetail = { detailPlayer = DetailInfo.Op(it) }
+                    )
+                }
+                PlayerListTab.Whitelist -> ScrollableTabBody {
+                    WhitelistTab(
+                        whitelist = whitelist,
+                        isRunning = isRunning,
+                        whitelistEnabled = whitelistEnabled,
+                        onToggle = { vm.toggleWhitelist(it) },
+                        onWhitelistAdd = { vm.whitelistAdd(it) },
+                        onShowDetail = { detailPlayer = DetailInfo.Whitelist(it) }
+                    )
+                }
+                PlayerListTab.Banned -> ScrollableTabBody {
+                    BannedTab(
+                        banned = banned,
+                        isRunning = isRunning,
+                        onBan = { name, duration, reason ->
+                            if (duration.isBlank()) vm.banPlayer(name, reason)
+                            else vm.tempBanPlayer(name, duration, reason)
+                        },
+                        onShowDetail = { detailPlayer = DetailInfo.Banned(it) }
+                    )
+                }
                 }
             }
-            Spacer(Modifier.height(16.dp))
         }
     }
 
@@ -518,6 +531,22 @@ private fun StatusRow(color: Color, text: String) {
 
 // ── 在线玩家标签 ────────────────────────────────────────────────────
 
+/**
+ * 表单型 Tab 的滚动容器：OP / 白名单 / 封禁三个 Tab 内容含输入表单与中等长度列表，
+ * 保持原有的整页滚动体验（滚动权从页面级移到这里）。
+ */
+@Composable
+private fun ScrollableTabBody(content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+    ) {
+        content()
+        Spacer(Modifier.height(16.dp))
+    }
+}
+
 @Composable
 private fun OnlineTab(
     players: List<String>,
@@ -529,8 +558,19 @@ private fun OnlineTab(
     onSetGameMode: (String, Int) -> Unit
 ) {
     var search by remember { mutableStateOf("") }
-    val filteredPlayers = remember(players, search) { players.filter { matchesPlayerQuery(it, search) } }
-    McCard(title = stringResource(R.string.s657)) {
+    // distinct()：LazyColumn 的 key 用玩家名，上游数据万一重复出现同名，
+    // 重复 key 会在布局期抛异常——这里兜底去重（正常服务器名单本身就是唯一的）。
+    val filteredPlayers = remember(players, search) {
+        players.filter { matchesPlayerQuery(it, search) }.distinct()
+    }
+    // 列表面板化：有列表可滚时卡片填满剩余高度，玩家行在卡内虚拟化滚动——
+    // 大服百人在线只组合可见行，滚动帧率与 10 人在线时一致；
+    // 没有列表（未运行 / 搜索无结果）时卡片保持原有「贴内容」的紧凑高度。
+    val lazy = isRunning && filteredPlayers.isNotEmpty()
+    McCard(
+        title = stringResource(R.string.s657),
+        modifier = if (lazy) Modifier.fillMaxSize() else Modifier
+    ) {
         if (isRunning) {
             OutlinedTextField(
                 value = search,
@@ -546,8 +586,11 @@ private fun OnlineTab(
         } else if (filteredPlayers.isEmpty()) {
             EmptyHint(icon = Icons.Outlined.Person, text = stringResource(R.string.s685))
         } else {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                filteredPlayers.forEach { name ->
+            LazyColumn(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                items(filteredPlayers, key = { it }) { name ->
                     OnlinePlayerRow(
                         name = name,
                         onShowDetail = { onShowDetail(name) },

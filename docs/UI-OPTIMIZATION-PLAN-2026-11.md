@@ -101,7 +101,7 @@
 ### 4.2 二阶段交互 backlog（优先级 P0 → P2）
 
 - **P0 · dp 字面量收敛**：942 处裸 dp（前 5 个文件占 444 处）。补 `McSpacing.Tight(4)` 一档后机械替换 ~75%；密集文件：PluginsScreen(121)/NetworkScreen(94)/EnvManagerScreen(86)/DashboardScreen(73)/PlayersScreen(70)
-- **P0 · 玩家/世界列表 LazyColumn 化**：当前嵌在 `verticalScroll` Column + McCard 内，需整页重构为 LazyColumn 才不破坏滚动结构（大服百人列表全量组合的性能问题）；这是第一阶段**刻意跳过**的唯一大项
+- **P0 · 玩家/世界列表 LazyColumn 化**：✅ **已完成**（`145f3c9` 后续提交）。玩家页改为「固定头部（状态横幅 + 分段 Tab）+ 在线列表卡片占满剩余高度、卡内 LazyColumn 虚拟化」；世界页同模式。`McCard.content` 签名升级为 `ColumnScope` 接收者以支持卡内 `weight` 布局，既有调用点零改动。附带收益：分段 Tab 永远可达，不会被滚走
 - **P1 · 终端调色板上移**：TerminalScreen 24 处、LogsScreen 14 处 ANSI 色抽成 `TerminalPalette` 常量对象（页面里只留引用）
 - **P1 · 图标族统一**：170 Outlined vs 1 Filled（DashboardScreen:1204）混用
 - **P1 · 深色验证手段**：6 个主页面补 `@Preview(name="Light")` / `@Preview(name="Dark", uiMode=UI_MODE_NIGHT_YES)` 双预览（当前 0 个 @Preview）

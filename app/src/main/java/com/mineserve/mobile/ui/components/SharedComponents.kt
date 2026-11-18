@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -766,6 +767,10 @@ private fun startupPhaseLabel(phase: StartupPhase): String = when (phase) {
  * 所有卡片共用同一圆角（[McShape.Card]）、同一边距（[McSpacing.Page]）与同一投影，
  * 这样不同页面上下滚动时卡片边缘始终在同一条竖线上，不会因为某个页面写了 14dp、
  * 另一个页面写了 20dp 而出现整体错位。
+ *
+ * [content] 带 [ColumnScope] 接收者：卡片内容可以按需使用 `Modifier.weight(1f)`
+ * 做「表头固定 + 列表占满剩余高度」的列表面板布局（玩家页在线列表、世界页世界列表
+ * 的懒加载改造就靠它）。所有既有调用点都是尾随 lambda 写法，签名变化对它们零影响。
  */
 @Composable
 fun McCard(
@@ -775,7 +780,7 @@ fun McCard(
     compact: Boolean = false,
     collapsible: Boolean = false,
     initiallyExpanded: Boolean = true,
-    content: @Composable () -> Unit
+    content: @Composable ColumnScope.() -> Unit
 ) {
     // 折叠状态由卡片自己持有：标题行整体可点，右侧箭头只做视觉指示。
     // key 用 title，避免同一页面多张卡共用同一个 rememberSaveable 槽位。
