@@ -102,8 +102,8 @@
 
 - **P0 · dp 字面量收敛**：942 处裸 dp（前 5 个文件占 444 处）。补 `McSpacing.Tight(4)` 一档后机械替换 ~75%；密集文件：PluginsScreen(121)/NetworkScreen(94)/EnvManagerScreen(86)/DashboardScreen(73)/PlayersScreen(70)
 - **P0 · 玩家/世界列表 LazyColumn 化**：✅ **已完成**（`145f3c9` 后续提交）。玩家页改为「固定头部（状态横幅 + 分段 Tab）+ 在线列表卡片占满剩余高度、卡内 LazyColumn 虚拟化」；世界页同模式。`McCard.content` 签名升级为 `ColumnScope` 接收者以支持卡内 `weight` 布局，既有调用点零改动。附带收益：分段 Tab 永远可达，不会被滚走
-- **P1 · 终端调色板上移**：TerminalScreen 24 处、LogsScreen 14 处 ANSI 色抽成 `TerminalPalette` 常量对象（页面里只留引用）
-- **P1 · 图标族统一**：170 Outlined vs 1 Filled（DashboardScreen:1204）混用
+- **P1 · 终端调色板上移**：✅ **已完成**。TerminalScreen 已随主题化改造清零（0 处字面色，走 `LocalTerminalPalette`）；LogsScreen 残留 14 处 Catppuccin 风格散色本次收敛为私有 `LogPanelPalette` 常量对象（命名语义 + 取值不变，不并入主题调色板——两块内嵌终端小窗保留历史观感）
+- **P1 · 图标族统一**：✅ **已完成**。全工程唯一的 Filled 实心图标（DashboardScreen 启动按钮 PlayArrow）改为 Outlined，171 处图标全部线性风格
 - **P1 · 深色验证手段**：6 个主页面补 `@Preview(name="Light")` / `@Preview(name="Dark", uiMode=UI_MODE_NIGHT_YES)` 双预览（当前 0 个 @Preview）
 - **P2 · Predictive back**：14 个 Scaffold 页面仅 2 处 BackHandler，Android 14+ 侧滑返回无承接
 - **P2 · detekt 静态检查**：补 `config/detekt`，把「触控目标 ≥ 40dp」「dp 走令牌」变成 CI 规则，防止回潮

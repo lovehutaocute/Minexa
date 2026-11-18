@@ -21,7 +21,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.MenuBook
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.outlined.PlayArrow
 import androidx.compose.material.icons.outlined.Bolt
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Construction
@@ -1328,7 +1328,10 @@ private fun StartStopBar(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
-                    if (isRunning) Icons.Outlined.Warning else Icons.Filled.PlayArrow,
+                    // 图标族统一：全工程 170 处图标均为 Outlined 线性风格，
+                    // 这里原先混入唯一一个 Filled 实心 PlayArrow，视觉重量与相邻
+                    // 描边图标不一致。改用 Outlined（终端页的同款图标已是 Outlined）。
+                    if (isRunning) Icons.Outlined.Warning else Icons.Outlined.PlayArrow,
                     contentDescription = null,
                     tint = leftContent,
                     modifier = Modifier.size(18.dp)

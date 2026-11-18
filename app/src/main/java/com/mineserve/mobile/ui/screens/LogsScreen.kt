@@ -165,7 +165,7 @@ fun LogsScreen(vm: McViewModel, onBack: () -> Unit) {
                     modifier = Modifier.defaultMinSize(minWidth = 1.dp, minHeight = 1.dp).height(28.dp),
                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
                     shape = McShape.Small,
-                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = Color(0xFF89B4FA))
+                    colors = androidx.compose.material3.ButtonDefaults.textButtonColors(contentColor = LogPanelPalette.AccentBlue)
                 ) {
                     Text(
                         "$emoji ${stringResource(labelRes)}",
@@ -264,7 +264,7 @@ private fun McTerminalPanel(
     val context = LocalContext.current
     TerminalPanel(
         title = stringResource(R.string.mc_terminal),
-        statusColor = Color(0xFFA6E3A1),
+        statusColor = LogPanelPalette.AccentGreen,
         expanded = expanded,
         onToggle = onToggle,
         onCopy = {
@@ -375,11 +375,11 @@ private fun McConsoleArea(
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .clip(McShape.Card)
-            .background(Color(0xFF1E1E2E))
+            .background(LogPanelPalette.PanelBg)
     ) {
         if (lines.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(stringResource(R.string.s561), color = Color(0xFF8888AA), fontSize = 12.sp)
+                Text(stringResource(R.string.s561), color = LogPanelPalette.Placeholder, fontSize = 12.sp)
             }
         } else {
             // 自动滚动：仅当用户已位于底部附近时才跟随（瞬时，不打扰上翻）
@@ -432,7 +432,7 @@ private fun TermuxSessionPanel(
     val termuxBusy by vm.termuxBusy.collectAsState()
     TerminalPanel(
         title = stringResource(R.string.termux_terminal),
-        statusColor = Color(0xFF89B4FA),
+        statusColor = LogPanelPalette.AccentBlue,
         expanded = expanded,
         onToggle = onToggle,
         onCopy = {
@@ -506,11 +506,11 @@ private fun TermuxLinesArea(vm: McViewModel, modifier: Modifier) {
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .clip(McShape.Card)
-            .background(Color(0xFF1E1E2E))
+            .background(LogPanelPalette.PanelBg)
     ) {
         if (termuxLines.isEmpty()) {
             Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text(stringResource(R.string.termux_placeholder), color = Color(0xFF8888AA), fontSize = 12.sp)
+                Text(stringResource(R.string.termux_placeholder), color = LogPanelPalette.Placeholder, fontSize = 12.sp)
             }
         } else {
             val tState = rememberLazyListState()
@@ -529,7 +529,7 @@ private fun TermuxLinesArea(vm: McViewModel, modifier: Modifier) {
                 ) { _, line ->
                     Text(
                         line,
-                        color = if (line.startsWith("$ ")) Color(0xFFA6E3A1) else Color(0xFFCDD6F4),
+                        color = if (line.startsWith("$ ")) LogPanelPalette.AccentGreen else LogPanelPalette.Text,
                         fontSize = 10.sp,
                         fontFamily = FontFamily.Monospace
                     )
@@ -573,14 +573,48 @@ private fun assignStableLineIds(
     return ids to id
 }
 
+/**
+ * 日志页内嵌终端面板的调色板（Catppuccin 风格，2026-11 收敛）。
+ *
+ * 与 `theme/Color.kt` 的 `DarkTerminalPalette` 色相语义一致，但这里是「概览页里
+ * 嵌的两块终端小窗」的历史观感，用户已看惯这组值，**不并入**主题化调色板
+ * （那套随终端页深浅开关切换）。收敛的目的只是给原先 14 处散落的十六进制
+ * 一个唯一出处并命名语义，取值完全不变。
+ */
+private object LogPanelPalette {
+    /** 面板底色（MC 控制台 / Termux 两块终端小窗共用）。 */
+    val PanelBg = Color(0xFF1E1E2E)
+
+    /** 空态占位文字。 */
+    val Placeholder = Color(0xFF8888AA)
+
+    /** 默认正文。 */
+    val Text = Color(0xFFCDD6F4)
+
+    /** 蓝色强调：隧道标记行、Termux 面板状态点。 */
+    val AccentBlue = Color(0xFF89B4FA)
+
+    /** 绿色强调：命令行前缀、bootstrap 标记、MC 面板状态点。 */
+    val AccentGreen = Color(0xFFA6E3A1)
+
+    /** 错误行。 */
+    val Error = Color(0xFFF38BA8)
+
+    /** 警告行。 */
+    val Warn = Color(0xFFF9E2AF)
+
+    /** 崩溃标记行。 */
+    val Crash = Color(0xFFFAB387)
+}
+
 /** 日志行颜色（纯主线程判断，开销很小） */
 private fun consoleLineColor(line: String): Color = when {
-    line.contains("[ERROR]") || line.contains("ERROR") || line.contains("FATAL") -> Color(0xFFF38BA8)
-    line.contains("[WARN]") || line.contains("WARN") -> Color(0xFFF9E2AF)
-    line.contains("[tunnel]") -> Color(0xFF89B4FA)
-    line.contains("[crash]") -> Color(0xFFFAB387)
-    line.contains("[bootstrap]") -> Color(0xFFA6E3A1)
-    else -> Color(0xFFCDD6F4)
+    line.contains("[ERROR]") || line.contains("ERROR") || line.contains("FATAL") -> LogPanelPalette.Error
+    line.contains("[WARN]") || line.contains("WARN") -> LogPanelPalette.Warn
+    line.contains("[tunnel]") -> LogPanelPalette.AccentBlue
+    line.contains("[crash]") -> LogPanelPalette.Crash
+    line.contains("[bootstrap]") -> LogPanelPalette.AccentGreen
+    else -> LogPanelPalette.Text
 }
 
 // 正则只在进程生命周期内编译一次（原先每次 localizeLogLine 都重新编译）。
