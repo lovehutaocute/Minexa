@@ -6207,7 +6207,9 @@ class McViewModel(
         endedAt: Long,
         fallbackText: String,
         truncated: Boolean = false,
-        fallbackToLatestLog: Boolean = false
+        fallbackToLatestLog: Boolean = false,
+        /** native 信号退出时抓到的 abort 诊断；没有采集到传 null。 */
+        abortText: String? = null
     ): CrashInsight? = runCatching {
         crashInsightEngine.analyze(
             CrashInsightEngine.Input(
@@ -6215,6 +6217,7 @@ class McViewModel(
                 env = crashEnv(),
                 trigger = TriggerInfo(exitCode = exitCode),
                 logText = logText.ifBlank { fallbackText },
+                abortText = abortText,
                 sessionId = sessionId,
                 startedAt = startedAt,
                 endedAt = if (endedAt > 0L) endedAt else System.currentTimeMillis(),
@@ -6268,7 +6271,8 @@ class McViewModel(
                 sessionId = session?.id.orEmpty(),
                 startedAt = session?.startedAt ?: 0L,
                 endedAt = System.currentTimeMillis(),
-                fallbackText = text
+                fallbackText = text,
+                abortText = repo.termuxRuntime.lastNativeAbort()
             )
             if (insight != null && failure.reportPath != null) {
                 crashReportManager.writeInsight(crashId, CrashInsight.encode(insight))

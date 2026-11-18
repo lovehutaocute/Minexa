@@ -22,6 +22,9 @@ class EventLogWidgetService : RemoteViewsService() {
     override fun onGetViewFactory(intent: Intent): RemoteViewsFactory = EventLogFactory(applicationContext)
 
     class EventLogFactory(private val context: Context) : RemoteViewsFactory {
+        // onDataSetChanged 在 binder 线程改这个列表，getCount/getViewAt 也在 binder 线程读，
+        // 但两次调用之间可能插入一次 onDataSetChanged（见 getViewAt 注释），所以需要 @Volatile 保证可见性。
+        @Volatile
         private var events: List<Triple<String, String, String>> = emptyList() // (类型, 主文本, 时间)
 
         override fun onCreate() {}
@@ -40,7 +43,18 @@ class EventLogWidgetService : RemoteViewsService() {
         override fun getItemId(position: Int): Long = position.toLong()
 
         override fun getViewAt(position: Int): RemoteViews {
-            val (type, text, time) = events[position]
+            // getCount() 返回的条数与 getViewAt() 取到的列表可能不是同一份快照：
+            // 后台线程 notifyAppWidgetViewDataChanged 会立刻触发 onDataSetChanged，把 events
+            // 换成更短（甚至空）的列表，于是 position 越界，直接 events[position] 会让整个进程崩溃
+            //（IndexOutOfBoundsException: Index: 0, Size: 0）。越界时给一个空行占位即可。
+            val event = events.getOrNull(position)
+            if (event == null) {
+                return RemoteViews(context.packageName, R.layout.widget_event_log_item).apply {
+                    setTextViewText(R.id.item_text, "")
+                    setTextViewText(R.id.item_time, "")
+                }
+            }
+            val (type, text, time) = event
             val views = RemoteViews(context.packageName, R.layout.widget_event_log_item)
             views.setTextViewText(R.id.item_text, text)
             views.setTextViewText(R.id.item_time, time)

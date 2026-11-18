@@ -62,4 +62,43 @@ class TrustStoreRepairerTest {
         """.trimIndent()
         assertTrue(TrustStoreRepairer.parseCertificates(bogus).isEmpty())
     }
+
+    @Test
+    fun `残缺判定：存在的空文件也不能算就绪`() {
+        // 这条是「点了一键修复却说已恢复」的回归测试：早期只判「存在且非空」，
+        // 于是 1 字节的坏文件也能通过检查，修复函数直接返回成功、什么都不做。
+        val target = tmp.newFile("cacerts")
+        target.writeText("x")
+        val health = TrustStoreRepairer.inspect(target)
+        assertEquals(TrustStoreFormat.KEYSTORE, health.format)
+        assertTrue("解析不了的库必须判为不可用", !health.usable)
+        assertTrue("必须给出原因", health.error != null)
+    }
+
+    @Test
+    fun `缺失文件判为 MISSING 且不可用`() {
+        val target = File(tmp.root, "not-there")
+        val health = TrustStoreRepairer.inspect(target)
+        assertEquals(TrustStoreFormat.MISSING, health.format)
+        assertEquals(0, health.certificates)
+        assertTrue(!health.usable)
+    }
+
+    @Test
+    fun `PEM 证书包按文本识别格式`() {
+        val pem = tmp.newFile("cacerts.pem")
+        pem.writeText("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+        assertEquals(TrustStoreFormat.PEM, TrustStoreRepairer.detectFormat(pem))
+    }
+
+    @Test
+    fun `补齐时拿不到任何证书就不动原文件`() {
+        // 本机证书包全被截断/损坏时，topUp 必须原地失败，而不是把原库清空。
+        val target = tmp.newFile("cacerts")
+        target.writeText("原有内容")
+        val write = TrustStoreRepairer.topUp(target, listOf("not a certificate", ""))
+        assertEquals(0, write.imported)
+        assertTrue(write.error != null)
+        assertEquals("原有内容", target.readText())
+    }
 }

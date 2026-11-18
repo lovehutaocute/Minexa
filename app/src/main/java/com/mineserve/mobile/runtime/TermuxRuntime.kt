@@ -314,6 +314,34 @@ class TermuxRuntime(context: Context) {
     private var appLogWriter: java.io.Writer? = null
     private var appLogBytes = 0L
 
+    // ── 崩溃现场补充证据（启动环境 / native abort） ─────────────────
+
+    /**
+     * 最近一次 `startMc` 的启动环境摘要（来源、实现、实际 `LD_PRELOAD`、heaptagfix 状态）。
+     *
+     * 为什么单独留一份：`LD_PRELOAD` 是否真的注入了 `libheaptagfix.so`，直接决定
+     * 「带标签堆 + JVM → SIGABRT(134)」这类崩溃的归因。以前这个事实只出现在
+     * `startMc command` 那条 `Log.i` 里（只在 logcat），用户反馈回来的报告里没有，
+     * 于是每份「exit=134」报告都只能给低置信度结论。
+     */
+    @Volatile
+    private var lastLaunchEnvSummary: String? = null
+
+    /**
+     * 最近一次异常退出时从 logcat 抓到的 native abort 诊断（Abort message / backtrace）。
+     *
+     * 只对 [NATIVE_ABORT_EXIT_CODES] 采集；**每次启动前清空**，避免把上一次崩溃的
+     * abort 信息错误地贴到这一次报告上。
+     */
+    @Volatile
+    private var lastNativeAbortDiagnostics: String? = null
+
+    /** 最近一次启动的环境摘要；未启动过时为 null。 */
+    fun lastLaunchEnvironment(): String? = lastLaunchEnvSummary
+
+    /** 最近一次异常退出的 native abort 诊断；没有采集到时为 null。 */
+    fun lastNativeAbort(): String? = lastNativeAbortDiagnostics
+
     private fun openAppLogWriter(): java.io.Writer? = runCatching {
         val file = appLogFile
         file.parentFile?.mkdirs()
@@ -3381,19 +3409,29 @@ class TermuxRuntime(context: Context) {
             fixJavaSymlinks()
         }
 
-        // JVM 主体完整 ≠ 运行时可用：cacerts（根证书库）缺失/为空/悬空软链时，
-        // JVM 能启动但所有 HTTPS 全部握手失败（`trustAnchors parameter must be
-        // non-empty`），用户看到的是 Forge/Fabric 安装器、字体库补齐等统统
-        // 「下载失败」且修复无效。这里在启动前主动检测，重装 JDK + ca-certificates。
-        if (!cacertsReady(version)) {
-            installer.onLog?.invoke("[bootstrap] ${version.displayName} 根证书库（cacerts）缺失或为空，HTTPS 下载会全部失败，正在重装修复...")
-            if (prepareAptPackages(version.packageName, "ca-certificates")) {
+        // JVM 主体完整 ≠ 运行时可用：cacerts（根证书库）缺失/为空/残缺时，
+        // JVM 能启动但 HTTPS 全部握手失败（`trustAnchors parameter must be
+        // non-empty` / `PKIX path building failed`），用户看到的是 Forge/Fabric 安装器、
+        // 字体库补齐等统统「下载失败」且修复无效。
+        //
+        // 这里用**深度体检**而不是「文件存在就算好」：缺锚点的库能读、非空，
+        // 只判存在会把问题放到用户下一次崩溃里。修的时候先离线补齐（秒级，不动系统包），
+        // 补不好再重装 —— 反了的话弱网下一次白等一分钟还修不回来。
+        val health = cacertsHealth(version)
+        if (health == null || !health.usable) {
+            installer.onLog?.invoke(
+                "[bootstrap] ${version.displayName} 根/证书库异常（${health?.describe() ?: "未安装"}），HTTPS 下载会失败，正在修复..."
+            )
+            if (repairCacertsLocally(version)) {
+                repaired++
+                installer.onLog?.invoke("[bootstrap] ${version.displayName} 证书库已用本机证书包补齐")
+            } else if (prepareAptPackages(version.packageName, "ca-certificates")) {
                 val code = execOnce(
                     "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
                     "--allow-unauthenticated", "-y", version.packageName, "ca-certificates"
                 )
                 fixJavaSymlinks(version)
-                if (code == 0 && cacertsReady(version)) {
+                if (code == 0 && (cacertsHealth(version)?.usable == true)) {
                     repaired++
                     installer.onLog?.invoke("[bootstrap] ${version.displayName} 证书库已修复")
                 } else {
@@ -3404,15 +3442,47 @@ class TermuxRuntime(context: Context) {
         return repaired
     }
 
+    /** 指定 Java 版本实际在使用的那份 cacerts 文件（不存在时返回第一个候选路径）。 */
+    private fun cacertsFile(version: JavaVersion): File? {
+        if (version == JavaVersion.Java8) return null
+        val dirs = javaCandidates(version).filter { File(it).isDirectory }
+        if (dirs.isEmpty()) return null
+        return dirs.map { File(it, "lib/security/cacerts") }.firstOrNull { it.exists() }
+            ?: File(dirs.first(), "lib/security/cacerts")
+    }
+
+    /** cacerts 深度体检；Java 8（容器内）与未安装时返回 null（由调用方按安装状态处理）。 */
+    private fun cacertsHealth(version: JavaVersion): TrustStoreHealth? {
+        val file = cacertsFile(version) ?: return null
+        return TrustStoreRepairer.inspect(file)
+    }
+
+    /** 用本机证书包离线补齐 cacerts（不动系统包、不联网）；成功返回 true。 */
+    private fun repairCacertsLocally(version: JavaVersion): Boolean {
+        val file = cacertsFile(version) ?: return false
+        val write = TrustStoreRepairer.topUp(file, readLocalCertificatePemSources())
+        emitLog("[bootstrap] cacerts 离线补齐：导入 ${write.imported} 张，现共 ${write.health.certificates} 张" +
+            (write.error?.let { "（$it）" } ?: ""))
+        return write.health.usable
+    }
+
     /**
      * 一键修复 Java 根证书库（cacerts）。
      *
      * 与 [ensureJvmComplete] 的区别：那个是启动前的「检测到缺失才修」，本方法由用户
      * 在崩溃弹窗里显式触发，**无论检测结果如何都会执行**，并返回可展示的结果。
      *
-     * 修复顺序（前一步失败不影响后一步，最大化成功率）：
-     * 1. `apt-get --reinstall` 重装 JDK + ca-certificates（恢复正常状态）
-     * 2. 仍不就绪 → 用本机已有 PEM 证书包原地重建信任库（不依赖网络）
+     * ## 判定与顺序（2026-11 修订）
+     *
+     * 上一版把 `apt-get --reinstall` 放第一步、只判「文件存在且非空」就当修好，导致两个
+     * 真实故障：
+     * - PKIX 报错时 cacerts 往往**能读、但缺锚点**，检查一过就返回「已恢复」，实际一个
+     *   字节都没改 —— 用户看到的就是「点了修复也不行」；
+     * - 软件源不可用时 apt 白跑 1 分钟，最后仍只用**第一份** PEM 重建，来源被截断时
+     *   造出一个「能读但没用」的库。
+     *
+     * 现在：先离线补齐（秒级，成功即返回），再按需重装，且**修完必须复检**；
+     * 复检结论是「本来就好的」时候不再谎报成功，而是指向真正的原因（网络拦截/证书链）。
      */
     fun repairTrustStore(
         version: JavaVersion,
@@ -3461,59 +3531,106 @@ class TermuxRuntime(context: Context) {
         if (jvmDirs.isEmpty()) {
             return TrustStoreRepair(false, "${version.displayName} 没有安装，请先在「运行环境」里安装。", steps)
         }
+        // 定位 JDK 真正读取的那份 cacerts：优先已存在的（含软链解析后的真实路径）。
+        val target = jvmDirs.map { File(it, "lib/security/cacerts") }.firstOrNull { it.exists() }
+            ?: File(jvmDirs.first(), "lib/security/cacerts")
 
-        // ── 第 1 步：重装 JDK + ca-certificates ──
-        if (prepareAptPackages(version.packageName, "ca-certificates")) {
-            note("重装 ${version.packageName} 与 ca-certificates")
-            val code = execOnce(
-                "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
-                "--allow-unauthenticated", "-y", version.packageName, "ca-certificates"
-            )
-            note("apt-get --reinstall 退出码 $code")
-            fixJavaSymlinks(version)
+        val before = TrustStoreRepairer.inspect(target)
+        note("当前证书库 ${target.path}：${before.describe()}（格式 ${before.format}）")
+
+        val sources = readLocalCertificatePemSources()
+        val available = TrustStoreRepairer.collectCertificates(sources)
+        note("本机证书包 ${sources.size} 份，可解析 ${available.size} 张证书")
+
+        // ── 第 1 步：离线补齐（沿用原库格式，只加缺的证书，几秒内完成）──
+        var write = TrustStoreRepairer.topUp(target, sources)
+        if (write.error != null) {
+            note("离线补齐失败：${write.error}")
+        } else if (write.imported > 0) {
+            note("离线补齐：新导入 ${write.imported} 张，现共 ${write.health.certificates} 张")
         } else {
-            note("软件源不可用，跳过重装，改用本机证书包重建")
-        }
-        if (cacertsReady(version)) {
-            return TrustStoreRepair(true, "${version.displayName} 证书库已恢复，可以重新安装/启动核心。", steps)
+            note("离线补齐：没有缺失的证书（现共 ${write.health.certificates} 张）")
         }
 
-        // ── 第 2 步：本地 PEM 重建（不依赖网络）──
-        val pem = readLocalCertificatePem()
-        if (pem == null) {
-            return TrustStoreRepair(
-                false,
-                "重装未恢复证书库，且本机没有可用的证书包（ca-certificates 也丢了）。请连网后在「运行环境」里卸载并重新安装 ${version.displayName}。",
-                steps
-            )
+        // ── 第 2 步：仍不可用 → 重装 JDK + ca-certificates（需要网络，可能较慢）──
+        var reinstalled = false
+        if (!write.health.usable) {
+            note("证书库仍不可用，尝试重装 ${version.packageName} 与 ca-certificates")
+            if (prepareAptPackages(version.packageName, "ca-certificates")) {
+                val code = execOnce(
+                    "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
+                    "--allow-unauthenticated", "-y", version.packageName, "ca-certificates"
+                )
+                note("apt-get --reinstall 退出码 $code")
+                fixJavaSymlinks(version)
+                val afterReinstall = TrustStoreRepairer.inspect(target)
+                note("重装后证书库：${afterReinstall.describe()}")
+                if (afterReinstall.usable) {
+                    reinstalled = true
+                    write = TrustStoreWrite(0, afterReinstall)
+                } else {
+                    // 重装也可能装回一份残缺的库（源被替换/包不完整），再补一次。
+                    val again = TrustStoreRepairer.topUp(target, sources)
+                    if (again.error != null) note("重装后再补齐失败：${again.error}")
+                    else note("重装后再补齐：新导入 ${again.imported} 张，现共 ${again.health.certificates} 张")
+                    write = again
+                }
+            } else {
+                note("软件源不可用，跳过重装")
+            }
         }
-        val target = File(jvmDirs.first(), "lib/security/cacerts")
-        val imported = TrustStoreRepairer.rebuild(target, pem)
-        note("从本机证书包重建 cacerts：导入 $imported 张证书")
-        return if (imported > 0 && cacertsReady(version)) {
-            TrustStoreRepair(true, "${version.displayName} 证书库已用本机证书包重建（$imported 张），可以重新安装/启动核心。", steps)
-        } else {
-            TrustStoreRepair(
-                false,
-                "证书库修复失败，请在「运行环境」里卸载后重新安装 ${version.displayName}。",
-                steps
+
+        val finalHealth = TrustStoreRepairer.inspect(target)
+        note("复检结果：${finalHealth.describe()}")
+
+        return when {
+            !finalHealth.usable -> TrustStoreRepair(
+                ok = false,
+                summary = "证书库修复失败（当前${finalHealth.describe()}）。" +
+                    "本机证书包${if (available.isEmpty()) "也读不到" else "已全部导入"}，" +
+                    "请连网后在「运行环境」里卸载并重新安装 ${version.displayName}。",
+                steps = steps
+            )
+            // 库本来就好、这次什么也没改：不能报「已修复」，否则用户会以为问题被处理过。
+            before.usable && write.imported == 0 && !reinstalled -> TrustStoreRepair(
+                ok = false,
+                summary = "${version.displayName} 的证书库本身是正常的（${finalHealth.certificates} 张证书），" +
+                    "所以下载失败的根因不在证书库：更可能是网络侧拦截（VPN / 代理 / 广告过滤）" +
+                    "或对端证书链不完整。请关掉 VPN/代理或换一个网络后，回核心页重新安装核心；" +
+                    "仍失败就把「全部日志」完整发给开发者。",
+                steps = steps
+            )
+            else -> TrustStoreRepair(
+                ok = true,
+                summary = "${version.displayName} 证书库已就绪（${finalHealth.certificates} 张证书" +
+                    (if (write.imported > 0) "，本次补入 ${write.imported} 张" else "") +
+                    (if (reinstalled) "，已重装恢复" else "") +
+                    "），回核心页重新安装/更新核心即可。",
+                steps = steps
             )
         }
     }
 
     /**
-     * 本机现存的 PEM 证书包（按可靠性排序）；目录形态（Android 系统 cacerts）逐个文件拼起来。
-     * 读不到返回 null。
+     * 本机所有可用的 PEM 证书包（**全部返回，由调用方合并去重**）。
+     *
+     * 上一版只取第一份非空的：设备上 `etc/tls/cacerts.pem` 被截断（只剩几张）时，
+     * 重建出来的库「能读但没用」，用户按提示修完照旧报 PKCS 错误。
+     * 目录形态（Android 系统 cacerts）逐个文件读；单份读不出就跳过，不影响其余。
      */
-    private fun readLocalCertificatePem(): String? {
+    private fun readLocalCertificatePemSources(): List<String> {
         val prefix = installer.rootDir
-        val sources = listOf(
+        val candidates = listOf(
             File(prefix, "etc/tls/cacerts.pem"),
             File(prefix, "etc/ssl/certs/ca-certificates.crt"),
+            File(prefix, "etc/tls/cert.pem"),
             File(prefix, "etc/ssl/cert.pem"),
+            // Android 14 起系统根证书搬进 APEX；旧路径在部分 ROM 上是空目录。
+            File("/apex/com.android.conscrypt/cacerts"),
             File("/system/etc/security/cacerts")
         )
-        for (src in sources) {
+        val out = mutableListOf<String>()
+        for (src in candidates) {
             val text = runCatching {
                 when {
                     src.isFile && src.length() > 0 -> src.readText()
@@ -3524,9 +3641,58 @@ class TermuxRuntime(context: Context) {
                     else -> null
                 }
             }.getOrNull() ?: continue
-            if (text.contains("-----BEGIN CERTIFICATE-----")) return text
+            if (text.contains("-----BEGIN CERTIFICATE-----")) out += text
         }
-        return null
+        return out
+    }
+
+    /**
+     * installer 专用的独立信任库（`var/lib/mineserve/ca/installer-truststore.p12`）。
+     *
+     * 为什么不让 installer 直接用 JDK 那份 cacerts：**那份库正是出问题的地方** ——
+     * 可能缺锚点、可能格式与 JDK 读法不符，修它要动系统目录、还可能被 apt 覆盖回去。
+     * 这里改为「并集」另起一份：JDK 现有库 + 本机全部证书包，去重后写成 PKCS12，
+     * 再用 `-Djavax.net.ssl.trustStore` 显式喂给 installer。这样即使修不动 JDK 的
+     * cacerts，Forge/NeoForge 安装器照样能下载 libraries。
+     *
+     * 库不够好（证书数不足 / 写盘失败）时返回 null，让 installer 退回默认行为 ——
+     * **绝不能传一个读不了的路径**，那会让本来正常的 HTTPS 也一起失败。
+     */
+    fun ensureInstallerTrustStore(version: JavaVersion): String? {
+        val file = File(installer.rootDir, "var/lib/mineserve/ca/installer-truststore.p12")
+        if (TrustStoreRepairer.inspect(file).usable) return file.absolutePath
+
+        val sources = mutableListOf<String>()
+        javaCandidates(version).map { File(it, "lib/security/cacerts") }
+            .firstOrNull { it.exists() }
+            ?.let { jdk ->
+                emitLog("[install] JDK cacerts 体检：${TrustStoreRepairer.inspect(jdk).describe()}")
+                TrustStoreRepairer.exportPem(jdk)?.let(sources::add)
+            }
+        sources += readLocalCertificatePemSources()
+
+        val certs = TrustStoreRepairer.collectCertificates(sources)
+        if (certs.size < TrustStoreRepairer.MIN_USABLE_CERTIFICATES) {
+            emitLog("[install] 独立信任库来源不足（${certs.size} 张证书），installer 继续用 JDK 自带 cacerts")
+            return null
+        }
+        val write = TrustStoreRepairer.writeNewStore(file, certs)
+        if (write.error != null || !write.health.usable) {
+            emitLog("[install] 独立信任库不可用（${write.error ?: write.health.describe()}），installer 继续用 JDK 自带 cacerts")
+            return null
+        }
+        emitLog("[install] 已生成独立信任库 ${file.absolutePath}（${write.health.certificates} 张证书），installer 不再依赖 JDK cacerts")
+        return file.absolutePath
+    }
+
+    /** installer 用的 TLS 系统属性；独立信任库不可用时返回空数组（保持默认行为）。 */
+    fun installerTrustStoreProps(version: JavaVersion): Array<String> {
+        val path = runCatching { ensureInstallerTrustStore(version) }.getOrNull() ?: return emptyArray()
+        return arrayOf(
+            "-Djavax.net.ssl.trustStore=$path",
+            "-Djavax.net.ssl.trustStoreType=PKCS12",
+            "-Djavax.net.ssl.trustStorePassword=${TrustStoreRepairer.DEFAULT_PASSWORD}"
+        )
     }
 
     /**
@@ -4113,13 +4279,23 @@ class TermuxRuntime(context: Context) {
      * 而且丢掉的那一个没有任何报错，只能靠别人发现「内存怎么又高了」。
      * 所以这里统一收口：库列表进来、一条 export 出去（[preloadExportFragment]）。
      */
-    private fun preloadEnv(jvmFlavor: JvmFlavor, vendor: JavaVendor): String {
+    private fun preloadEnv(jvmFlavor: JvmFlavor, vendor: JavaVendor): String =
+        preloadExportFragment(preloadLibs(jvmFlavor, vendor))
+
+    /**
+     * 本次启动真正要预加载的库列表。
+     *
+     * 单独抽出来是为了让「实际注入了什么」可以被**原样记录**并写进崩溃报告：
+     * 以前只有 `Log.i` 里的完整命令带这个信息，而那句只在 logcat 里，
+     * 用户反馈回来的崩溃报告看不到，于是「heaptagfix 到底生效没有」永远说不清。
+     */
+    private fun preloadLibs(jvmFlavor: JvmFlavor, vendor: JavaVendor): List<String> {
         val libs = mutableListOf<String>()
         heapTagLibPath()?.let { libs += it }
         if (vendor == JavaVendor.Termux && jvmFlavor == JvmFlavor.PatchedJdk) {
             ipv6FixLibPath()?.let { libs += it }
         }
-        return preloadExportFragment(libs)
+        return libs
     }
 
     /** `libheaptagfix.so` 在 nativeLibraryDir 下的绝对路径；缺失时返回 null。 */
@@ -4385,6 +4561,10 @@ class TermuxRuntime(context: Context) {
         // 占着 world/session.lock → 新实例启动报 already locked）
         killOrphanMcProcess(serverDir)
 
+        // 上一次崩溃的 abort 诊断不能跨启动复用：否则报告里会出现「上次的 Abort message
+        // 解释这次的崩溃」这种最难拆的错配。
+        lastNativeAbortDiagnostics = null
+
         // 来宾链路（PRoot 容器）：PRoot 来源的全部版本，以及历史遗留的
         // 「Termux + Java 8」组合 —— 后者在 PRoot 通用化之前就走容器，
         // 老配置里存的就是这个组合，必须保持同样的行为。
@@ -4464,7 +4644,13 @@ class TermuxRuntime(context: Context) {
         // JLine/JNA 会把原生库解包到 java.io.tmpdir；显式指向自己的目录，
         // 避免落到上一个宿主 App 的 cache（实测出现过 edgecube 的路径）。
         val jvmTmpDir = serverTmpDirFor(serverDir).apply { mkdirs() }
-        val javaCmd = "export PATH='$jvmBinDir:$prefix/bin:$prefix/usr/bin:$compatUsr/bin:$prefix/bin/applets:$prefix/libexec:/system/bin:/system/xbin'; " +
+        // 打头先把 shell 自己的 pid 打到 stdout：随后的 `exec` 会**原地替换**这个 shell，
+        // 所以这个 pid 就是 java 进程的 pid。有了它，崩溃后才能用
+        // `logcat --pid` 精确捞出该进程的 abort message（见 captureNativeAbortIfNeeded）。
+        // 不用 java.lang.Process#pid()：Android 的 java.lang.Process 没有这个方法；
+        // 也不用反射拿 libcore 的私有 pid 字段：那属于隐藏 API，会在部分系统上直接抛异常。
+        val javaCmd = "echo ${MC_PID_PROBE_PREFIX}\$\$; " +
+            "export PATH='$jvmBinDir:$prefix/bin:$prefix/usr/bin:$compatUsr/bin:$prefix/bin/applets:$prefix/libexec:/system/bin:/system/xbin'; " +
             "export LD_LIBRARY_PATH='$libraryPath'; " +
             preloadEnv(jvmFlavor, javaVendor) +
             "export FONTCONFIG_PATH='$prefix/etc/fonts'; " +
@@ -4479,6 +4665,17 @@ class TermuxRuntime(context: Context) {
             baseJvmProperties(maxHeapMb) +
             "-Xmx${maxHeapMb}m " + (launchArgs ?: "-jar $jarPath") + if (appendNogui) " nogui" else ""
 
+        val preloads = preloadLibs(jvmFlavor, javaVendor)
+        val heapTagInjected = preloads.any { it.endsWith(HEAP_TAG_FIX_LIB) }
+        // 这一行是「134 / 堆标签」类崩溃的唯一判据来源：报告里看得见注入结果，
+        // 就不用再靠用户复现或抓 logcat 猜。写进 mineserve.log（[startMc] 命中保留规则）。
+        val envSummary = "[startMc] 启动环境: 来源=${javaVendor.logName} 实现=$jvmFlavor " +
+            "java=$javaPath LD_PRELOAD=${preloads.joinToString(":").ifEmpty { "(无)" }} " +
+            "heaptagfix=${if (heapTagInjected) "已注入" else "未注入"}"
+        lastLaunchEnvSummary = envSummary
+        emitLog(envSummary)
+        Log.i(TAG, envSummary)
+
         Log.i(TAG, "startMc command: $javaCmd")
         assertLaunchCommandComplete(javaCmd, "startMc")
 
@@ -4490,6 +4687,8 @@ class TermuxRuntime(context: Context) {
         }
         val process = pb.start()
         trackMcProcess(process, serverDir)
+        // java 进程的真实 pid，由 stdout 首行的 pid 探针回填（0 = 还没拿到）
+        val mcPid = java.util.concurrent.atomic.AtomicInteger(0)
 
         // 后台线程读取 stdout，推送到 consoleFlow 并写入日志文件
         Thread({
@@ -4505,6 +4704,14 @@ class TermuxRuntime(context: Context) {
                 var lineCount = 0
                 var lastFlushAt = System.currentTimeMillis()
                 while (line != null) {
+                    // pid 探针是给崩溃诊断用的内部行，不能当服务端输出塞给控制台/日志：
+                    // 用户在 latest.log 里看到一行 MINEXA_PID=… 只会以为出了新 bug。
+                    if (line.startsWith(MC_PID_PROBE_PREFIX)) {
+                        line.removePrefix(MC_PID_PROBE_PREFIX).trim().toIntOrNull()
+                            ?.let { mcPid.set(it) }
+                        line = reader.readLine()
+                        continue
+                    }
                     executor.emit(line)
                     writer.appendLine(line)
                     // 每 20 行或 500ms 刷一次：原来只在 50 行整数倍时 flush，
@@ -4527,10 +4734,91 @@ class TermuxRuntime(context: Context) {
         Thread({
             val code = process.waitFor()
             Log.w(TAG, "MC process exited code=$code")
+            // native 信号退出（134/139…）不会留 Java 栈，abort message 只在 logcat 里，
+            // 而且 logd 的环形缓冲会很快把它冲掉 ⇒ 必须在 waitFor 之后、进程被回收之前抢下来。
+            captureNativeAbortIfNeeded(mcPid.get(), code)
             if (clearMcProcessIfCurrent(process)) onExit(code)
         }, "mc-watch").start()
 
         return process
+    }
+
+    // ── native 异常退出的证据采集 ─────────────────────────────────
+
+    /**
+     * 进程以 native 信号退出时，从 logcat 里把 abort message / backtrace 抢下来。
+     *
+     * ## 为什么必须做这一步
+     *
+     * `exit=134`（SIGABRT）/`139`（SIGSEGV）这类退出的特征就是「**没有任何 Java 栈**」：
+     * java 进程在 native 层就 abort 了，会话日志往往只剩两三行（例如 Paperclip 的
+     * `Downloading mojang_1.20.1.jar`）。凭这两三行做归因只能是低置信度，
+     * 而这正是用户反馈里最常见、开发者最容易「复现不了」的一类。
+     *
+     * 真正的根因只写在 logcat 里：
+     *   - `Abort message: '...'`（libc 在 abort 前打印，JVM 的 `Check failed`/`assert` 都在里面）
+     *   - `Fatal signal 6 (SIGABRT) ...` + backtrace（tombstone 摘要）
+     * 而且 logd 是环形缓冲，几分钟就会被冲掉，所以只能在这里立刻抓。
+     *
+     * ## 权限
+     * java 是**同 uid 子进程**，logd 允许读取本 uid 的日志条目，不需要 READ_LOGS。
+     * 读不到时（厂商裁剪 logd / 被策略禁止）不报错，只留一行「未采集到」，
+     * 这样报告里能区分「没崩出信息」和「我们没抓到」。
+     */
+    private fun captureNativeAbortIfNeeded(pid: Int, exitCode: Int) {
+        if (exitCode !in NATIVE_ABORT_EXIT_CODES) return
+        if (pid <= 0) {
+            // pid 探针没读到（极早期就 abort，stdout 还没写出来）：
+            // 留一条明确记录，免得以后把「系统禁止读日志」和「没拿到 pid」混为一谈。
+            lastNativeAbortDiagnostics =
+                "--- native abort 诊断 (exit=$exitCode, SIG${exitCode - 128}) ---\n" +
+                    "(未获取到 java 进程 pid：进程在写出 pid 探针前就已退出，无法按 pid 抓取 logcat)"
+            return
+        }
+        val dump = runCatching { readLogcatForPid(pid) }.getOrDefault("")
+        val block = buildString {
+            appendLine("--- native abort 诊断 (pid=$pid, exit=$exitCode, SIG${exitCode - 128}) ---")
+            if (dump.isBlank()) {
+                appendLine("(未采集到 logcat 输出：系统可能禁止本应用读取日志，或该进程尚未产生日志条目)")
+            } else {
+                append(dump)
+            }
+        }
+        lastNativeAbortDiagnostics = block
+        Log.w(TAG, block)
+        // 同时进控制台/应用日志：报告生成是异步的，多一条通道就多一次留证机会
+        emitLog("[crash] exit=$exitCode 属 native 信号退出，已抓取 abort 诊断（见崩溃报告）")
+    }
+
+    /**
+     * 读取指定 pid 的 logcat 尾部并只保留与 abort/崩溃相关的行。
+     *
+     * 为什么不用 `logcat -b crash`：部分 ROM 上 crash buffer 为空或不可读，
+     * 主缓冲区反而一直有；这里用主缓冲区 + `--pid` 更稳，代价是需要自己过滤。
+     */
+    private fun readLogcatForPid(pid: Int): String {
+        val proc = try {
+            ProcessBuilder(
+                "/system/bin/logcat", "-d", "-v", "threadtime", "--pid", pid.toString(), "-t", "600"
+            ).redirectErrorStream(true).start()
+        } catch (e: Exception) {
+            Log.w(TAG, "启动 logcat 失败: ${e.message}")
+            return ""
+        }
+        val raw = runCatching {
+            proc.inputStream.bufferedReader().use { it.readText() }
+        }.getOrDefault("")
+        // 不要无限等：`-d` 正常会立刻退出，卡住就杀掉并放弃这次采集
+        val finished = runCatching { proc.waitFor(3, TimeUnit.SECONDS) }.getOrDefault(false)
+        if (!finished) runCatching { proc.destroyForcibly() }
+
+        val lines = raw.lines().filter { it.isNotBlank() }
+        if (lines.isEmpty()) return ""
+        val kept = lines.filter { line -> NATIVE_ABORT_MARKERS.any { line.contains(it, ignoreCase = true) } }
+        // 一个都没命中并不代表没价值：JVM 有时只打一行 `Check failed:` 变体。
+        // 这种情况下带回尾部若干行，总比空着好（分析端仍有关键词规则兜底）。
+        val chosen = if (kept.isNotEmpty()) kept else lines.takeLast(ABORT_TAIL_FALLBACK_LINES)
+        return chosen.take(ABORT_MAX_LINES).joinToString("\n")
     }
 
     /**
@@ -6134,6 +6422,35 @@ class TermuxRuntime(context: Context) {
 
     companion object {
         private const val TAG = "TermuxRuntime"
+
+        /**
+         * 视为「native 信号退出」的退出码（128 + 信号号）。
+         *
+         * 134=SIGABRT、135=SIGBUS、136=SIGFPE、139=SIGSEGV。
+         * 这几个码的共同点是**不会有 Java 异常栈**，证据只能来自 logcat 的 abort message。
+         */
+        private val NATIVE_ABORT_EXIT_CODES = setOf(134, 135, 136, 139)
+
+        /**
+         * 启动命令开头的 pid 探针前缀：`echo MINEXA_PID=$$`。
+         *
+         * `exec` 会原地替换 shell，所以 shell 的 `$$` 就是最终 java 进程的 pid。
+         * stdout 读到这一行时只回填 pid、不上屏（见 startMcImpl 的读循环）。
+         */
+        private const val MC_PID_PROBE_PREFIX = "MINEXA_PID="
+
+        /** logcat 行里与 native 崩溃相关的关键词（用于从 600 行里挑出有用部分）。 */
+        private val NATIVE_ABORT_MARKERS = listOf(
+            "Abort message", "Fatal signal", "signal 6", "signal 11", "SIGABRT", "SIGSEGV",
+            "backtrace", "Cmdline", "pid:", "Check failed", "JVM abort", "Fatal error",
+            "Pointer tag", "art     ", "libc    ", "DEBUG   "
+        )
+
+        /** 主缓冲区一条都没命中时保留的尾部行数（避免整段丢弃）。 */
+        private const val ABORT_TAIL_FALLBACK_LINES = 40
+
+        /** 最多带多少行进报告（防止一个 pid 刷屏把报告撑爆）。 */
+        private const val ABORT_MAX_LINES = 120
 
         /**
          * apt 索引缓存有效期（毫秒）。

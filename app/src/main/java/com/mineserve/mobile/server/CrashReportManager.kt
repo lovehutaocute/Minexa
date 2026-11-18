@@ -125,6 +125,11 @@ class CrashReportManager(private val termux: TermuxRuntime) {
             sb.appendLine("进程状态: 异常退出")
             if (exitCode == 137) {
                 sb.appendLine("说明: exit=137 通常表示进程被 SIGKILL 终止，可能是 Android 内存压力、系统后台限制或外部强制停止；请结合下方首个 Java 异常判断根因。")
+            } else if (exitCode in NATIVE_ABORT_EXIT_CODES) {
+                sb.appendLine(
+                    "说明: exit=$exitCode = 128+${exitCode - 128}（SIG${signalName(exitCode)}），" +
+                        "进程在 native 层被信号终止，不会有 Java 异常栈 —— 证据看下方「native abort 诊断」一节。"
+                )
             }
             sb.appendLine("====================================")
             sb.appendLine()
@@ -136,6 +141,24 @@ class CrashReportManager(private val termux: TermuxRuntime) {
                 appLogLines.forEach { sb.appendLine(it) }
                 sb.appendLine()
             }
+
+            // ── 启动环境 / native abort 诊断 ──
+            //
+            // 这两块是「用户能复现、开发者不能」时唯一能替代复现的证据：
+            //  - 启动环境：java 来源/实现 + 实际 LD_PRELOAD + heaptagfix 是否注入；
+            //  - abort 诊断：134/139 这类 native 退出的 Abort message 与 backtrace 首帧。
+            val envSummary = termux.lastLaunchEnvironment()
+            val abortText = termux.lastNativeAbort()
+            sb.appendLine("--- 启动环境 / native 诊断 ---")
+            sb.appendLine(
+                envSummary ?: "(本次启动没有环境摘要：进程未走到 startMc，或这是更早版本生成的启动)"
+            )
+            if (abortText != null) {
+                abortText.lines().forEach { sb.appendLine(it) }
+            } else if (exitCode in NATIVE_ABORT_EXIT_CODES) {
+                sb.appendLine("(未采集到 native abort 诊断：系统可能禁止读取日志，或该退出不是 native 信号)")
+            }
+            sb.appendLine()
 
             // ── 关键片段（从本次启动日志里抽取，带行号）──
             val segments = KeyLogExtractor.extract(logLines)
@@ -481,6 +504,23 @@ class CrashReportManager(private val termux: TermuxRuntime) {
     }
 
     internal companion object {
+        /**
+         * 128+N 形式的 native 信号退出码。
+         *
+         * 与 `TermuxRuntime` 里的采集集合保持一致：报告头据此加解释，
+         * 采集侧据此决定是否抓 logcat abort message。
+         */
+        private val NATIVE_ABORT_EXIT_CODES = setOf(134, 135, 136, 139)
+
+        /** 信号名（仅用于报告头文案，不参与判定）。 */
+        private fun signalName(exitCode: Int): String = when (exitCode) {
+            134 -> "ABRT"
+            135 -> "BUS"
+            136 -> "FPE"
+            139 -> "SEGV"
+            else -> "?"
+        }
+
         /** 会话日志单次读取上限（超出保留尾部，崩溃现场在尾部）。 */
         private const val SESSION_LOG_MAX_BYTES = 4L * 1024L * 1024L
 

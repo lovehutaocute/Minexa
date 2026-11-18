@@ -25,6 +25,13 @@ class CrashInsightEngine(private val caseStore: CrashCaseStore? = null) {
         val trigger: TriggerInfo,
         val logText: String,
         val nativeReportText: String? = null,
+        /**
+         * native 侧退出（SIGABRT/SIGSEGV 等）时从 logcat 抓到的 abort 诊断。
+         *
+         * 这类崩溃的会话日志常常只有两三行（java 进程来不及写日志就 abort 了），
+         * 没有这段就必然只能给出「未能明确归因」。
+         */
+        val abortText: String? = null,
         val sessionId: String = "",
         val startedAt: Long = 0L,
         val endedAt: Long = 0L,
@@ -42,10 +49,20 @@ class CrashInsightEngine(private val caseStore: CrashCaseStore? = null) {
                 appendLine("--- MC 原生崩溃报告 ---")
                 append(it)
             }
+            input.abortText?.takeIf { it.isNotBlank() }?.let {
+                appendLine()
+                appendLine("--- native abort 诊断 ---")
+                append(it)
+            }
         }
 
         val structure = CrashReportAnalyzer.analyze(fullText)
-        val hits = CrashReportAnalyzer.matchAll(fullText)
+        // 退出码必须显式传进去：`exitCodes` 类规则（process-killed / native-signal-exit）
+        // 只能靠它命中。旧实现让 matchAll 从日志文本里正则找「退出码: N」，而本次启动的
+        // 会话日志里根本不写这一行（只有报告头的「退出码: $exitCode」有），
+        // 于是这些规则在真实崩溃路径上**从来没生效过**。
+        val ruleExitCode = input.trigger.exitCode.takeIf { it > 0 }
+        val hits = CrashReportAnalyzer.matchAll(fullText, ruleExitCode)
             .sortedBy { it.level.ordinal }
 
         val markers = detectMarkers(fullText)
@@ -327,6 +344,8 @@ class CrashInsightEngine(private val caseStore: CrashCaseStore? = null) {
 
         /** 规则 -> 证据定位关键词（用于从原文里挑出可回链的行）。 */
         private val EVIDENCE_HINTS: Map<String, List<String>> = mapOf(
+            "heap-tag-truncated" to listOf("Pointer tag for", "tagged-pointers"),
+            "native-signal-exit" to listOf("Abort message", "Fatal signal", "backtrace", "EXCEPTION"),
             "java-cacerts-broken" to listOf("trustAnchors", "PKIX", "InvalidAlgorithmParameterException"),
             "java-class-version" to listOf("UnsupportedClassVersionError", "class file version"),
             "java-version-required" to listOf("requires Java", "or higher"),
@@ -357,6 +376,8 @@ class CrashInsightEngine(private val caseStore: CrashCaseStore? = null) {
             "allow-list" to "allow-list",
             "GLIBC_" to "glibc",
             "libjvm.so" to "libjvm",
+            "Pointer tag for" to "heap-tag",
+            "Abort message" to "native-abort",
             "OutOfMemoryError" to "oom",
             "Watchdog" to "watchdog",
             "Mixin" to "mixin",
@@ -374,6 +395,28 @@ class CrashInsightEngine(private val caseStore: CrashCaseStore? = null) {
          * `appAction` 是 App 内深链（由 UI 解释执行），研发/客服看 JSON 时也能直接照做。
          */
         private val FIX_CATALOG: Map<String, InsightFix> = mapOf(
+            "heap-tag-truncated" to InsightFix(
+                id = "switch-java-vendor",
+                title = "换成另一套 Java 比对一次",
+                steps = listOf(
+                    "先看崩溃报告「启动环境」一行的 heaptagfix 状态与 LD_PRELOAD 实际值",
+                    "把服务端 Java 在 FCL 与 Termux JDK 之间切换一次，再启动同一份核心",
+                    "两套都崩才继续查核心/模组；只有一套崩则该 JRE 与当前系统不兼容"
+                ),
+                appAction = "goto:env/java",
+                risk = "medium",
+                expectedEffect = "区分「注入没生效」和「该 JRE 自身在带标签堆上必崩」"
+            ),
+            "native-signal-exit" to InsightFix(
+                id = "collect-native-abort",
+                title = "按 native abort 信息排查",
+                steps = listOf(
+                    "在崩溃弹窗看「native abort 诊断」里的 Abort message 与 backtrace 首帧",
+                    "把该段连同启动环境一行一起反馈；这几行是唯一能定位 native 退出的证据",
+                    "若 Abort message 为空，说明系统未允许读取日志，需在「运行诊断」里导出完整日志"
+                ),
+                risk = "low"
+            ),
             "java-cacerts-broken" to InsightFix(
                 id = "repair-truststore",
                 title = "一键修复 Java 证书库",

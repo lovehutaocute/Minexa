@@ -46,6 +46,29 @@
   },
   "rules": [
     {
+      "id": "heap-tag-truncated",
+      "level": "Identified",
+      "contains": [
+        "Pointer tag for",
+        "was truncated, see",
+        "tagged-pointers"
+      ],
+      "regex": "Pointer tag for (0x[0-9a-fA-F]+) was truncated",
+      "label": "堆指针标签未关闭（JVM 在带标签堆上 abort）",
+      "detail": "日志出现 bionic 的「Pointer tag … was truncated」，说明这次 java 进程的堆指针标签（TBI/MTE）仍处于开启状态。JVM 会改写指针高位做标记，带标签的堆上释放时标签校验失败会直接 SIGABRT（退出码 134）。App 侧靠 libheaptagfix.so 经 LD_PRELOAD 关闭它，出现这行等于注入没生效。",
+      "evidence": "检测到 Pointer tag 截断告警{{（$1）}}",
+      "suggest": "先确认这次启动到底有没有注入 libheaptagfix.so —— 崩溃报告「启动环境」一行会写明实际 LD_PRELOAD 与 heaptagfix 状态；把 Java 来源在 FCL 与 Termux JDK 之间切换一次做对比；用覆盖安装重装当前 APK（该库随包分发，旧包或分包缺失时会被静默跳过）。"
+    },
+    {
+      "id": "native-signal-exit",
+      "level": "Identified",
+      "exitCodes": [134, 135, 136, 139],
+      "label": "进程被 native 信号终止（SIGABRT / SIGSEGV）",
+      "detail": "退出码 128+N 表示进程被第 N 号信号杀掉：134=SIGABRT（进程自己 abort）、139=SIGSEGV（段错误）、135=SIGBUS、136=SIGFPE。这类退出不会留下 Java 异常栈，日志往往只有几行，凭堆栈归因一定失败。",
+      "evidence": "退出码落在 native 信号区间（128+N）",
+      "suggest": "按「native abort 诊断」一节里的 Abort message 与 backtrace 首帧定位（崩溃报告会自动抓取该进程的 logcat 尾部）；同时核对同一份报告的「启动环境」一行，确认 java 来源/实现与 LD_PRELOAD 是否符合预期。"
+    },
+    {
       "id": "java-class-version",
       "level": "Identified",
       "contains": [
@@ -92,9 +115,9 @@
         "unable to find valid certification path"
       ],
       "label": "Java 证书库缺失或损坏",
-      "detail": "Java 运行环境的根证书库（cacerts）缺失、为空或损坏，JVM 内所有 HTTPS 请求都会握手失败——Forge/Fabric 安装器下载 libraries、补装字体/依赖等操作会全部报下载失败。这不是字体库问题。",
+      "detail": "Java 运行环境的根证书库（cacerts）缺失、为空或缺少需要的根证书，JVM 内所有 HTTPS 请求都会握手失败——Forge/Fabric 安装器下载 libraries、补装字体/依赖等操作会全部报下载失败。这不是字体库问题。少数情况下证书库本身正常，是对端证书链不完整或网络侧（VPN/代理/广告过滤）拦截了 TLS。",
       "evidence": "检测到 trustAnchors/PKIX 证书校验错误",
-      "suggest": "打开崩溃弹窗「分析」页，点「一键修复」：App 会自动重装当前 Java 与 ca-certificates，软件源不可用时改用本机证书包原地重建 cacerts；修复完成后回核心页重新安装/更新核心即可。也可在「运行环境」里卸载后重新安装当前 Java 版本手动恢复。"
+      "suggest": "打开崩溃弹窗「分析」页，点「一键修复」：App 会先用本机证书包离线补齐 cacerts（只加缺的证书，保留原有条目），不足时再重装当前 Java 与 ca-certificates。修复结果会给出复检结论：若提示「证书库本身是正常的」，说明问题在网络侧（关掉 VPN/代理/广告过滤或换网络）或对端证书链，重装 Java 无用。修复后回核心页重新安装/更新核心即可。"
     },
     {
       "id": "launch-file-missing",

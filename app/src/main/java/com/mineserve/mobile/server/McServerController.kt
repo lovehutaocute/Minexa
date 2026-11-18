@@ -286,8 +286,12 @@ class McServerController(
                     profile = termux.resolveProotProfile(javaVendor, javaVersion)
                 )
             } else {
+                // 显式喂一份「并集」信任库：installer 下载 libraries 走 HTTPS，
+                // JDK 自带 cacerts 缺失/残缺时它会全部握手失败（PKIX / trustAnchors）。
+                // 属性能给就给，给不了（库不够好）就退回默认行为。
                 termux.execOnce(
                     "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
+                    *termux.installerTrustStoreProps(javaVersion),
                     "-jar", jarPath, "--installServer", serverDir.absolutePath
                 )
             }

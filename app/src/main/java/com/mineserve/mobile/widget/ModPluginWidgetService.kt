@@ -28,6 +28,8 @@ class ModPluginWidgetService : RemoteViewsService() {
 
         private data class Row(val title: String, val subtitle: String, val icon: Bitmap?, val initial: String)
 
+        // onDataSetChanged 与 getCount/getViewAt 都在 binder 线程，但可能交错执行，需要可见性保证。
+        @Volatile
         private var rows: List<Row> = emptyList()
 
         override fun onCreate() {}
@@ -47,7 +49,16 @@ class ModPluginWidgetService : RemoteViewsService() {
         override fun getItemId(position: Int): Long = position.toLong()
 
         override fun getViewAt(position: Int): RemoteViews {
-            val row = rows[position]
+            // getCount() 与 getViewAt() 之间可能插入一次 onDataSetChanged（后台线程
+            // notifyAppWidgetViewDataChanged 会触发重新绑定），把 rows 换成更短或空的列表，
+            // 于是 position 越界；旧实现 rows[position] 会抛 IndexOutOfBoundsException 崩溃。
+            val row = rows.getOrNull(position)
+            if (row == null) {
+                return RemoteViews(context.packageName, R.layout.widget_mod_plugin_item).apply {
+                    setTextViewText(R.id.item_title, "")
+                    setTextViewText(R.id.item_subtitle, "")
+                }
+            }
             val views = RemoteViews(context.packageName, R.layout.widget_mod_plugin_item)
             views.setTextViewText(R.id.item_title, row.title)
             views.setTextViewText(R.id.item_subtitle, row.subtitle)

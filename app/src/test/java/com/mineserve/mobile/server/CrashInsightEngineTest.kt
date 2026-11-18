@@ -158,4 +158,67 @@ class CrashInsightEngineTest {
         assertEquals(null, insight.primaryCause)
         assertTrue(insight.fixes.isNotEmpty() || insight.extraction.firstException == null)
     }
+
+    // ── 2026-11 用户反馈：Paper 1.20.1 + FCL Java 17，exit=134，本次启动只有 3 行 ──
+    //
+    // 开发者侧无法复现，唯一可用的证据就是这两行 + logcat 里的 abort message。
+    // 这里把它固化成回放用例：只要日志里出现 Pointer tag 截断告警，
+    // 主因就必须是「堆指针标签未关闭」，而不是笼统的「native 信号退出」。
+
+    private val abortLog = """
+        Downloading mojang_1.20.1.jar
+        Pointer tag for 0x77f8906580 was truncated, see 'https://source.android.com/devices/tech/debug/tagged-pointers'.
+    """.trimIndent()
+
+    private val abortDiagnostics = """
+        --- native abort 诊断 (pid=12345, exit=134, SIG6) ---
+        11-16 15:28:36.123  1234  1234 F libc    : Fatal signal 6 (SIGABRT), code=-6, pid 12345 (java)
+        11-16 15:28:36.200  1234  1234 F DEBUG   : Abort message: 'Check failed: tagged pointer'
+        11-16 15:28:36.210  1234  1234 F DEBUG   : backtrace:
+        11-16 15:28:36.220  1234  1234 F DEBUG   :       #00 pc 00000000000abcd libc.so
+    """.trimIndent()
+
+    @Test
+    fun `exit134 且日志有 Pointer tag 时归因为堆标签未关闭`() {
+        val insight = CrashInsightEngine().analyze(
+            CrashInsightEngine.Input(
+                crashId = "crash_20261116_152836",
+                env = env.copy(core = "Paper", coreVersion = "1.20.1", mcVersion = "1.20.1", javaVersion = "17", javaVendor = "FCL"),
+                trigger = TriggerInfo(exitCode = 134),
+                logText = abortLog,
+                abortText = abortDiagnostics
+            )
+        )
+        val primary = insight.primaryCause
+        assertNotNull("exit=134 必须给出主因（否则只能是「未能明确归因」）", primary)
+        assertEquals("heap-tag-truncated", primary!!.ruleId)
+        assertEquals("high", primary.confidence)
+        assertTrue(
+            "证据必须回链到 Pointer tag 那一行：${primary.evidence}",
+            primary.evidence.any { it.text.contains("Pointer tag") }
+        )
+        assertEquals("switch-java-vendor", insight.fixes.firstOrNull()?.id)
+        // 通用 native 退出规则仍作为备选出现，用户才能理解 134 本身的含义
+        assertTrue(
+            "应同时给出 native-signal-exit 备选：${insight.cause.alternatives.map { it.ruleId }}",
+            insight.cause.alternatives.any { it.ruleId == "native-signal-exit" }
+        )
+        assertTrue("heap-tag 标记要进指纹", insight.extraction.markers.contains("Pointer tag for"))
+    }
+
+    @Test
+    fun `exit134 且日志无特征时靠退出码归因为 native 信号退出`() {
+        val insight = CrashInsightEngine().analyze(
+            CrashInsightEngine.Input(
+                crashId = "crash_x",
+                env = env,
+                trigger = TriggerInfo(exitCode = 134),
+                logText = "一切正常，没有任何异常行。"
+            )
+        )
+        // 这条断言同时守护 exitCodes 规则：会话日志里不写「退出码: N」，
+        // 若不显式把 trigger.exitCode 传给 matchAll，这里会退化成空主因。
+        assertEquals("native-signal-exit", insight.primaryCause?.ruleId)
+        assertEquals("collect-native-abort", insight.fixes.firstOrNull()?.id)
+    }
 }
