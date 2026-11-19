@@ -729,14 +729,14 @@ private fun DashboardSetupCard(
     val currentMirrorIndex by vm.currentMirrorIndex.collectAsState()
     val isInstalling by vm.isInstalling.collectAsState()
     val installSpeed by vm.installSpeed.collectAsState()
-    val dependencySteps by vm.serverState
-        .map { state -> state.installSteps.filter { it.step != com.mineserve.mobile.data.InstallStep.Jdk } }
-        .distinctUntilChanged()
-        .collectAsState(initial = emptyList())
-    val progress by vm.serverState
-        .map { it.currentProgress }
-        .distinctUntilChanged()
-        .collectAsState(initial = 0)
+    val dependencySteps by remember(vm) {
+        vm.serverState
+            .map { state -> state.installSteps.filter { it.step != com.mineserve.mobile.data.InstallStep.Jdk } }
+            .distinctUntilChanged()
+    }.collectAsState(initial = emptyList())
+    val progress by remember(vm) {
+        vm.serverState.map { it.currentProgress }.distinctUntilChanged()
+    }.collectAsState(initial = 0)
     val depsInstalled = dependencySteps.isNotEmpty() && dependencySteps.all {
         it.status == com.mineserve.mobile.data.StepStatus.Done
     }
