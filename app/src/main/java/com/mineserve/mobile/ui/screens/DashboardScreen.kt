@@ -437,35 +437,30 @@ private fun DashboardCoreSelectionCard(
 ) {
     // 只在统一存储目录里的服务器才可启动：还留在旧私有目录的记录要等迁移，
     // 列表里不显示（显示出来只会让用户点了启动再看到「找不到 jar」）。
-    val installedCores by vm.config
-        .map { cfg -> cfg.installedCores.filter { it.location == StorageLocation.Internal } }
-        .distinctUntilChanged()
-        .collectAsState(initial = emptyList())
-    val activeCoreName by vm.config
-        .map { it.activeCoreName }
-        .distinctUntilChanged()
-        .collectAsState(initial = null)
-    val runtimeKind by vm.config
-        .map { it.runtimeKind }
-        .distinctUntilChanged()
-        .collectAsState(initial = RuntimeKind.Java)
-    val selectedJavaRuntime by vm.config
-        .map { it.selectedJavaRuntime }
-        .distinctUntilChanged()
-        .collectAsState(initial = JavaRuntime.Default)
-    val selectedJavaVersion by vm.config
-        .map { it.selectedJavaVersion }
-        .distinctUntilChanged()
-        .collectAsState(initial = JavaVersion.Java17)
-    val selectedPhpVersion by vm.config
-        .map { it.selectedPhpVersion }
-        .distinctUntilChanged()
-        .collectAsState(initial = PhpVersion.Default)
+    val installedCores by remember(vm) {
+        vm.config
+            .map { cfg -> cfg.installedCores.filter { it.location == StorageLocation.Internal } }
+            .distinctUntilChanged()
+    }.collectAsState(initial = emptyList())
+    val activeCoreName by remember(vm) {
+        vm.config.map { it.activeCoreName }.distinctUntilChanged()
+    }.collectAsState(initial = null)
+    val runtimeKind by remember(vm) {
+        vm.config.map { it.runtimeKind }.distinctUntilChanged()
+    }.collectAsState(initial = RuntimeKind.Java)
+    val selectedJavaRuntime by remember(vm) {
+        vm.config.map { it.selectedJavaRuntime }.distinctUntilChanged()
+    }.collectAsState(initial = JavaRuntime.Default)
+    val selectedJavaVersion by remember(vm) {
+        vm.config.map { it.selectedJavaVersion }.distinctUntilChanged()
+    }.collectAsState(initial = JavaVersion.Java17)
+    val selectedPhpVersion by remember(vm) {
+        vm.config.map { it.selectedPhpVersion }.distinctUntilChanged()
+    }.collectAsState(initial = PhpVersion.Default)
     val installedPhp by vm.installedPhp.collectAsState()
-    val isRunning by vm.serverState
-        .map { it.isRunning }
-        .distinctUntilChanged()
-        .collectAsState(initial = false)
+    val isRunning by remember(vm) {
+        vm.serverState.map { it.isRunning }.distinctUntilChanged()
+    }.collectAsState(initial = false)
     val stopInFlight by vm.stopInFlight.collectAsState()
     val forceStopInFlight by vm.forceStopInFlight.collectAsState()
     var showCoreDropdown by remember { mutableStateOf(false) }
