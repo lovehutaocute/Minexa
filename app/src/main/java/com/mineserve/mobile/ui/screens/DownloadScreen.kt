@@ -175,7 +175,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     // importProgress。三者都是高频流（进度每 500ms 回调一次，预览每 750ms 且下载日志持续推进，
     // 导入进度每帧变化），订阅写在页面顶层等于每次发布都把整页重画一遍 —— 18 个核心磁贴、
     // 已安装列表、版本行、输入框全都跟着重算。现在它们分别在 [DownloadProgressBlock] /
-    // [DownloadConsolePreview] / [ImportProgressRow] 订阅。
+    // [DownloadConsolePreview] / [ImportProgressBlock] 订阅。
     val importingServer by vm.isImportingServer.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -383,7 +383,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
                             modifier = Modifier.fillMaxWidth().skinTileOverlay(SkinTileSlots.INPUT_FIELD, McShape.Row))
                     }
                     if (importingServer) {
-                        ImportProgressRow(vm)
+                        ImportProgressBlock(vm)
                     }
                 }
             },
@@ -1141,7 +1141,7 @@ private fun DownloadConsolePreview(vm: McViewModel) {
  * 十几张核心卡片、已安装列表、下载进度块全都白算一遍，表现为导入时整页卡顿。
  */
 @Composable
-private fun ImportProgressRow(vm: McViewModel) {
+private fun ImportProgressBlock(vm: McViewModel) {
     val importProgress by vm.importProgress.collectAsState()
     val percent = ((importProgress ?: 0f) * 100).toInt()
 
