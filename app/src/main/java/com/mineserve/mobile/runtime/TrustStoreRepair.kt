@@ -25,11 +25,23 @@ data class TrustStoreHealth(
     val error: String? = null
 ) {
     val readable: Boolean get() = error == null
-    val usable: Boolean get() = readable && certificates >= TrustStoreRepairer.MIN_USABLE_CERTIFICATES
+
+    /**
+     * 「JDK 能用」的唯一判据。
+     *
+     * **PEM 文本一律算不可用**：JDK 只从 JKS/PKCS12 读信任锚，`cacerts` 是 PEM 时
+     * 它一个锚点都读不到，报的正是 `trustAnchors parameter must be non-empty`。
+     * 而 PEM 文件「存在、非空、还能解析出 150 张证书」—— 只判存在/非空的检查会
+     * 放过它，这正是「点了修复也不行」的主因之一。
+     */
+    val usable: Boolean get() = readable && format == TrustStoreFormat.KEYSTORE &&
+        certificates >= TrustStoreRepairer.MIN_USABLE_CERTIFICATES
 
     fun describe(): String = when {
         !readable -> "无法读取（${error}）"
         format == TrustStoreFormat.MISSING -> "0 张证书（缺失或空文件）"
+        format == TrustStoreFormat.PEM ->
+            "PEM 文本 $certificates 张证书（JDK 不认这个格式 → 信任锚为空，必须转换）"
         usable -> "$certificates 张证书"
         else -> "只有 $certificates 张证书（低于 ${TrustStoreRepairer.MIN_USABLE_CERTIFICATES}，判为残缺）"
     }
@@ -50,19 +62,21 @@ data class TrustStoreWrite(
  * 任意一份 PEM 证书包（Termux 的 `etc/tls/cacerts.pem`、`etc/ssl/certs/ca-certificates.crt`、
  * Android 系统 `/system/etc/security/cacerts`），就能纯本地重建，不依赖网络。
  *
- * ## 三条不能违反的约束（都是踩过的坑）
+ * ## 四条不能违反的约束（都是踩过的坑）
  *
- * 1. **不能只看「文件存在且非空」**。PKIX 报错时 cacerts 往往是**能读、但缺根证书**：
- *    早期版本只判存在与长度，于是「一键修复」直接把结论判成「已恢复」、什么都不做，
- *    用户反馈就是「点了修复也不行」。
- * 2. **格式必须沿用原文件**。Termux 的 JDK 里 `lib/security/cacerts` 可能是指向
- *    `etc/tls/cacerts.pem` 的软链（PEM 文本）。无脑写 PKCS12 会把 JDK 期望的格式换掉，
- *    还可能顺手把与 ca-certificates 共享的 PEM 写坏。
+ * 1. **不能只看「文件存在且非空」**。真实崩溃日志里的报错是
+ *    `trustAnchors parameter must be non-empty` —— 这是「库能读、但锚点为空」，
+ *    文件本身存在且非空。早期版本判存在即「已恢复」，一键修复等于什么都没做。
+ * 2. **`cacerts` 必须是 JDK 能读的 JKS/PKCS12**。它是指向 PEM 证书包的软链时，
+ *    JDK 读到的锚点数是 0，必须**转换成 PKCS12**（转换后仍保留 PEM 里的全部证书）。
+ *    转换时**不能顺着软链写**，否则会把 apt/curl 共用的 `ca-certificates.crt`
+ *    灌成二进制，把系统其它组件的证书链一起搞坏。
  * 3. **不能只读第一份证书包**。设备上常出现第一份 PEM 被截断/只剩几张证书，
  *    用它重建出来的库「能读但没用」。所有来源合并去重，并校验总张数。
+ * 4. **补而不是覆盖**。JDK 自带的 cacerts 有它自己的一套根证书，整体重建会把
+ *    JDK 认可、而本机 PEM 没有的锚点丢掉。
  *
- * 全程不破坏原文件：写前备份为 `cacerts.bak`，写入走临时文件 + rename（rename 失败时
- * 先删软链再复制，避免顺着链接把 PKCS12 二进制写进 PEM）。
+ * 全程不破坏原文件：写前备份为 `cacerts.bak`，写入走临时文件 + rename。
  */
 object TrustStoreRepairer {
 
@@ -125,11 +139,26 @@ object TrustStoreRepairer {
             .joinToString("") { byte -> "%02x".format(byte) }
 
     /**
-     * 落盘目标：软链一律解析到真实文件（Termux 的 cacerts 常是指向 PEM 的软链，
-     * 顺着链路改才能真正影响 JDK 读到的内容）；悬空软链或普通路径原样返回。
+     * 读取用的落点：软链解析到真实文件（Termux 的 cacerts 常是指向 PEM 的软链，
+     * 读的时候要读到证书内容）；悬空软链或普通路径原样返回。
      */
     fun resolveTarget(target: File): File =
         runCatching { if (target.exists()) target.canonicalFile else target }.getOrDefault(target)
+
+    /**
+     * 写入用的落点。
+     *
+     * 软链**只有指向 keystore 时**才顺着写（那是 JDK 与其他 JVM 共用的库，就地补最省事）；
+     * 指向 PEM / 悬空时返回软链本身 —— 写入会替换掉这个链接、留下一个新文件，
+     * 链接目标（apt/curl 用的 PEM 证书包）保持原样。
+     */
+    fun writeDestination(target: File): File {
+        val link = runCatching { java.nio.file.Files.isSymbolicLink(target.toPath()) }
+            .getOrDefault(false)
+        if (!link) return target
+        val real = runCatching { target.canonicalFile }.getOrNull() ?: return target
+        return if (detectFormat(real) == TrustStoreFormat.KEYSTORE) real else target
+    }
 
     /** 识别现有文件格式；只看头部 4KB，避免把几十 MB 的文件读进来。 */
     fun detectFormat(file: File): TrustStoreFormat {
@@ -152,7 +181,10 @@ object TrustStoreRepairer {
         }
     }
 
-    /** 体检：能不能读、有多少张证书。**这是判断「修好了没有」的唯一依据**。 */
+    /**
+     * 体检：能不能读、有多少张证书。这是「修好了没有」的第一依据；
+     * 第二依据是让 JVM 自己读一遍（见 `TermuxRuntime.verifyStoreWithJvm`）。
+     */
     fun inspect(target: File, password: String = DEFAULT_PASSWORD): TrustStoreHealth {
         val file = resolveTarget(target)
         val format = detectFormat(file)
@@ -165,7 +197,7 @@ object TrustStoreRepairer {
             return TrustStoreHealth(format, count)
         }
         val store = loadStore(file, password)
-            ?: return TrustStoreHealth(format, 0, "PKCS12/JKS 都解析失败，可能已损坏")
+            ?: return TrustStoreHealth(format, 0, "PKCS12/JKS 都解析失败，可能已损坏或口令不符")
         val count = runCatching {
             java.util.Collections.list(store.aliases()).count { alias -> store.getCertificate(alias) != null }
         }.getOrDefault(0)
@@ -184,51 +216,46 @@ object TrustStoreRepairer {
         return null
     }
 
-    /**
-     * 把 [sources] 里本机缺失的证书补进 [target]，**保留原有条目与原有格式**。
-     *
-     * 之所以是「补」不是「重写」：JDK 自带的 cacerts 有它自己的一套根证书，
-     * 整体重建会把 JDK 认可、而本机 PEM 没有的锚点丢掉。
-     *
-     * @return 新导入张数与写后体检；[TrustStoreWrite.error] 非空表示磁盘层面失败。
-     */
-    fun topUp(target: File, sources: List<String>, password: String = DEFAULT_PASSWORD): TrustStoreWrite {
+    /** 取出库里的全部证书（PEM 与 keystore 都支持）；读不出来返回空表。 */
+    fun certificatesOf(target: File, password: String = DEFAULT_PASSWORD): List<X509Certificate> {
         val file = resolveTarget(target)
-        val incoming = collectCertificates(sources)
-        if (incoming.isEmpty()) {
-            return TrustStoreWrite(0, inspect(file, password), "本机证书包解析不到任何证书")
-        }
         return when (detectFormat(file)) {
-            TrustStoreFormat.PEM -> topUpPem(file, incoming)
-            TrustStoreFormat.KEYSTORE -> topUpKeystore(file, incoming, password)
-            TrustStoreFormat.MISSING -> writeNewStore(file, incoming, password)
+            TrustStoreFormat.MISSING -> emptyList()
+            TrustStoreFormat.PEM -> runCatching { parseCertificates(file.readText()) }.getOrDefault(emptyList())
+            TrustStoreFormat.KEYSTORE -> {
+                val store = loadStore(file, password) ?: return emptyList()
+                runCatching {
+                    java.util.Collections.list(store.aliases())
+                        .mapNotNull { alias -> store.getCertificate(alias) as? X509Certificate }
+                }.getOrDefault(emptyList())
+            }
         }
     }
 
-    /** PEM 形态：原文本 + 追加缺失证书块，仍写成 PEM。 */
-    private fun topUpPem(file: File, incoming: List<X509Certificate>): TrustStoreWrite {
-        val existingText = runCatching { file.readText() }.getOrDefault("")
-        val existing = parseCertificates(existingText)
-        val seen = existing.map { fingerprint(it) }.toMutableSet()
-        val additions = incoming.filter { seen.add(fingerprint(it)) }
-        if (additions.isEmpty()) return TrustStoreWrite(0, inspect(file))
+    /**
+     * 把 [sources] 里的证书并进 [target]，并保证结果是 **JDK 能读的 keystore**。
+     *
+     * - 目标是 keystore：保留原条目，只补缺的（见 [topUpKeystore]）；
+     * - 目标是 PEM / 缺失 / 空：把「原文件里的证书 + 来源证书」去重后写成 PKCS12
+     *   （PEM 必须转换，否则 JDK 读到的信任锚是 0）。
+     *
+     * @return 新导入张数与写后体检；[TrustStoreWrite.error] 非空表示没写成功。
+     */
+    fun topUp(target: File, sources: List<String>, password: String = DEFAULT_PASSWORD): TrustStoreWrite {
+        val incoming = collectCertificates(sources)
+        val dest = writeDestination(target)
+        val existing = certificatesOf(target, password)
 
-        val pem = buildString {
-            append(existingText.trimEnd())
-            if (isNotEmpty()) appendLine()
-            additions.forEach { cert ->
-                appendLine(BEGIN)
-                appendLine(
-                    java.util.Base64.getEncoder().encodeToString(cert.encoded)
-                        .chunked(64).joinToString("\n")
-                )
-                appendLine(END)
-            }
+        if (existing.isEmpty() && incoming.isEmpty()) {
+            return TrustStoreWrite(0, inspect(target, password), "本机证书包解析不到任何证书")
         }
-        if (!writeAtomically(file, pem.toByteArray(Charsets.US_ASCII))) {
-            return TrustStoreWrite(0, inspect(file), "写入失败（磁盘只读或无权限）")
+        return if (detectFormat(dest) == TrustStoreFormat.KEYSTORE) {
+            if (incoming.isEmpty()) TrustStoreWrite(0, inspect(dest, password), "本机证书包解析不到任何证书")
+            else topUpKeystore(dest, incoming, password)
+        } else {
+            // PEM / 缺失 / 空：统一转成 PKCS12。原 PEM 里的证书与来源证书都算「导入」。
+            writeNewStore(dest, existing + incoming, password)
         }
-        return TrustStoreWrite(additions.size, inspect(file))
     }
 
     /** JKS/PKCS12 形态：加载原库、补缺失条目、整体回写。 */
@@ -260,20 +287,25 @@ object TrustStoreRepairer {
         return TrustStoreWrite(imported, inspect(file, password))
     }
 
-    /** 原文件不可用（缺失/空/解析不了）时新建一份 PKCS12 信任库。 */
+    /** 新建一份 PKCS12 信任库（按证书指纹去重）。 */
     fun writeNewStore(file: File, certs: List<X509Certificate>, password: String = DEFAULT_PASSWORD): TrustStoreWrite {
-        if (certs.isEmpty()) return TrustStoreWrite(0, inspect(file, password), "没有可用证书")
+        val unique = LinkedHashMap<String, X509Certificate>()
+        certs.forEach { unique.putIfAbsent(fingerprint(it), it) }
+        val values = unique.values.toList()
+        if (values.isEmpty()) return TrustStoreWrite(0, inspect(file, password), "没有可用证书")
         val store = runCatching {
             KeyStore.getInstance("PKCS12").apply { load(null, password.toCharArray()) }
         }.getOrNull() ?: return TrustStoreWrite(0, inspect(file, password), "系统不支持 PKCS12")
-        certs.forEachIndexed { index, cert -> store.setCertificateEntry("minexa-ca-$index", cert) }
+        values.forEachIndexed { index, cert -> store.setCertificateEntry("minexa-ca-$index", cert) }
         val ok = runCatching {
+            file.parentFile?.mkdirs()
+            backup(file)
             val tmp = File(file.parentFile, file.name + ".tmp")
             FileOutputStream(tmp).use { store.store(it, password.toCharArray()) }
             replace(tmp, file)
         }.getOrDefault(false)
         if (!ok) return TrustStoreWrite(0, inspect(file, password), "写入失败（磁盘只读或无权限）")
-        return TrustStoreWrite(certs.size, inspect(file, password))
+        return TrustStoreWrite(values.size, inspect(file, password))
     }
 
     /**
@@ -299,28 +331,18 @@ object TrustStoreRepairer {
     }
 
     /**
-     * 把信任库里的证书导出成 PEM 文本；PEM 形态直接返回原文，读不出来返回 null。
+     * 把信任库里的证书导出成 PEM 文本；读不出来返回 null。
      *
-     * 用途：给 installer 单独准备一份「并集」信任库时，要把 JDK 自带的 cacerts 也
+     * 用途：给 JVM 单独准备一份「并集」信任库时，要把 JDK 自带的 cacerts 也
      * 作为来源之一 —— JDK 认可的锚点本机 PEM 未必都有（反之亦然）。
      */
     fun exportPem(target: File, password: String = DEFAULT_PASSWORD): String? {
-        val file = resolveTarget(target)
-        return when (detectFormat(file)) {
-            TrustStoreFormat.MISSING -> null
-            TrustStoreFormat.PEM -> runCatching { file.readText() }.getOrNull()
-            TrustStoreFormat.KEYSTORE -> {
-                val store = loadStore(file, password) ?: return null
-                runCatching {
-                    java.util.Collections.list(store.aliases())
-                        .mapNotNull { alias -> store.getCertificate(alias) }
-                        .joinToString("\n") { pemOf(it) }
-                }.getOrNull()?.takeIf { it.contains(BEGIN) }
-            }
-        }
+        val certs = certificatesOf(target, password)
+        if (certs.isEmpty()) return null
+        return certs.joinToString("\n") { pemOf(it) }
     }
 
-    private fun pemOf(cert: java.security.cert.Certificate): String = buildString {
+    private fun pemOf(cert: X509Certificate): String = buildString {
         appendLine(BEGIN)
         appendLine(
             java.util.Base64.getEncoder().encodeToString(cert.encoded)
@@ -334,19 +356,12 @@ object TrustStoreRepairer {
         if (!target.isFile || target.length() == 0L) return
         runCatching { target.copyTo(File(target.parentFile, target.name + ".bak"), overwrite = true) }
     }
-    private fun writeAtomically(target: File, bytes: ByteArray): Boolean = runCatching {
-        target.parentFile?.mkdirs()
-        backup(target)
-        val tmp = File(target.parentFile, target.name + ".tmp")
-        FileOutputStream(tmp).use { it.write(bytes) }
-        replace(tmp, target)
-    }.getOrDefault(false)
 
     /**
      * tmp → target 的原子替换。
      *
      * 不用 `tmp.renameTo(target)` 的兜底复制：某些 FUSE/公共存储上 rename 不覆盖，
-     * 而 `copy` 会**顺着软链**写进链接目标（把 PKCS12 二进制灌进 PEM 文件）。
+     * 而 `copyTo` 会**顺着软链**写进链接目标（把 PKCS12 二进制灌进 PEM 文件）。
      * 所以兜底路径先删（删的是软链本身）再复制。
      */
     private fun replace(tmp: File, target: File): Boolean {

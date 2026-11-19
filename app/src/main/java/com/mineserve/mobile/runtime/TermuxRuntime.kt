@@ -3350,25 +3350,16 @@ class TermuxRuntime(context: Context) {
     }
 
     /**
-     * 宿主 Termux JDK 的根证书库（cacerts）是否就绪。
+     * 宿主 Termux JDK 的根证书库（cacerts）是否**真的能用**。
      *
-     * cacerts 缺失/为空/悬空符号链接（ca-certificates 包被清、JDK 覆盖安装中断等）时，
-     * JVM 能启动但**所有 HTTPS 请求都会握手失败**
-     * （`trustAnchors parameter must be non-empty`），表现为 Forge/Fabric 安装器
-     * 下载 libraries、补装字体/依赖等统统「下载失败」，且补字体库无效。
-     * 2026-11 用户案例：崩溃页误诊为「字体运行库缺失」，实际重装 Java 21 才恢复。
+     * 判据不是「文件存在且非空」——真实崩溃日志里 cacerts 存在、非空、还解析得出上百张证书，
+     * 但 JDK 报 `trustAnchors parameter must be non-empty`（它是 PEM 软链，JDK 读不到锚点）。
+     * 所以这里走 [TrustStoreRepairer.inspect]：格式必须是 keystore，且证书数达标。
      *
-     * 存在性用 [File.exists]（跟随符号链接）判断：Termux 的 cacerts 常是软链，
-     * 指向的 `/etc/tls/cacerts.pem` 被 rm 后必须判「不就绪」。
+     * Java 8 跑在 PRoot 容器里，证书随容器内 ca-certificates 提供，不在这里判。
      */
-    fun cacertsReady(version: JavaVersion): Boolean {
-        if (version == JavaVersion.Java8) return true
-        // Java 8 跑在 PRoot 容器里，证书随容器内 ca-certificates 提供，不在这里判
-        return javaCandidates(version).any { path ->
-            val cacerts = File(File(path), "lib/security/cacerts")
-            cacerts.exists() && cacerts.length() > 0
-        }
-    }
+    fun cacertsReady(version: JavaVersion): Boolean =
+        version == JavaVersion.Java8 || cacertsHealth(version)?.usable == true
 
     /** 用于 compat 归位：任意一个已知 JDK 完整即可避免移动整个 jvm 目录。 */
     private fun jvmRootHasCompleteJava(jvmRoot: File): Boolean =
@@ -3472,17 +3463,19 @@ class TermuxRuntime(context: Context) {
      * 与 [ensureJvmComplete] 的区别：那个是启动前的「检测到缺失才修」，本方法由用户
      * 在崩溃弹窗里显式触发，**无论检测结果如何都会执行**，并返回可展示的结果。
      *
-     * ## 判定与顺序（2026-11 修订）
+     * ## 判定与顺序（2026-11 修订，按真实崩溃日志重做）
      *
-     * 上一版把 `apt-get --reinstall` 放第一步、只判「文件存在且非空」就当修好，导致两个
-     * 真实故障：
-     * - PKIX 报错时 cacerts 往往**能读、但缺锚点**，检查一过就返回「已恢复」，实际一个
-     *   字节都没改 —— 用户看到的就是「点了修复也不行」；
-     * - 软件源不可用时 apt 白跑 1 分钟，最后仍只用**第一份** PEM 重建，来源被截断时
-     *   造出一个「能读但没用」的库。
+     * 真实日志（Fabric 服务端启动、Java 17、Termux）报的是
+     * `java.security.InvalidAlgorithmParameterException: the trustAnchors parameter must be non-empty`
+     * —— 这是「库能读、但**一个锚点都没有**」，文件本身存在且非空。上一版检查只判存在，
+     * 一过就返回「已恢复」，一个字节都没改；用户看到的就是「点了修复也不行」。
      *
-     * 现在：先离线补齐（秒级，成功即返回），再按需重装，且**修完必须复检**；
-     * 复检结论是「本来就好的」时候不再谎报成功，而是指向真正的原因（网络拦截/证书链）。
+     * 现在：
+     * 1. 深度体检（格式 + 证书数）；
+     * 2. 离线补齐并把 PEM 软链**转成 PKCS12**（JDK 只认 JKS/PKCS12）；
+     * 3. 让 JDK 自己的 `keytool` 读一遍（[verifyStoreWithJvm]）——App 能读不算数；
+     * 4. 仍不行才 `apt-get --reinstall`，最后复检；
+     * 5. 复检结论是「本来就好的」时不再谎报成功，而是指向真正原因。
      */
     fun repairTrustStore(
         version: JavaVersion,
@@ -3527,13 +3520,10 @@ class TermuxRuntime(context: Context) {
             }
         }
 
-        val jvmDirs = javaCandidates(version).filter { File(it).isDirectory }
-        if (jvmDirs.isEmpty()) {
-            return TrustStoreRepair(false, "${version.displayName} 没有安装，请先在「运行环境」里安装。", steps)
-        }
-        // 定位 JDK 真正读取的那份 cacerts：优先已存在的（含软链解析后的真实路径）。
-        val target = jvmDirs.map { File(it, "lib/security/cacerts") }.firstOrNull { it.exists() }
-            ?: File(jvmDirs.first(), "lib/security/cacerts")
+        // 定位 JDK 真正读取的那份 cacerts（与启动前体检共用同一处逻辑）
+        val target = cacertsFile(version)
+            ?: return TrustStoreRepair(false, "${version.displayName} 没有安装，请先在「运行环境」里安装。", steps)
+        note("cacerts 路径 ${target.path}（软链=${runCatching { java.nio.file.Files.isSymbolicLink(target.toPath()) }.getOrDefault(false)}）")
 
         val before = TrustStoreRepairer.inspect(target)
         note("当前证书库 ${target.path}：${before.describe()}（格式 ${before.format}）")
@@ -3542,20 +3532,32 @@ class TermuxRuntime(context: Context) {
         val available = TrustStoreRepairer.collectCertificates(sources)
         note("本机证书包 ${sources.size} 份，可解析 ${available.size} 张证书")
 
-        // ── 第 1 步：离线补齐（沿用原库格式，只加缺的证书，几秒内完成）──
+        // ── 第 1 步：离线补齐 + 转成 JDK 能读的 keystore（几秒内完成，不联网）──
         var write = TrustStoreRepairer.topUp(target, sources)
         if (write.error != null) {
             note("离线补齐失败：${write.error}")
-        } else if (write.imported > 0) {
-            note("离线补齐：新导入 ${write.imported} 张，现共 ${write.health.certificates} 张")
         } else {
-            note("离线补齐：没有缺失的证书（现共 ${write.health.certificates} 张）")
+            note("离线写入：导入 ${write.imported} 张，现共 ${write.health.certificates} 张（${write.health.format}）")
+        }
+        var jvmCheck = verifyStoreWithJvm(version, target.path)
+
+        // App 进程读得出来 ≠ 子 JVM 读得出来（PKCS12 生成方不同、口令/路径细节都可能差）。
+        // JVM 复检不通过时，用「并集」整体重写成新库 —— 这是唯一能兜住
+        // `trustAnchors parameter must be non-empty` 的做法。
+        var rebuiltUnion = false
+        if (jvmCheck != true) {
+            val union = TrustStoreRepairer.certificatesOf(target) + available
+            val rewrite = TrustStoreRepairer.writeNewStore(TrustStoreRepairer.writeDestination(target), union)
+            note("JVM 读不到现有库，改用并集重写：${union.size} 张（${rewrite.error ?: "写入成功"}）")
+            write = rewrite
+            rebuiltUnion = true
+            jvmCheck = verifyStoreWithJvm(version, target.path)
         }
 
         // ── 第 2 步：仍不可用 → 重装 JDK + ca-certificates（需要网络，可能较慢）──
         var reinstalled = false
-        if (!write.health.usable) {
-            note("证书库仍不可用，尝试重装 ${version.packageName} 与 ca-certificates")
+        if (jvmCheck != true) {
+            note("JVM 仍读不到证书库，尝试重装 ${version.packageName} 与 ca-certificates")
             if (prepareAptPackages(version.packageName, "ca-certificates")) {
                 val code = execOnce(
                     "apt-get", "-o", "DPkg::Lock::Timeout=60", "install", "--reinstall",
@@ -3563,17 +3565,16 @@ class TermuxRuntime(context: Context) {
                 )
                 note("apt-get --reinstall 退出码 $code")
                 fixJavaSymlinks(version)
-                val afterReinstall = TrustStoreRepairer.inspect(target)
-                note("重装后证书库：${afterReinstall.describe()}")
-                if (afterReinstall.usable) {
+                note("重装后证书库：${TrustStoreRepairer.inspect(target).describe()}")
+                jvmCheck = verifyStoreWithJvm(version, target.path)
+                if (jvmCheck == true) {
                     reinstalled = true
-                    write = TrustStoreWrite(0, afterReinstall)
                 } else {
-                    // 重装也可能装回一份残缺的库（源被替换/包不完整），再补一次。
+                    // 重装也可能装回一份残缺/PEM 的库（源被替换、包不完整），再补一次。
                     val again = TrustStoreRepairer.topUp(target, sources)
-                    if (again.error != null) note("重装后再补齐失败：${again.error}")
-                    else note("重装后再补齐：新导入 ${again.imported} 张，现共 ${again.health.certificates} 张")
+                    note("重装后再补齐：导入 ${again.imported} 张（${again.error ?: "成功"}）")
                     write = again
+                    jvmCheck = verifyStoreWithJvm(version, target.path)
                 }
             } else {
                 note("软件源不可用，跳过重装")
@@ -3581,10 +3582,11 @@ class TermuxRuntime(context: Context) {
         }
 
         val finalHealth = TrustStoreRepairer.inspect(target)
-        note("复检结果：${finalHealth.describe()}")
+        val good = if (jvmCheck == null) finalHealth.usable else jvmCheck
+        note("复检：${finalHealth.describe()}；JVM 读库=${jvmCheck?.let { if (it) "通过" else "失败" } ?: "无法复检（keytool 缺失）"}")
 
         return when {
-            !finalHealth.usable -> TrustStoreRepair(
+            !good -> TrustStoreRepair(
                 ok = false,
                 summary = "证书库修复失败（当前${finalHealth.describe()}）。" +
                     "本机证书包${if (available.isEmpty()) "也读不到" else "已全部导入"}，" +
@@ -3603,7 +3605,9 @@ class TermuxRuntime(context: Context) {
             else -> TrustStoreRepair(
                 ok = true,
                 summary = "${version.displayName} 证书库已就绪（${finalHealth.certificates} 张证书" +
-                    (if (write.imported > 0) "，本次补入 ${write.imported} 张" else "") +
+                    (if (rebuiltUnion) "，已重建为 JDK 可读的并集信任库"
+                    else if (before.format == TrustStoreFormat.PEM) "，已从 PEM 转成 JDK 可读的 keystore"
+                    else if (write.imported > 0) "，本次补入 ${write.imported} 张" else "") +
                     (if (reinstalled) "，已重装恢复" else "") +
                     "），回核心页重新安装/更新核心即可。",
                 steps = steps
@@ -3647,53 +3651,137 @@ class TermuxRuntime(context: Context) {
     }
 
     /**
-     * installer 专用的独立信任库（`var/lib/mineserve/ca/installer-truststore.p12`）。
+     * 运行期统一信任库（`var/lib/mineserve/ca/java-truststore.p12`）：installer 与
+     * 服务端启动**共用同一份**。
      *
-     * 为什么不让 installer 直接用 JDK 那份 cacerts：**那份库正是出问题的地方** ——
-     * 可能缺锚点、可能格式与 JDK 读法不符，修它要动系统目录、还可能被 apt 覆盖回去。
-     * 这里改为「并集」另起一份：JDK 现有库 + 本机全部证书包，去重后写成 PKCS12，
-     * 再用 `-Djavax.net.ssl.trustStore` 显式喂给 installer。这样即使修不动 JDK 的
-     * cacerts，Forge/NeoForge 安装器照样能下载 libraries。
+     * 为什么不让 JVM 直接用 JDK 那份 cacerts：**那份库正是出问题的地方** ——
+     * 可能缺锚点、可能是指向 PEM 的软链（JDK 读到的锚点数为 0），修它要动系统目录、
+     * 还可能被 apt 覆盖回去。这里改为「并集」另起一份：JDK 现有库 + 本机全部证书包，
+     * 去重后写成 PKCS12，再用 `-Djavax.net.ssl.trustStore` 显式喂进 JVM。
      *
-     * 库不够好（证书数不足 / 写盘失败）时返回 null，让 installer 退回默认行为 ——
+     * 2026-11 用户案例：Fabric 服务端**启动时**下载 vanilla server jar 报
+     * `trustAnchors parameter must be non-empty`。上一版只给 installer 加了属性，
+     * 服务端启动这条路径没覆盖，于是「修完还是崩」。
+     *
+     * JDK 自带 cacerts 体检 + 子 JVM 复检**都**通过时直接用原库（不引入额外文件，
+     * 避免给正常环境增加变量）；否则生成并集库并注入。库不够好时返回 null ——
      * **绝不能传一个读不了的路径**，那会让本来正常的 HTTPS 也一起失败。
      */
-    fun ensureInstallerTrustStore(version: JavaVersion): String? {
-        val file = File(installer.rootDir, "var/lib/mineserve/ca/installer-truststore.p12")
+    fun ensureRuntimeTrustStore(version: JavaVersion): String? {
+        val jdkCacerts = cacertsFile(version)
+        val jdkHealth = jdkCacerts?.let { TrustStoreRepairer.inspect(it) }
+        if (jdkHealth?.usable == true && jdkCacerts != null) {
+            // 体检通过 ≠ 子 JVM 读得到：写库的是 App 进程（Conscrypt 的 PKCS12），
+            // OpenJDK 未必认同一份文件；`-Djavax.net.ssl.trustStore` 指错也是一样静默变空库。
+            // 结论按 mtime 缓存，正常环境每个文件只多 fork 一次 keytool。
+            val mtime = runCatching { jdkCacerts.lastModified() }.getOrDefault(0L)
+            val verified = if (trustStoreVerified[jdkCacerts.path] == mtime) true
+            else (verifyStoreWithJvm(version, jdkCacerts.path) ?: true).also {
+                if (it) trustStoreVerified[jdkCacerts.path] = mtime
+            }
+            if (verified) return null
+            emitLog("[ca] JDK cacerts 体检通过但子 JVM 读不到，改用并集信任库")
+        }
+
+        val file = File(installer.rootDir, "var/lib/mineserve/ca/java-truststore.p12")
         if (TrustStoreRepairer.inspect(file).usable) return file.absolutePath
 
+        emitLog("[ca] JDK cacerts 体检：${jdkHealth?.describe() ?: "未找到"}，改用并集信任库")
+
         val sources = mutableListOf<String>()
-        javaCandidates(version).map { File(it, "lib/security/cacerts") }
-            .firstOrNull { it.exists() }
-            ?.let { jdk ->
-                emitLog("[install] JDK cacerts 体检：${TrustStoreRepairer.inspect(jdk).describe()}")
-                TrustStoreRepairer.exportPem(jdk)?.let(sources::add)
-            }
+        jdkCacerts?.let { jdk -> TrustStoreRepairer.exportPem(jdk)?.let(sources::add) }
         sources += readLocalCertificatePemSources()
 
         val certs = TrustStoreRepairer.collectCertificates(sources)
         if (certs.size < TrustStoreRepairer.MIN_USABLE_CERTIFICATES) {
-            emitLog("[install] 独立信任库来源不足（${certs.size} 张证书），installer 继续用 JDK 自带 cacerts")
+            emitLog("[ca] 并集信任库来源不足（${certs.size} 张证书），继续用 JDK 自带 cacerts")
             return null
         }
         val write = TrustStoreRepairer.writeNewStore(file, certs)
         if (write.error != null || !write.health.usable) {
-            emitLog("[install] 独立信任库不可用（${write.error ?: write.health.describe()}），installer 继续用 JDK 自带 cacerts")
+            emitLog("[ca] 并集信任库不可用（${write.error ?: write.health.describe()}），继续用 JDK 自带 cacerts")
             return null
         }
-        emitLog("[install] 已生成独立信任库 ${file.absolutePath}（${write.health.certificates} 张证书），installer 不再依赖 JDK cacerts")
+        emitLog("[ca] 已生成并集信任库 ${file.absolutePath}（${write.health.certificates} 张证书）")
         return file.absolutePath
     }
 
-    /** installer 用的 TLS 系统属性；独立信任库不可用时返回空数组（保持默认行为）。 */
-    fun installerTrustStoreProps(version: JavaVersion): Array<String> {
-        val path = runCatching { ensureInstallerTrustStore(version) }.getOrNull() ?: return emptyArray()
+    /**
+     * 让 JVM 自己读一遍信任库，确认「信任锚不为空」。
+     *
+     * 为什么不能只靠 `TrustStoreRepairer.inspect`：那是在 App 进程里用同一套
+     * KeyStore API 读的，能证明文件格式没坏，但不能证明 **子 JVM** 会用同一个路径/口令
+     * 读到它（`-Djavax.net.ssl.trustStore` 拼错、路径不可读、JDK 版本不认 PKCS12 都会翻车）。
+     * 所以再用 JDK 自带的 `keytool`（同目录、同 libjli、同读法）数一遍条目 ——
+     * 数得出来才算真的修好了。
+     */
+    fun verifyStoreWithJvm(version: JavaVersion, storePath: String): Boolean? {
+        val jvmDir = javaCandidates(version).map(::File).firstOrNull { it.isDirectory } ?: return null
+        val keytool = File(jvmDir, "bin/keytool")
+        if (!keytool.exists()) {
+            emitLog("[ca] $keytool 不存在，跳过 JVM 复检")
+            return null
+        }
+        // 必须显式给 LD_LIBRARY_PATH：keytool 是 native 启动器，直接执行时找不到同目录的
+        // libjli.so（Termux 的 JDK 没有 $ORIGIN RPATH），会以 exit=127/1 退出，
+        // 于是「明明库是好的」也被判成不可用，白丢一次修复机会。
+        val libPath = listOf(
+            File(jvmDir, "lib").absolutePath,
+            File(jvmDir, "lib/jli").absolutePath,
+            File(installer.rootDir, "lib").absolutePath,
+            File(installer.rootDir, "usr/lib").absolutePath,
+            "/system/lib64"
+        ).joinToString(":")
+        val result = runCatching {
+            val pb = ProcessBuilder(
+                keytool.absolutePath, "-list", "-keystore", storePath,
+                "-storepass", TrustStoreRepairer.DEFAULT_PASSWORD
+            ).redirectErrorStream(true).apply {
+                environment()["LD_LIBRARY_PATH"] = libPath
+                environment()["JAVA_HOME"] = jvmDir.absolutePath
+                directory(File(installer.rootDir, "home").apply { mkdirs() })
+            }.start()
+            val text = pb.inputStream.bufferedReader().use { it.readText() }
+            val finished = pb.waitFor(20, TimeUnit.SECONDS)
+            if (!finished) pb.destroyForcibly()
+            ExecOutput(if (finished) pb.exitValue() else 124, text)
+        }.getOrNull() ?: return null
+        if (result.code != 0) {
+            emitLog("[ca] keytool 读库失败（exit=${result.code}）：${result.text.take(200).replace("\n", " ")}")
+            return false
+        }
+        // keytool 输出的文案随版本变（"Your keystore contains N entries"），退一步也认条目行。
+        val entries = Regex("""contains (\d+) entr""").find(result.text)?.groupValues?.get(1)?.toIntOrNull()
+            ?: Regex("""证书条目数[:：]\s*(\d+)""").find(result.text)?.groupValues?.get(1)?.toIntOrNull()
+            ?: result.text.lines().count { it.contains(", trustedCertEntry") }
+        val ok = entries >= TrustStoreRepairer.MIN_USABLE_CERTIFICATES
+        emitLog("[ca] keytool 复检 $storePath：$entries 条${if (ok) "，可用" else "，不可用"}")
+        return ok
+    }
+
+    private data class ExecOutput(val code: Int, val text: String)
+
+    /**
+     * 给子 JVM（installer / 服务端本体 / 任何需要 HTTPS 的 java 进程）注入的信任库属性。
+     * 并集库不可用或复检不过时返回空数组，让 JVM 保持默认行为。
+     */
+    fun javaTrustStoreProps(version: JavaVersion): Array<String> {
+        if (version == JavaVersion.Java8) return emptyArray()
+        val path = runCatching { ensureRuntimeTrustStore(version) }.getOrNull() ?: return emptyArray()
+        // 每次启动都 fork 一次 keytool 没必要：文件没变就复用上次的复检结论。
+        val mtime = runCatching { File(path).lastModified() }.getOrDefault(0L)
+        val verified = if (trustStoreVerified[path] == mtime) true else
+            verifyStoreWithJvm(version, path).also { if (it == true) trustStoreVerified[path] = mtime }
+        if (verified != true) return emptyArray()
         return arrayOf(
             "-Djavax.net.ssl.trustStore=$path",
             "-Djavax.net.ssl.trustStoreType=PKCS12",
             "-Djavax.net.ssl.trustStorePassword=${TrustStoreRepairer.DEFAULT_PASSWORD}"
         )
     }
+
+    /** 并集信任库的复检结论缓存：路径 → 通过复检时的 mtime。 */
+    private val trustStoreVerified = java.util.concurrent.ConcurrentHashMap<String, Long>()
 
     /**
      * 诊断单个命令的执行环境（Termux 会话命令失败时输出，便于定位根因）。
@@ -4649,6 +4737,16 @@ class TermuxRuntime(context: Context) {
         // `logcat --pid` 精确捞出该进程的 abort message（见 captureNativeAbortIfNeeded）。
         // 不用 java.lang.Process#pid()：Android 的 java.lang.Process 没有这个方法；
         // 也不用反射拿 libcore 的私有 pid 字段：那属于隐藏 API，会在部分系统上直接抛异常。
+        // 服务端本体启动后自己还会走 HTTPS：Fabric/Quilt 的 launcher 在**启动时**下载
+        // vanilla server jar、Forge 首次启动补 libraries、部分插件更新自身。
+        // JDK 的 cacerts 不可用（PEM 软链 / 空库）时这些全会报
+        // `trustAnchors parameter must be non-empty` —— 2026-11 的用户崩溃就是这条，
+        // 而当时的「一键修复」只覆盖 installer，服务端启动这条路径照样崩。
+        // 这里把复检通过的并集信任库显式喂进去；不可用时为空，保持默认行为。
+        val trustStoreArgs = if (javaVendor == JavaVendor.Termux) {
+            javaTrustStoreProps(javaVersion).joinToString(" ") { "'$it'" }
+        } else ""
+        if (trustStoreArgs.isNotEmpty()) emitLog("[startMc] 使用并集信任库：$trustStoreArgs")
         val javaCmd = "echo ${MC_PID_PROBE_PREFIX}\$\$; " +
             "export PATH='$jvmBinDir:$prefix/bin:$prefix/usr/bin:$compatUsr/bin:$prefix/bin/applets:$prefix/libexec:/system/bin:/system/xbin'; " +
             "export LD_LIBRARY_PATH='$libraryPath'; " +
@@ -4662,6 +4760,7 @@ class TermuxRuntime(context: Context) {
             (systemTimeZoneId()?.let { "export TZ='$it'; " } ?: "") +
             "cd '$serverDir' && " +
             "exec '$javaPath' $nativeAccessArg-Djava.io.tmpdir='$jvmTmpDir' -Djna.tmpdir='$jvmTmpDir' " +
+            (if (trustStoreArgs.isEmpty()) "" else "$trustStoreArgs ") +
             baseJvmProperties(maxHeapMb) +
             "-Xmx${maxHeapMb}m " + (launchArgs ?: "-jar $jarPath") + if (appendNogui) " nogui" else ""
 

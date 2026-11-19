@@ -92,6 +92,31 @@ class TrustStoreRepairerTest {
     }
 
     @Test
+    fun `PEM 即使证书很多也不算 JDK 可用`() {
+        // 真实崩溃日志：cacerts 存在、非空、能解析出上百张证书，JDK 却报
+        // `trustAnchors parameter must be non-empty` —— 它是 PEM 文本，JDK 读不到锚点。
+        // 这条锁住「只有 keystore 格式 + 证书数达标才算可用」。
+        assertTrue("PEM 一律不可用", !TrustStoreHealth(TrustStoreFormat.PEM, 200).usable)
+        assertTrue("keystore 且证书够多才可用", TrustStoreHealth(TrustStoreFormat.KEYSTORE, 200).usable)
+        assertTrue("keystore 但证书太少仍不可用", !TrustStoreHealth(TrustStoreFormat.KEYSTORE, 3).usable)
+        assertTrue(!TrustStoreHealth(TrustStoreFormat.MISSING, 0).usable)
+    }
+
+    @Test
+    fun `软链指向 PEM 时写回软链自身而不是链接目标`() {
+        // 转换时必须替换软链，否则会把 apt/curl 共用的 PEM 证书包灌成二进制。
+        val bundle = tmp.newFile("ca-certificates.crt")
+        bundle.writeText("-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n")
+        val link = File(tmp.root, "cacerts")
+        val created = runCatching {
+            java.nio.file.Files.createSymbolicLink(link.toPath(), bundle.toPath())
+        }.isSuccess
+        if (!created) return // Windows 非开发者模式无权限建软链，跳过
+        assertEquals("软链指向 PEM → 写软链自身", link.absolutePath, TrustStoreRepairer.writeDestination(link).absolutePath)
+        assertTrue("普通文件原样返回", TrustStoreRepairer.writeDestination(bundle).absolutePath == bundle.absolutePath)
+    }
+
+    @Test
     fun `补齐时拿不到任何证书就不动原文件`() {
         // 本机证书包全被截断/损坏时，topUp 必须原地失败，而不是把原库清空。
         val target = tmp.newFile("cacerts")

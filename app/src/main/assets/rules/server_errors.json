@@ -115,9 +115,9 @@
         "unable to find valid certification path"
       ],
       "label": "Java 证书库缺失或损坏",
-      "detail": "Java 运行环境的根证书库（cacerts）缺失、为空或缺少需要的根证书，JVM 内所有 HTTPS 请求都会握手失败——Forge/Fabric 安装器下载 libraries、补装字体/依赖等操作会全部报下载失败。这不是字体库问题。少数情况下证书库本身正常，是对端证书链不完整或网络侧（VPN/代理/广告过滤）拦截了 TLS。",
+      "detail": "Java 运行环境的根证书库（cacerts）不可用：JDK 读到的信任锚为空（`trustAnchors parameter must be non-empty`）或缺少需要的根证书，JVM 内所有 HTTPS 请求都会握手失败——Forge/Fabric 安装器下载 libraries、Fabric 服务端启动时下载 vanilla server jar、补装字体/依赖等操作会全部报下载失败。常见成因是 cacerts 变成了 PEM 文本软链（JDK 不认这个格式）、被清成空库，或 ca-certificates 丢失。这不是字体库问题。少数情况下证书库本身正常，是对端证书链不完整或网络侧（VPN/代理/广告过滤）拦截了 TLS。",
       "evidence": "检测到 trustAnchors/PKIX 证书校验错误",
-      "suggest": "打开崩溃弹窗「分析」页，点「一键修复」：App 会先用本机证书包离线补齐 cacerts（只加缺的证书，保留原有条目），不足时再重装当前 Java 与 ca-certificates。修复结果会给出复检结论：若提示「证书库本身是正常的」，说明问题在网络侧（关掉 VPN/代理/广告过滤或换网络）或对端证书链，重装 Java 无用。修复后回核心页重新安装/更新核心即可。"
+      "suggest": "打开崩溃弹窗「分析」页，点「一键修复」：App 会先用本机证书包离线补齐 cacerts，cacerts 是 PEM 文本/软链时自动转成 JDK 可读的 keystore，然后用 JDK 自带的 keytool 复检；仍不可用才重装当前 Java 与 ca-certificates。修复结果会给出复检结论：若提示「证书库本身是正常的」，说明问题在网络侧（关掉 VPN/代理/广告过滤或换网络）或对端证书链，重装 Java 无用。另外服务端启动与安装器都会自动注入一份并集信任库，即使 JDK 的 cacerts 修不好也能正常下载。修复后回核心页重新安装/更新核心即可。"
     },
     {
       "id": "launch-file-missing",

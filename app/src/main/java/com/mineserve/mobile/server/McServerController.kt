@@ -291,7 +291,7 @@ class McServerController(
                 // 属性能给就给，给不了（库不够好）就退回默认行为。
                 termux.execOnce(
                     "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
-                    *termux.installerTrustStoreProps(javaVersion),
+                    *termux.javaTrustStoreProps(javaVersion),
                     "-jar", jarPath, "--installServer", serverDir.absolutePath
                 )
             }
@@ -569,7 +569,8 @@ class McServerController(
                         )
                     } else {
                         termux.execOnce(
-                            "java", "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
+                            "java", *termux.javaTrustStoreProps(normalizedConfig.selectedJavaVersion),
+                            "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
                             "--install-dir=${serverDir.absolutePath}", "--download-server"
                         )
                     }
