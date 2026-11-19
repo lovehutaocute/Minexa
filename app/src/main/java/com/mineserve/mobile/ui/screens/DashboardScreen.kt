@@ -924,40 +924,41 @@ private fun DashboardHeroBlock(
     vm: McViewModel,
     onRefresh: () -> Unit
 ) {
-    val installedCores by vm.config
-        .map { cfg -> cfg.installedCores.filter { it.location == StorageLocation.Internal } }
-        .distinctUntilChanged().collectAsState(initial = emptyList())
-    val activeCoreName by vm.config.map { it.activeCoreName }.distinctUntilChanged().collectAsState(initial = null)
-    val selectedCore by vm.config.map { it.selectedCore }.distinctUntilChanged().collectAsState(initial = ServerCore.Paper)
-    val mcVersion by vm.config.map { it.mcVersion }.distinctUntilChanged().collectAsState(initial = "")
+    val installedCores by remember(vm) {
+        vm.config
+            .map { cfg -> cfg.installedCores.filter { it.location == StorageLocation.Internal } }
+            .distinctUntilChanged()
+    }.collectAsState(initial = emptyList())
+    val activeCoreName by remember(vm) { vm.config.map { it.activeCoreName }.distinctUntilChanged() }.collectAsState(initial = null)
+    val selectedCore by remember(vm) { vm.config.map { it.selectedCore }.distinctUntilChanged() }.collectAsState(initial = ServerCore.Paper)
+    val mcVersion by remember(vm) { vm.config.map { it.mcVersion }.distinctUntilChanged() }.collectAsState(initial = "")
     val activeCore = installedCores.find { it.name == activeCoreName }
     val coreLabel = activeCore?.let { "${it.name} (${it.core.displayName} ${it.version})" }
         ?: "${selectedCore.displayName} ${mcVersion}"
-    val heroState by vm.serverState
-        .map { state ->
-            ServerState(
-                isRunning = state.isRunning,
-                tps = state.tps,
-                onlinePlayers = state.onlinePlayers,
-                maxPlayers = state.maxPlayers,
-                usedMemoryMb = state.usedMemoryMb,
-                runningSinceMs = state.runningSinceMs,
-                startupPhase = state.startupPhase
-            )
-        }
-        .distinctUntilChanged()
-        .collectAsState(initial = ServerState())
+    val heroState by remember(vm) {
+        vm.serverState
+            .map { state ->
+                ServerState(
+                    isRunning = state.isRunning,
+                    tps = state.tps,
+                    onlinePlayers = state.onlinePlayers,
+                    maxPlayers = state.maxPlayers,
+                    usedMemoryMb = state.usedMemoryMb,
+                    runningSinceMs = state.runningSinceMs,
+                    startupPhase = state.startupPhase
+                )
+            }
+            .distinctUntilChanged()
+    }.collectAsState(initial = ServerState())
     val resources by vm.serverResources.collectAsState()
     val isRefreshingStatus by vm.isRefreshingStatus.collectAsState()
     val lastRefreshAtMs by vm.lastStatusRefreshAtMs.collectAsState()
-    val skipStartupProgress by vm.config
-        .map { it.skipStartupProgress }
-        .distinctUntilChanged()
-        .collectAsState(initial = false)
-    val maxHeapMb by vm.config
-        .map { it.maxHeapMb }
-        .distinctUntilChanged()
-        .collectAsState(initial = 1024)
+    val skipStartupProgress by remember(vm) {
+        vm.config.map { it.skipStartupProgress }.distinctUntilChanged()
+    }.collectAsState(initial = false)
+    val maxHeapMb by remember(vm) {
+        vm.config.map { it.maxHeapMb }.distinctUntilChanged()
+    }.collectAsState(initial = 1024)
     val serverProperties by vm.serverProperties.collectAsState()
     val onlineModeEnabled = serverProperties["online-mode"]
         ?.trim()
