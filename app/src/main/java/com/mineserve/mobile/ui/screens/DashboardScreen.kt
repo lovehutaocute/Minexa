@@ -1546,18 +1546,18 @@ private fun StartSettingsSheet(
         scope.launch { sheetState.hide() }.invokeOnCompletion { onDismiss() }
     }
 
-    val runtimeKind by vm.config.map { it.runtimeKind }.distinctUntilChanged().collectAsState(initial = RuntimeKind.Java)
-    val selectedJavaRuntime by vm.config.map { it.selectedJavaRuntime }.distinctUntilChanged().collectAsState(initial = JavaRuntime.Default)
-    val selectedPhpVersion by vm.config.map { it.selectedPhpVersion }.distinctUntilChanged().collectAsState(initial = PhpVersion.Default)
+    val runtimeKind by remember(vm) { vm.config.map { it.runtimeKind }.distinctUntilChanged() }.collectAsState(initial = RuntimeKind.Java)
+    val selectedJavaRuntime by remember(vm) { vm.config.map { it.selectedJavaRuntime }.distinctUntilChanged() }.collectAsState(initial = JavaRuntime.Default)
+    val selectedPhpVersion by remember(vm) { vm.config.map { it.selectedPhpVersion }.distinctUntilChanged() }.collectAsState(initial = PhpVersion.Default)
     val installedJava by vm.installedJava.collectAsState()
     val installedPhp by vm.installedPhp.collectAsState()
-    val prootDistro by vm.config.map { it.prootDistro }.distinctUntilChanged().collectAsState(initial = ProotDistro.Default)
-    val customCommandEnabled by vm.config.map { it.advancedCustomCommandEnabled }.distinctUntilChanged().collectAsState(initial = false)
-    val customCommand by vm.config.map { it.advancedCustomCommand }.distinctUntilChanged().collectAsState(initial = "")
-    val autoRestartOnCrash by vm.config.map { it.autoRestartOnCrash }.distinctUntilChanged().collectAsState(initial = false)
-    val skipStartupProgress by vm.config.map { it.skipStartupProgress }.distinctUntilChanged().collectAsState(initial = false)
-    val maxHeapMb by vm.config.map { it.maxHeapMb }.distinctUntilChanged().collectAsState(initial = 1024)
-    val isRunning by vm.serverState.map { it.isRunning }.distinctUntilChanged().collectAsState(initial = false)
+    val prootDistro by remember(vm) { vm.config.map { it.prootDistro }.distinctUntilChanged() }.collectAsState(initial = ProotDistro.Default)
+    val customCommandEnabled by remember(vm) { vm.config.map { it.advancedCustomCommandEnabled }.distinctUntilChanged() }.collectAsState(initial = false)
+    val customCommand by remember(vm) { vm.config.map { it.advancedCustomCommand }.distinctUntilChanged() }.collectAsState(initial = "")
+    val autoRestartOnCrash by remember(vm) { vm.config.map { it.autoRestartOnCrash }.distinctUntilChanged() }.collectAsState(initial = false)
+    val skipStartupProgress by remember(vm) { vm.config.map { it.skipStartupProgress }.distinctUntilChanged() }.collectAsState(initial = false)
+    val maxHeapMb by remember(vm) { vm.config.map { it.maxHeapMb }.distinctUntilChanged() }.collectAsState(initial = 1024)
+    val isRunning by remember(vm) { vm.serverState.map { it.isRunning }.distinctUntilChanged() }.collectAsState(initial = false)
 
     val installedLabel = stringResource(R.string.dash_java_installed)
     val notInstalledLabel = stringResource(R.string.dash_java_not_installed)
