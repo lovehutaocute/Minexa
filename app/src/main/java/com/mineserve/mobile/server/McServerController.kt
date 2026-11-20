@@ -251,6 +251,54 @@ class McServerController(
         "PowerNukkitX/PowerNukkitX-Legacy"
     )
 
+    /**
+     * installer 下载依赖库用的 maven 镜像（BMCLAPI，与官方 /releases 同步）。
+     * NeoForge/新版 Forge（installer 2.0）原生支持 `--mirror`：DownloadUtils 对所有
+     * 非 libraries.minecraft.net 的 maven URL 改为 `mirrorUrl + <maven path>`，
+     * 且镜像失败会回落官方源。国内直连 maven.neoforged.net 会被 Connection reset，
+     * 2026-11-20 的用户日志正是这条路。
+     */
+    private val installerMavenMirror = "https://bmclapi2.bangbang93.com/maven/"
+
+    /**
+     * 是否给 installer 传 --mirror：NeoForge 全系列支持；Forge 仅 1.17+（同源 2.0 installer）。
+     * 老 Forge（≤1.16）用的是 1.x 分支 installer，不认识 --mirror，jopt 会对未知参数
+     * 直接抛异常 —— 传了会让本来能装的旧版直接崩，所以必须按版本闸。
+     */
+    private fun installerMirrorUrlFor(core: ServerCore, mcVersion: String): String? = when (core) {
+        ServerCore.NeoForge -> installerMavenMirror
+        ServerCore.Forge -> {
+            val minor = mcVersion.split(".").getOrNull(1)?.filter(Char::isDigit)?.toIntOrNull() ?: 0
+            if (minor >= 17) installerMavenMirror else null
+        }
+        else -> null
+    }
+
+    /**
+     * 单个依赖库的下载源序列（镜像在前、官方源兜底在后）。
+     *
+     * BMCLAPI 的 maven 映射（与官方 releases、libraries 两个仓库同步）：
+     * - maven.neoforged.net/releases 下的路径 → bmclapi2.bangbang93.com/maven 下同路径
+     * - libraries.minecraft.net 下的路径      → bmclapi2.bangbang93.com/maven 下同路径
+     *
+     * typetools、guava 这类库不在 NeoForged 自家仓库而在 Maven Central，
+     * BMCLAPI 偶发限速/CDN 抖动时会拉不到（2026-11-20 真机 70 库挂 2 个），
+     * 所以再加一道阿里云 public 仓（Maven Central 全量镜像，国内稳定）：
+     * 没有该构件时返回 404，会顺位跳到下一个源，不会误命中。
+     */
+    private fun neoforgeLibraryMirrors(url: String): List<String> = buildList {
+        if (url.startsWith("https://maven.neoforged.net/releases/")) {
+            val path = url.removePrefix("https://maven.neoforged.net/releases/")
+            add("https://bmclapi2.bangbang93.com/maven/$path")
+            add("https://maven.aliyun.com/repository/public/$path")
+        }
+        if (url.startsWith("https://libraries.minecraft.net/")) {
+            val path = url.removePrefix("https://libraries.minecraft.net/")
+            add("https://bmclapi2.bangbang93.com/maven/$path")
+        }
+        add(url)
+    }
+
     @Volatile
     private var powerNukkitXVersionCache: Map<String, CoreVersionOption> = emptyMap()
 
@@ -270,30 +318,43 @@ class McServerController(
         label: String,
         tempDir: File,
         javaVersion: JavaVersion,
-        javaVendor: JavaVendor = JavaVendor.Termux
+        javaVendor: JavaVendor = JavaVendor.Termux,
+        mirrorUrl: String? = null
     ): Int {
         var lastCode = 1
+        // 2.0 installer 的 --mirror 是 jopt 的 --mirror <URL>，失败自动回落官方源。
+        val mirrorArgs = mirrorUrl?.let { arrayOf("--mirror", it) } ?: emptyArray<String>()
         repeat(3) { attempt ->
             // Installer runs before start(), so repair the selected JDK wrapper here as well.
             // 来宾链路没有宿主侧的 java 包装器可修，跳过（容器内的 JDK 由 apt 管）。
+            // FCL 来源整包自带运行时，autoRepairRuntime 内部直接返回，不会碰 apt。
             if (!isProotGuestRuntime(javaVendor, javaVersion)) {
-                termux.autoRepairRuntime(javaVersion, needsFonts = false)
+                termux.autoRepairRuntime(javaVersion, needsFonts = false, vendor = javaVendor)
             }
-            lastCode = if (isProotGuestRuntime(javaVendor, javaVersion)) {
-                termux.runProotInstaller(
-                    jarPath,
-                    serverDir,
-                    profile = termux.resolveProotProfile(javaVendor, javaVersion)
-                )
-            } else {
-                // 显式喂一份「并集」信任库：installer 下载 libraries 走 HTTPS，
-                // JDK 自带 cacerts 缺失/残缺时它会全部握手失败（PKIX / trustAnchors）。
-                // 属性能给就给，给不了（库不够好）就退回默认行为。
-                termux.execOnce(
-                    "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
-                    *termux.javaTrustStoreProps(javaVersion),
-                    "-jar", jarPath, "--installServer", serverDir.absolutePath
-                )
+            lastCode = when {
+                isProotGuestRuntime(javaVendor, javaVersion) ->
+                    termux.runProotInstaller(
+                        jarPath,
+                        serverDir,
+                        profile = termux.resolveProotProfile(javaVendor, javaVersion),
+                        mirrorUrl = mirrorUrl
+                    )
+                // FCL 的 java 不在 Termux PATH 里（在 filesDir/jvm-fcl），execOnce("java")
+                // 只会 127；必须走带 Fcl 专用环境（LD_LIBRARY_PATH 不含 Termux 目录）的命令。
+                javaVendor == JavaVendor.Fcl ->
+                    termux.runFclJavaCommand(
+                        javaVersion, serverDir,
+                        "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
+                    )
+                else ->
+                    // 显式喂一份「并集」信任库：installer 下载 libraries 走 HTTPS，
+                    // JDK 自带 cacerts 缺失/残缺时它会全部握手失败（PKIX / trustAnchors）。
+                    // 属性能给就给，给不了（库不够好）就退回默认行为。
+                    termux.execOnce(
+                        "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
+                        *termux.javaTrustStoreProps(javaVersion),
+                        "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
+                    )
             }
             if (lastCode == 0) return 0
             if (attempt < 2) {
@@ -305,6 +366,116 @@ class McServerController(
     }
 
     private val json = Json { ignoreUnknownKeys = true }
+
+    /**
+     * NeoForge 专用：跑 installer 前，把 installer jar 内 install_profile.json 声明的
+     * 依赖库逐个预下载到 serverDir/libraries/。
+     *
+     * 为什么不能用 --mirror 解决：NeoForge 的 installer 是 neoforged/LegacyInstaller
+     * （与 MinecraftForge 2.0 installer 不同源，堆栈里的 Downloader.java 只有它有）。
+     * 它虽解析 --mirror，但 Mirror 只被拿来显示「赞助横幅」，**不重写任何下载 URL** ——
+     * 库照样从 maven.neoforged.net 拉，国内直接 Connection reset/timeout（2026-11-20
+     * 的用户日志即此）。而它的 Downloader 对「已存在且 sha1 匹配」的文件直接跳过网络，
+     * 所以预下载是正解：下好之后 installer 顺带替我们复检一遍校验和。
+     *
+     * 不抛异常：单库下载失败时 installer 仍会自己重试（官方源兕底）。返回失败数。
+     * 安装重跑（auto-repair 路径）同样受益：已下好的库 sha1 匹配即跳过。
+     */
+    private fun preDownloadInstallerLibraries(
+        installerJar: File,
+        serverDir: File,
+        mirrorsFor: (String) -> List<String>
+    ): Int {
+        val libraries = try {
+            JarFile(installerJar).use { jar ->
+                jar.getEntry("install_profile.json")?.let { entry ->
+                    json.parseToJsonElement(
+                        jar.getInputStream(entry).bufferedReader().use { it.readText() }
+                    ).jsonObject["libraries"]?.jsonArray
+                }
+            } ?: return 0
+        } catch (e: Exception) {
+            termux.emitLog("[install] 读取 install_profile.json 失败（${e.message}），跳过依赖库预下载")
+            return 0
+        }
+        var ok = 0; var already = 0; var failed = 0
+        val libsDir = File(serverDir, "libraries")
+        for ((index, libEl) in libraries.withIndex()) {
+            val artifact = runCatching {
+                libEl.jsonObject["downloads"]?.jsonObject?.get("artifact")?.jsonObject
+            }.getOrNull() ?: continue
+            val path = artifact["path"]?.jsonPrimitive?.contentOrNull ?: continue
+            val url = artifact["url"]?.jsonPrimitive?.contentOrNull
+            // 没直链的库（installer 自带 / 由 processor 生成）不归这里管
+            if (url.isNullOrBlank()) continue
+            val sha1 = artifact["sha1"]?.jsonPrimitive?.contentOrNull
+            val target = File(libsDir, path)
+            if (target.exists() && sha1 != null && sha1Of(target) == sha1) { already++; continue }
+            var done = false
+            // 两轮重试：BMCLAPI 的短时限速/CDN 抖动是真机实测过的失败模式
+            // （70 个库挂 2 个），单个库多试一轮就能敆回来。
+            for (round in 0 until 2) {
+                for (candidate in mirrorsFor(url)) {
+                    if (!downloadSmallFile(candidate, target)) continue
+                    if (sha1 == null || sha1Of(target) == sha1) { done = true; break }
+                    target.delete() // 校验不过：换下一个源
+                }
+                if (done) break
+                if (round == 0) runCatching { Thread.sleep(3000) }
+            }
+            if (done) ok++ else failed++
+            if ((index + 1) % 10 == 0) {
+                termux.emitLog("[install] 依赖库预下载进度：${index + 1}/${libraries.size}")
+            }
+        }
+        termux.emitLog(
+            "[install] 依赖库预下载：新下 $ok、已存在 $already" +
+                (if (failed > 0) "、失败 $failed（installer 会用官方源重试）" else "，全部就绪")
+        )
+        return failed
+    }
+
+    private fun sha1Of(file: File): String? = runCatching {
+        val digest = MessageDigest.getInstance("SHA-1")
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n < 0) break
+                digest.update(buf, 0, n)
+            }
+        }
+        digest.digest().joinToString("") { "%02x".format(it) }
+    }.getOrNull()
+
+    /** 小文件整档下载（库 jar 几百 KB～几 MB）：失败删临时文件返回 false，不抛异常。 */
+    private fun downloadSmallFile(urlStr: String, target: File): Boolean {
+        val tmp = File(target.parentFile, target.name + ".part")
+        return try {
+            target.parentFile?.mkdirs()
+            val conn = URL(urlStr).openConnection() as HttpURLConnection
+            conn.connectTimeout = 20_000
+            conn.readTimeout = 60_000
+            conn.setRequestProperty("User-Agent", "Minexa/1.0")
+            conn.setRequestProperty("Accept-Encoding", "identity")
+            try {
+                if (conn.responseCode != 200) return false
+                conn.inputStream.use { input ->
+                    tmp.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
+                }
+            } finally {
+                conn.disconnect()
+            }
+            if (!tmp.renameTo(target)) {
+                tmp.copyTo(target, overwrite = true)
+                tmp.delete()
+            }
+            true
+        } catch (e: Exception) {
+            runCatching { tmp.delete() }
+            false
+        }
+    }
 
     /** 崩溃报告管理器：MC 进程异常退出时捕获日志生成报告 */
     private val crashReportManager = CrashReportManager(termux)
@@ -522,7 +693,8 @@ class McServerController(
                 ServerCore.Forge -> {
                     val code = runInstallerWithRetry(
                         jarPath, serverDir, normalizedConfig.selectedCore.displayName, installerTempDir,
-                        normalizedConfig.selectedJavaVersion
+                        normalizedConfig.selectedJavaVersion, normalizedConfig.selectedJavaVendor,
+                        installerMirrorUrlFor(ServerCore.Forge, normalizedConfig.mcVersion)
                     )
                     if (code != 0) {
                         // 半成品目录必须清掉：留着它，下次回前台 scanUnregisteredServers
@@ -533,9 +705,13 @@ class McServerController(
                     }
                 }
                 ServerCore.NeoForge -> {
+                    // LegacyInstaller 不吃 --mirror（见 preDownloadInstallerLibraries 注释），
+                    // 先把依赖库经 BMCLAPI 预下到位，installer 再离线校验。
+                    preDownloadInstallerLibraries(File(jarPath), serverDir, ::neoforgeLibraryMirrors)
                     val code = runInstallerWithRetry(
                         jarPath, serverDir, normalizedConfig.selectedCore.displayName, installerTempDir,
-                        normalizedConfig.selectedJavaVersion
+                        normalizedConfig.selectedJavaVersion, normalizedConfig.selectedJavaVendor,
+                        installerMavenMirror
                     )
                     if (code != 0) {
                         FileOps.deleteRecursively(serverDir)
@@ -566,6 +742,14 @@ class McServerController(
                                 "-Djava.io.tmpdir=/tmp -jar '$guestJar' " +
                                 "install server '${normalizedConfig.mcVersion}' --install-dir=${TermuxRuntime.GUEST_SERVER_DIR} --download-server",
                             profile = profile
+                        )
+                    } else if (normalizedConfig.selectedJavaVendor == JavaVendor.Fcl) {
+                        // FCL：java 不在 Termux PATH（filesDir/jvm-fcl），同 Forge/NeoForge
+                        // 一样必须走 Fcl 专用命令；Quilt installer 参数与 Termux 路径一致。
+                        termux.runFclJavaCommand(
+                            normalizedConfig.selectedJavaVersion, serverDir,
+                            "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
+                            "--install-dir=${serverDir.absolutePath}", "--download-server"
                         )
                     } else {
                         termux.execOnce(
@@ -2410,7 +2594,10 @@ class McServerController(
                     ?: throw RuntimeException("${coreType.displayName} 核心入口缺失，请检查导入目录")
                 bukkitLaunchArguments(serverDir, coreJar)
             }
-            ServerCore.Forge -> forgeLaunchArguments(serverDir, effectiveLaunchJava)
+            ServerCore.Forge -> forgeLaunchArguments(
+                serverDir, effectiveLaunchJava, launchVendor,
+                installerMirrorUrlFor(ServerCore.Forge, config.mcVersion)
+            )
             ServerCore.NeoForge -> File(serverDir, "libraries/net/neoforged/neoforge")
                 .walkTopDown().firstOrNull { it.name == "unix_args.txt" }
                 ?.let { "@${it.absolutePath}" }
@@ -2612,7 +2799,12 @@ class McServerController(
      * Forge 1.17+ writes unix_args.txt, while Forge 1.12.2 and older writes a
      * top-level forge-*.jar.  The installer jar itself remains server.jar.
      */
-    private suspend fun forgeLaunchArguments(serverDir: File, javaVersion: JavaVersion): String {
+    private suspend fun forgeLaunchArguments(
+        serverDir: File,
+        javaVersion: JavaVersion,
+        javaVendor: JavaVendor = JavaVendor.Termux,
+        mirrorUrl: String? = null
+    ): String {
         // 来宾判定统一走谓词：以前这里只有 `javaVersion == Java8` 一处判断，
         // 新增 Proot 来源后必须同步，否则会出现「启动走容器、路径按宿主拼」。
         val isGuest = isProotGuestRuntime(termux.selectedProotVendor, javaVersion)
@@ -2660,7 +2852,9 @@ class McServerController(
                 serverDir,
                 "Forge",
                 File(termux.installer.rootDir, "tmp").apply { mkdirs() },
-                javaVersion
+                javaVersion,
+                javaVendor,
+                mirrorUrl
             )
             if (code == 0) {
                 findLegacyForgeServerJar(serverDir, javaVersion)?.let { jar ->

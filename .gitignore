@@ -49,3 +49,21 @@ app/.cxx*/
 # Cloudflare 部署本地缓存（含账号/项目绑定信息）
 .wrangler/
 
+# ---- 密钥 / 凭据：本仓库为 public，任何形态都不许进库 ----
+.env
+.env.*
+*.jks
+*.p12
+*.pem
+github-token.txt
+*token*.txt
+*secret*.json
+*credential*.json
+
+# ---- 本地归档 / 一次性补丁残留 ----
+*.bundle
+*.orig
+*.rej
+_archive/
+archive/
+

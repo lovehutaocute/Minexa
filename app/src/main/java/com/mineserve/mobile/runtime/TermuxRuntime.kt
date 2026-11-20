@@ -2165,7 +2165,9 @@ class TermuxRuntime(context: Context) {
         jarPath: String,
         serverDir: File,
         timeoutMs: Long = 900_000,
-        profile: ProotContainerProfile = legacyJava8Profile
+        profile: ProotContainerProfile = legacyJava8Profile,
+        /** 传给 installer 的 --mirror（NeoForge/新版 Forge 原生支持；镜像失败自动回落官方） */
+        mirrorUrl: String? = null
     ): Int {
         val guestDir = GUEST_SERVER_DIR
         val guestJar = "$guestDir/${File(jarPath).relativeTo(serverDir).invariantSeparatorsPath}"
@@ -2173,7 +2175,7 @@ class TermuxRuntime(context: Context) {
             "export PATH=\"${profile.javaHomeInGuest}/bin:\$PATH\"; " +
             "export TMPDIR=/tmp; export HOME=/root; cd '$guestDir' && " +
             "exec ${profile.guestJavaBinaryCandidates.first()} -Djava.io.tmpdir=/tmp -jar '$guestJar' " +
-            "--installServer"
+            "--installServer" + (mirrorUrl?.let { " --mirror '$it'" } ?: "")
         return execProotBound(
             serverDir,
             command,
@@ -2185,6 +2187,81 @@ class TermuxRuntime(context: Context) {
     /** 兼容历史调用点：focal 容器里的 Java 8 installer。 */
     fun runJava8Installer(jarPath: String, serverDir: File, timeoutMs: Long = 900_000): Int =
         runProotInstaller(jarPath, serverDir, timeoutMs, legacyJava8Profile)
+
+    /**
+     * 用 FCL（Pojav JRE）的宿主 java 跑一次性安装命令（Forge/NeoForge/Quilt installer）。
+     *
+     * 为什么不能复用 [execOnce]：那套的 PATH / LD_LIBRARY_PATH 全指向 Termux 前缀 ——
+     * 1. FCL 的 java 在 `filesDir/jvm-fcl/java-XX/bin/java`，不在 Termux PATH 里，
+     *    `execOnce("java", ...)` 只会得到 `/system/bin/sh: java: inaccessible or not found`
+     *    （2026-11-20 的用户日志正是这条：选了 Pojav JRE、没装 Termux，下载 NeoForge 后
+     *    installer 三次重试全部 127）。
+     * 2. 这套 JRE 是 bionic 构建、只依赖系统库；Termux 前缀里同名的 libz 等如果进了
+     *    LD_LIBRARY_PATH，会被 glibc 版顶掉直接崩。必须按 [startMc] 宿主分支对 Fcl 的
+     *    库路径规则单独拼环境（自己的 lib 在前，绝不含 Termux 目录）。
+     *
+     * FCL 自带完整 cacerts，不注入并集信任库属性。输出逐行 [emitLog]，保证控制台可见。
+     */
+    fun runFclJavaCommand(
+        javaVersion: JavaVersion,
+        serverDir: File,
+        vararg args: String,
+        timeoutMs: Long = 900_000
+    ): Int {
+        val javaBin = fclJre.javaBinary(javaVersion)
+        if (!fclJre.isInstalled(javaVersion)) {
+            emitLog("[install] Pojav JRE ${javaVersion.displayName} 未安装，无法执行 installer")
+            return 127
+        }
+        emitLog("[install] Pojav JRE 路径: $javaBin")
+        val jvmHome = javaBin.parentFile?.parentFile ?: return 127
+        val jvmLib = File(jvmHome, "lib")
+        val jvmTmp = serverTmpDirFor(serverDir).apply { mkdirs() }
+        val quote = fun(value: String) = "'" + value.replace("'", "'\\''") + "'"
+        val argStr = args.joinToString(" ") { quote(it) }
+        val command = "exec ${quote(javaBin.absolutePath)} " +
+            "-Djava.io.tmpdir=${quote(jvmTmp.absolutePath)} $argStr"
+        val pb = ProcessBuilder("/system/bin/sh", "-c", command).apply {
+            redirectErrorStream(true)
+            redirectInput(File("/dev/null"))
+            directory(serverDir)
+            environment().apply {
+                put("PATH", "${javaBin.parent}:/system/bin:/system/xbin")
+                put("LD_LIBRARY_PATH", listOf(
+                    jvmLib.absolutePath,
+                    File(jvmLib, "server").absolutePath,
+                    "/system/lib64"
+                ).joinToString(":"))
+                put("JAVA_HOME", jvmHome.absolutePath)
+                put("TMPDIR", jvmTmp.absolutePath)
+                put("HOME", serverDir.absolutePath)
+            }
+        }
+        val process = try {
+            pb.start()
+        } catch (e: Exception) {
+            emitLog("[install] 启动 Pojav JRE 失败：${e.message}")
+            return 127
+        }
+        process.outputStream.close()
+        val reader = Thread {
+            runCatching {
+                process.inputStream.bufferedReader().useLines { lines ->
+                    lines.forEach { emitLog(it) }
+                }
+            }
+        }.also { it.start() }
+        val completed = process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)
+        if (!completed) {
+            emitLog("[install] Pojav JRE installer 超时（${timeoutMs / 1000}s），已终止")
+            process.destroy()
+            if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
+            reader.join(2_000)
+            return 124
+        }
+        reader.join(2_000)
+        return process.exitValue()
+    }
 
     /** 在容器里执行调用方给定的命令（用于 installer 后续步骤与探测）。 */
     fun runProotCommand(
