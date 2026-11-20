@@ -2,8 +2,10 @@ package com.mineserve.mobile.ui
 
 // 性能修改理由：输入过程使用本地状态，避免异步保存回读打断输入法的光标位置。
 import android.content.Intent
+import android.content.res.Configuration
 import android.net.Uri
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
 import com.mineserve.mobile.R
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
@@ -112,6 +114,7 @@ import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ServerState
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.data.StepStatus
+import com.mineserve.mobile.ui.preview.PreviewPane
 import kotlinx.coroutines.delay
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
@@ -1809,4 +1812,81 @@ fun ConfirmDialog(
             }
         }
     )
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 预览（Android Studio Design 面板专用）
+//
+// 只被 @Preview 调用，release 编译时由 R8 裁掉，不参与任何运行时逻辑。
+// 深浅色靠 uiMode 切换：同一个函数打两个 @Preview，不写两份代码。
+// 宽度由 PreviewPane 固定 360dp —— 用 wrapContent 看间距会失真。
+// ════════════════════════════════════════════════════════════════════════════
+
+@Preview(name = "McCard · Light", showBackground = true)
+@Preview(name = "McCard · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewMcCard() {
+    PreviewPane {
+        McCard(
+            title = "运行环境",
+            trailing = { StatusPill("已就绪", MaterialTheme.colorScheme.primary) }
+        ) {
+            StatLine(Icons.Outlined.Info, "Java 17 · Termux")
+            Spacer(Modifier.height(6.dp))
+            StatLine(Icons.Outlined.Public, "端口 25565")
+        }
+    }
+}
+
+@Preview(name = "Pill · Light", showBackground = true)
+@Preview(name = "Pill · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewPills() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                StatusPill("运行中", MaterialTheme.colorScheme.primary)
+                StatusPill("已停止", MaterialTheme.colorScheme.error)
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SegPill(text = "全部", selected = true, onClick = {})
+                SegPill(text = "已安装", selected = false, onClick = {})
+            }
+        }
+    }
+}
+
+@Preview(name = "Meters · Light", showBackground = true)
+@Preview(name = "Meters · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewMeters() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            MemoryBar(usedMb = 1280L, maxMb = 2048L, running = true)
+            CpuMeterBar(percent = 37)
+            HeroMeterBar(label = "内存", ratio = 0.62f, valueText = "1.2 / 2.0 GB")
+            ProgressTrack(percent = 42)
+        }
+    }
+}
+
+@Preview(name = "EmptyState · Light", showBackground = true)
+@Preview(name = "EmptyState · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewEmptyStates() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            EmptyHint(icon = Icons.Outlined.Info, text = "还没有安装任何服务端核心")
+            LoadingHint(text = "正在扫描世界…")
+        }
+    }
+}
+
+@Preview(name = "SegmentedTabs · Light", showBackground = true)
+@Preview(name = "SegmentedTabs · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewSegmentedTabs() {
+    PreviewPane {
+        SegmentedTabs(options = listOf("概览", "玩家", "世界"), selectedIndex = 0, onSelect = {})
+    }
 }

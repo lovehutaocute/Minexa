@@ -1,6 +1,8 @@
 package com.mineserve.mobile.ui.screens
 
+import android.content.res.Configuration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
 import com.mineserve.mobile.R
 import com.mineserve.mobile.data.ServerCore
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -79,6 +81,7 @@ import com.mineserve.mobile.ui.McCard
 import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.SegmentedTabs
+import com.mineserve.mobile.ui.preview.PreviewPane
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.Indigo
@@ -1270,5 +1273,45 @@ private fun DetailRow(label: String, value: String) {
     Column(modifier = Modifier.padding(vertical = 4.dp)) {
         Text(label, color = Muted, fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
         Text(value, fontSize = 11.sp, maxLines = 3, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 预览（Android Studio Design 面板专用）：只被 @Preview 调用，release 由 R8 裁掉
+// ════════════════════════════════════════════════════════════════════════════
+
+@Preview(name = "StatusRow · Light", showBackground = true)
+@Preview(name = "StatusRow · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewStatusRow() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            StatusRow(color = MaterialTheme.colorScheme.primary, text = "服务器运行中")
+            StatusRow(color = MaterialTheme.colorScheme.error, text = "服务器已停止")
+        }
+    }
+}
+
+@Preview(name = "PlayerListRow · Light", showBackground = true)
+@Preview(name = "PlayerListRow · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewPlayerListRow() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            PlayerListRow(
+                name = "Steve",
+                subtitle = "生存模式 · 延迟 23ms",
+                badgeText = "OP",
+                badgeColor = MaterialTheme.colorScheme.primary,
+                onClick = {}
+            )
+            PlayerListRow(
+                name = "Alex",
+                subtitle = "创造模式 · 延迟 87ms",
+                badgeText = null,
+                badgeColor = MaterialTheme.colorScheme.primary,
+                onClick = {}
+            )
+        }
     }
 }

@@ -1,5 +1,6 @@
 package com.mineserve.mobile.ui.screens
 
+import android.content.res.Configuration
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -79,6 +80,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -90,6 +92,7 @@ import com.mineserve.mobile.data.StorageLocation
 import com.mineserve.mobile.ui.pageSurface
 import com.mineserve.mobile.ui.PageTopBar
 import com.mineserve.mobile.ui.McViewModel
+import com.mineserve.mobile.ui.preview.PreviewPane
 import com.mineserve.mobile.ui.theme.FieldGray
 import com.mineserve.mobile.ui.theme.Indigo
 import com.mineserve.mobile.ui.theme.IndigoDark
@@ -1741,5 +1744,61 @@ private fun InstallerJavaNotice(core: ServerCore, minecraftVersion: String) {
             fontSize = 9.sp,
             lineHeight = 13.sp
         )
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 预览（Android Studio Design 面板专用）：只被 @Preview 调用，release 由 R8 裁掉
+// ════════════════════════════════════════════════════════════════════════════
+
+@Preview(name = "SpecProgress · Light", showBackground = true)
+@Preview(name = "SpecProgress · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewSpecProgress() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            SpecProgress(percent = 0)
+            SpecProgress(percent = 42)
+            SpecProgress(percent = 100)
+        }
+    }
+}
+
+@Preview(name = "DownloadProgress · Light", showBackground = true)
+@Preview(name = "DownloadProgress · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewDownloadProgress() {
+    PreviewPane {
+        DownloadProgressContent(
+            percent = 63,
+            speedText = "3.2 MB/s",
+            downloadedText = "已下载 12.4 MB",
+            totalText = "共 19.7 MB"
+        )
+    }
+}
+
+@Preview(name = "CoreTile · Light", showBackground = true)
+@Preview(name = "CoreTile · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewCoreTiles() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            CoreTile(core = ServerCore.Paper, selected = true, onClick = {})
+            CoreTile(core = ServerCore.Fabric, selected = false, onClick = {})
+        }
+    }
+}
+
+@Preview(name = "ImportChip · Light", showBackground = true)
+@Preview(name = "ImportChip · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewImportChips() {
+    PreviewPane {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ImportChip(label = "文件夹", enabled = true, onClick = {})
+            ImportChip(label = "压缩包", enabled = true, onClick = {})
+            ImportChip(label = "JAR", enabled = false, onClick = {})
+        }
     }
 }
