@@ -65,6 +65,14 @@ class PlayerNamesTest {
     }
 
     @Test
+    fun `真彩色与叠加写法的残码同样被剔除`() {
+        assertEquals("Steve", PlayerNames.sanitize("[38;2;255;0;0mSteve"))
+        assertEquals("Steve", PlayerNames.sanitize("[48;2;1;2;3mSteve"))
+        assertEquals("Steve", PlayerNames.sanitize("[1;38;5;202mSteve"))
+        assertEquals("Steve", PlayerNames.sanitize("[38;5;202;1mSteve"))
+    }
+
+    @Test
     fun `list 响应按逗号切分后每段都能正确清洗`() {
         // 现场日志的真实形态：颜色码被拆散到每个名字前后
         val tail = "[0mwehxc147[37m, [0mdeepseek_flash[37m, [0m453_ab[37m"
@@ -92,5 +100,11 @@ class PlayerNamesTest {
         assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: Steve[/127.0.0.1:5555] joined the game"))
         // 聊天消息不该被当成玩家事件
         assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: <Steve> I joined the game"))
+    }
+
+    @Test
+    fun `tab 分隔的日志不会被粘成一个词`() {
+        // 控制字符不能直接删：`Steve\tjoined` 删掉 tab 会变成 `Stevejoined`，\s+ 匹配失败
+        assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO] Steve\tjoined the game"))
     }
 }

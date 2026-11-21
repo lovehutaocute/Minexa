@@ -20,10 +20,13 @@ object PlayerNames {
     private val ansiEscapeRegex = Regex("\\u001B\\[[0-9;?]*[ -/]*[@-~]")
 
     /**
-     * ESC 被吞后残留的伪序列，如 `[0m`、`[1;32m`、`[38;5;202m`。
-     * 上限放到 8 个字符是为了覆盖多属性/256 色写法；再长就交给 [illegalChars] 兜底。
+     * ESC 被吞后残留的伪序列，如 `[0m`、`[1;32m`、`[38;5;202m`、`[38;2;255;0;0m`。
+     *
+     * 不限长度：真彩色/组合写法的参数个数没有上限，任何长度上限都会漏掉更长的那种，
+     * 残留的 `[` 会让整条名字被判非法、玩家从列表里消失。判据本身足够窄 ——
+     * `[` + 数字/分号 + `m`，`[INFO]` 与时间戳都不匹配。
      */
-    private val ansiResidueRegex = Regex("\\[[0-9;]{0,8}m")
+    private val ansiResidueRegex = Regex("\\[[0-9;]*m")
 
     /** 基岩版/插件的 `§` 颜色码，逐对删除（`§x§f§f§0§0§0§0` 这类十六进制写法也能清干净） */
     private val sectionColorRegex = Regex("\\u00A7[0-9a-fk-orxX]")
@@ -37,12 +40,17 @@ object PlayerNames {
      *
      * `[12:00:00 INFO]: [0mSteve joined the game` → `[12:00:00 INFO]: Steve joined the game`。
      * `[数字;…m` 的判据足够窄，不会误伤时间戳或 `[INFO]` 这类日志前缀。
+     *
+     * 控制字符里只有 tab 这类空白会**换成空格**：直接删掉会让 `Steve\tjoined` 粘成
+     * `Stevejoined`，随后名字正则的 `\s+` 匹配失败、整条事件漏记。
      */
     fun stripMarkup(raw: String): String {
         var s = ansiEscapeRegex.replace(raw, "")
         s = ansiResidueRegex.replace(s, "")
         s = sectionColorRegex.replace(s, "")
-        return controlCharRegex.replace(s, "")
+        return controlCharRegex.replace(s) { m ->
+            if (m.value[0].isWhitespace()) " " else ""
+        }
     }
 
     /**
