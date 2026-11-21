@@ -147,4 +147,24 @@ class PlayerNamesTest {
         val listed = listOf(".Steve")
         assertSame(listed, PlayerNames.removeFrom(listed, "Nobody"))
     }
+
+    @Test
+    fun `同名跨平台只删精确那一行`() {
+        // Geyser 同名配置：Java 的 Steve 与基岩的 .Steve 是两个不同玩家
+        val listed = listOf("Steve", ".Steve", "Alex")
+        assertEquals(listOf(".Steve", "Alex"), PlayerNames.removeFrom(listed, "Steve"))
+        // 事件给带前缀名时，删的是基岩那条
+        assertEquals(listOf("Steve", "Alex"), PlayerNames.removeFrom(listed, ".Steve"))
+    }
+
+    @Test
+    fun `主机名类噪音不会被当作带前缀的玩家名`() {
+        // `.` 只在词首才是 Geyser 前缀；`com.example` 的名字段前面是 `.`，不该命中
+        assertNull(PlayerNames.fromJoinLeaveLine("com.example joined the game"))
+        assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: com.example joined the game"))
+        assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: foo.bar left the game"))
+        // 词首的前缀不受影响
+        assertEquals(".Steve", PlayerNames.fromJoinLeaveLine(" .Steve joined the game"))
+        assertEquals("* Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO] * Steve joined the game"))
+    }
 }

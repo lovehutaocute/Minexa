@@ -13,6 +13,9 @@ package com.mineserve.mobile.server
  *    遇到 `[0mSteve joined the game` 时，`[` 会挡住严格匹配，宽松回退正好从 `0m`
  *    起匹配，产出的名字 `0mSteve` 已无 `[`，事后再 sanitize 也救不回来。
  *  - [sanitize]：名字级，清洗 + 合法性校验。
+ *
+ * 宽松回退的名字段带左边界断言 `(?<![A-Za-z0-9_.])`，代理前缀只在词首才被识别：
+ * `com.example joined the game` 是主机名/插件名而非玩家事件，不加断言会产出 `.example`。
  */
 object PlayerNames {
 
@@ -79,12 +82,17 @@ object PlayerNames {
     // `*`（`* Steve`）。前缀必须保留 —— `list` 响应会原样带前缀，这里若只取裸名，
     // 同一个玩家会在名单里变成两条（`.Steve` 与 `Steve`），离服只删掉裸名，
     // `.Steve` 就永久留在在线列表；发给 `kick`/`gamemode` 的名字也必须是带前缀的全名。
+    //
+    // 宽松回退带左边界断言 `(?<![A-Za-z0-9_.])`：前缀只在「词首」才成立。否则
+    // `com.example joined the game` 会被当成前缀名 `.example`（把 `.` 误读成 Geyser
+    // 前缀），`foo.bar` 这类主机名/插件名同样会漏出垃圾条目。真的叫 `.Steve` 的写法
+    // 前面必然是行首、空格、`]` 或 `:`，不受影响。严格分支以 `: ` 锚定，不需要断言。
 
     private val joinLeaveStrictRegex = Regex(
         ":\\s*((?:\\*\\s*|\\.)?[A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game"
     )
     private val joinLeaveLooseRegex = Regex(
-        "((?:\\*\\s*|\\.)?[A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game"
+        "(?<![A-Za-z0-9_.])((?:\\*\\s*|\\.)?[A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game"
     )
 
     /** 聊天前缀 `<Steve>`：用于把聊天内容从进出服日志里排除 */
@@ -128,6 +136,11 @@ object PlayerNames {
      * 把新出现的玩家并入名单：已有等价名字（忽略代理前缀/大小写）时复用旧写法，
      * 避免同一玩家以 `Steve` 和 `.Steve` 两种形式并存。
      *
+     * **副作用**：Geyser 默认给基岩玩家加 `.` 前缀，正是为了让基岩 `Steve` 和 Java
+     * `Steve` 能同时在线。此处按等价键合并，会把这两个不同玩家并成一个（少一个名字）。
+     * 选择接受：`refreshOnlinePlayers()` 是界面手动触发的 `list` 全量刷新，下一次刷新
+     * 会纠正；若改成精确去重，UI 反而会先多出一条重复记录，体验更差。
+     *
      * @return 未发生变化时返回**同一个列表实例**，调用方可据此跳过状态更新
      */
     fun mergeInto(current: List<String>, name: String): List<String> {
@@ -139,11 +152,17 @@ object PlayerNames {
     /**
      * 按等价名字从名单移除（离服事件可能给的是裸名，而名单里存的是带前缀的全名）。
      *
+     * 精确命中优先：Geyser 同名配置下 `Steve`（Java）与 `.Steve`（基岩）会同时在线，
+     * 二者的等价键相同，按等价键全删会连坐两个玩家。
+     *
      * @return 未发生变化时返回**同一个列表实例**
      */
     fun removeFrom(current: List<String>, name: String): List<String> {
+        if (name in current) return current.filterNot { it == name }
         val key = matchKey(name)
-        val next = current.filterNot { matchKey(it) == key }
-        return if (next.size == current.size) current else next
+        val hits = current.filter { matchKey(it) == key }
+        // 等价命中不唯一时说明名单里本就有同名跨平台的两人，无法判断删谁 —— 不动
+        if (hits.size != 1) return current
+        return current - hits[0]
     }
 }
