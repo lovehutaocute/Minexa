@@ -1,5 +1,25 @@
 # 更新日志
 
+## 1.5.3（versionCode 64）
+
+修复了一些已知问题。
+
+- **玩家名解析**：新增 `server/PlayerNames.kt` 统一清洗 —— ANSI 颜色码、真彩色残码（`\u001b[38;2;R;G;Bm`）、
+  tab 粘连、基岩版代理前缀（`@`）。修掉「主机名被当玩家名」「跨平台同名玩家被误删」，
+  在线名单与人数计数收敛到同一入口（此前合并侧按前缀区分、展示侧不区分，两处会分叉）。
+- **Forge 安装流程**：`InstallerCapabilities`（探测镜像能力，修 `--mirror` 误判）、
+  `InstallerLibraryManifest`（依赖库清单解析与合并）、统一镜像重试策略；Pojav JRE 路径下
+  installer 的执行方式修正；安装失败改为带上读失败原因，不再只说「安装失败」。
+- **证书库修复**：`TrustStoreRepair` 大幅扩展，服务端启动路径的 HTTPS 信任问题一并处理；
+  新增 `TrustStoreRepairerTest`。
+- **安装器安全**：依赖库路径穿越校验；`server_errors.json` 规则补充。
+- **UI 性能**：日志页、下载页、概览页的状态订阅下沉到子组件，7/10/7/2 处 Flow 订阅加 `remember`；
+  玩家与世界列表改 `LazyColumn`（固定头部 + 卡内虚拟化）；`Progress`/`ImportProgressBlock` 改名与拆分。
+- **UI 动效**：新增 `ui/theme/Motion.kt`，统一加载占位、列表行动画、启停触觉反馈；图标族收敛、
+  日志页调色板归一；23 个共享组件补 Light/Dark 双预览（`ui/preview/PreviewPane.kt`）。
+  按用户要求**移除页面切换的渐隐渐现**。
+- 桌面组件（事件日志 / 模组插件）同步适配。
+
 ## 1.5.2（versionCode 63）
 
 修复了一些已知问题。
