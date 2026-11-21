@@ -1926,11 +1926,10 @@ class McViewModel(
                 bdsEvent != null -> {
                     val name = bdsEvent.name
                     // 只有名单状态真的变化时才动计数：重连会先 disconnected 再 connected，
-                    // 可能重复打印，用 wasOnline 去重避免计数漂移
-                    val wasOnline = _onlinePlayerNames.value.any { it.equals(name, ignoreCase = true) }
-                    if (bdsEvent.joined) addOnlinePlayer(name) else removeOnlinePlayer(name)
+                    // 可能重复打印，靠名单是否变化去重避免计数漂移（与 Java/PowerNukkit 同源）
+                    val changed = if (bdsEvent.joined) addOnlinePlayer(name) else removeOnlinePlayer(name)
                     playerManager.noteBedrockPlayer(name, bdsEvent.xuid)
-                    if (bdsEvent.joined != wasOnline) {
+                    if (changed) {
                         repo.updateServerState {
                             it.copy(
                                 onlinePlayers = (it.onlinePlayers + if (bdsEvent.joined) 1 else -1)
@@ -1944,8 +1943,11 @@ class McViewModel(
                 }
                 playerManager.extractPowerNukkitPlayerEvent(line) != null -> {
                     val (name, joined) = playerManager.extractPowerNukkitPlayerEvent(line)!!
-                    repo.updateServerState { it.copy(onlinePlayers = (it.onlinePlayers + if (joined) 1 else -1).coerceAtLeast(0)) }
-                    if (joined) addOnlinePlayer(name) else removeOnlinePlayer(name)
+                    val changed = if (joined) addOnlinePlayer(name) else removeOnlinePlayer(name)
+                    // 只在名单真的变化时动计数，避免重复事件让数字与列表分叉
+                    if (changed) {
+                        repo.updateServerState { it.copy(onlinePlayers = (it.onlinePlayers + if (joined) 1 else -1).coerceAtLeast(0)) }
+                    }
                     recordPlayerEvent(name, if (joined) "进服" else "离服")
                     notifyPlayerEvent(name, joined)
                     handled = true
@@ -1953,10 +1955,11 @@ class McViewModel(
                 line.contains("joined the game") -> {
                     // 仅当提取到真实玩家名（日志前缀 + 合法名字）时才计数与记录，避免聊天消息误报
                     playerManager.extractPlayerName(line)?.let { name ->
-                        repo.updateServerState {
-                            it.copy(onlinePlayers = (it.onlinePlayers + 1).coerceAtLeast(0))
+                        if (addOnlinePlayer(name)) {
+                            repo.updateServerState {
+                                it.copy(onlinePlayers = (it.onlinePlayers + 1).coerceAtLeast(0))
+                            }
                         }
-                        addOnlinePlayer(name)
                         recordPlayerEvent(name, "进服")
                         notifyPlayerEvent(name, true)
                     }
@@ -1964,10 +1967,13 @@ class McViewModel(
                 }
                 line.contains("left the game") -> {
                     playerManager.extractPlayerName(line)?.let { name ->
-                        repo.updateServerState {
-                            it.copy(onlinePlayers = (it.onlinePlayers - 1).coerceAtLeast(0))
+                        // 名单没变（玩家本不在、或同名跨平台无法判断删谁）就不减计数，
+                        // 否则会留下「计数 1、列表 2 行」的错位
+                        if (removeOnlinePlayer(name)) {
+                            repo.updateServerState {
+                                it.copy(onlinePlayers = (it.onlinePlayers - 1).coerceAtLeast(0))
+                            }
                         }
-                        removeOnlinePlayer(name)
                         recordPlayerEvent(name, "离服")
                         notifyPlayerEvent(name, false)
                     }
@@ -5041,13 +5047,17 @@ class McViewModel(
     /**
      * 在线玩家集合维护（进服：增量添加）。
      *
-     * 按 [PlayerNames.matchKey] 归一化去重：`list` 响应里的名字带 Geyser/Floodgate 前缀
-     * （`.Steve`），而进服日志给的是裸名（`Steve`）—— 不归一化就会同一人两条。
+     * 按 [PlayerNames.mergeInto] 归一化去重：同前缀状态 + 忽略大小写已存在时不算新增。
+     *
+     * @return 名单是否真的变化 —— 调用方据此决定要不要动 `onlinePlayers` 计数，
+     *         否则计数与名单 size 会分叉（横幅写 2、标签写 1）
      */
-    private fun addOnlinePlayer(name: String) {
+    private fun addOnlinePlayer(name: String): Boolean {
         val cur = _onlinePlayerNames.value
         val next = PlayerNames.mergeInto(cur, name)
-        if (next !== cur) _onlinePlayerNames.value = next
+        if (next === cur) return false
+        _onlinePlayerNames.value = next
+        return true
     }
 
     /**
@@ -5055,11 +5065,16 @@ class McViewModel(
      *
      * 离服日志可能只给裸名，名单里存的却是带前缀的全名；直接 `==` 删不掉，
      * 那条记录就会永久留在在线列表。
+     *
+     * @return 名单是否真的变化 —— 没删掉任何一行（玩家本就不在名单、或同名跨平台无法
+     *         判断删谁）时必须返回 false，让调用方别去减计数
      */
-    private fun removeOnlinePlayer(name: String) {
+    private fun removeOnlinePlayer(name: String): Boolean {
         val cur = _onlinePlayerNames.value
         val next = PlayerNames.removeFrom(cur, name)
-        if (next !== cur) _onlinePlayerNames.value = next
+        if (next === cur) return false
+        _onlinePlayerNames.value = next
+        return true
     }
 
     data class TextEditorFile(val path: String, val name: String, val content: String)

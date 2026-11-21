@@ -128,16 +128,27 @@ class PlayerNamesTest {
     }
 
     @Test
-    fun `名单合并不会让同一玩家的两种写法并存`() {
+    fun `名单合并按前缀与大小写归一化去重`() {
         val listed = listOf(".Steve", "Alex")
-        // 事件给裸名：复用列表里带前缀的那条，不新增
-        assertEquals(listed, PlayerNames.mergeInto(listed, "Steve"))
-        // 事件给带前缀名、列表里是裸名：同样不新增
-        assertEquals(listOf("Steve"), PlayerNames.mergeInto(listOf("Steve"), ".Steve"))
+        // 同一写法（忽略大小写/首尾空白）不重复加入
+        assertEquals(listed, PlayerNames.mergeInto(listed, ".STEVE"))
+        assertEquals(listed, PlayerNames.mergeInto(listed, "  .Steve "))
         // 新玩家照常加入
         assertEquals(listOf(".Steve", "Alex", "Bob"), PlayerNames.mergeInto(listed, "Bob"))
         // 名字没变化时返回同一实例，调用方可跳过状态更新
-        assertSame(listed, PlayerNames.mergeInto(listed, "Steve"))
+        assertSame(listed, PlayerNames.mergeInto(listed, ".Steve"))
+    }
+
+    @Test
+    fun `合并侧也区分跨平台同名玩家，不会吞掉一个人`() {
+        // Geyser 同名配置：Java `Steve` 与基岩 `.Steve` 是两个玩家，合并时必须共存，
+        // 否则事件计数 +1 而名单 size 不变，界面出现「2 人在线」但列表只有 1 行
+        assertEquals(listOf("Steve", ".Steve"), PlayerNames.mergeInto(listOf("Steve"), ".Steve"))
+        assertEquals(listOf(".Steve", "Steve"), PlayerNames.mergeInto(listOf(".Steve"), "Steve"))
+        assertEquals(listOf("* Steve", "Steve"), PlayerNames.mergeInto(listOf("* Steve"), "Steve"))
+        // 裸名与自己同源，仍然不重复
+        val only = listOf("Steve")
+        assertSame(only, PlayerNames.mergeInto(only, "Steve"))
     }
 
     @Test
@@ -166,5 +177,15 @@ class PlayerNamesTest {
         // 词首的前缀不受影响
         assertEquals(".Steve", PlayerNames.fromJoinLeaveLine(" .Steve joined the game"))
         assertEquals("* Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO] * Steve joined the game"))
+    }
+
+    @Test
+    fun `主机名后面接 has 时不会把 has 当成玩家名`() {
+        // 断言挡住 `.example` 后，宽松回退会继续右移并落到 `has` 上
+        assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: com.example has joined the game"))
+        assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: foo.bar has left the game"))
+        // 保留字守卫只挡语法词，合法玩家名照旧
+        assertEquals("Game", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: Game joined the game"))
+        assertEquals("The", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: The has joined the game"))
     }
 }

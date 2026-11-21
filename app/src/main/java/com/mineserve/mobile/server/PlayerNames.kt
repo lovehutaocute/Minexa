@@ -16,6 +16,8 @@ package com.mineserve.mobile.server
  *
  * 宽松回退的名字段带左边界断言 `(?<![A-Za-z0-9_.])`，代理前缀只在词首才被识别：
  * `com.example joined the game` 是主机名/插件名而非玩家事件，不加断言会产出 `.example`。
+ * 断言挡住之后回退还会继续往右找词首，于是 `com.example has joined the game` 会落到
+ * `has` 上 —— 由 [reservedTokens] 在出口处兜住。
  */
 object PlayerNames {
 
@@ -99,6 +101,16 @@ object PlayerNames {
     private val chatPrefixRegex = Regex("<[^<>]{1,32}>")
 
     /**
+     * 语法词白名单：宽松回退可能把事件短语里的词当成名字。
+     *
+     * 只有 `has` 需要挡：`(?:has\s+)?` 是可选的，`com.example has joined the game` 里
+     * 断言挡掉 `example` 后，回退从 `has` 起照样能命中「…joined the game」。
+     * 不一起挡 `joined`/`left`/`the`/`game` —— 它们在正则结构上不可能成为捕获组，
+     * 而 `Game` 是完全合法的玩家名，挡掉会造成真玩家消失。
+     */
+    private val reservedTokens = setOf("has")
+
+    /**
      * 从进服/离服日志行提取玩家名（行级清洗 → 严格匹配 → 宽松回退 → 名字校验）。
      *
      * @return 玩家名；无法提取或格式非法时返回 null
@@ -115,7 +127,7 @@ object PlayerNames {
         if (chat != null && eventAt != null && chat.range.first < eventAt) return null
 
         val m = joinLeaveStrictRegex.find(line) ?: joinLeaveLooseRegex.find(line) ?: return null
-        return sanitize(m.groupValues[1])
+        return sanitize(m.groupValues[1])?.takeUnless { it.lowercase() in reservedTokens }
     }
 
     // ── 名单合并 ────────────────────────────────────────────────────
@@ -132,20 +144,28 @@ object PlayerNames {
     fun matchKey(name: String): String =
         name.trim().removePrefix("*").trim().removePrefix(".").trim().lowercase()
 
+    /** 是否带 Geyser/Floodgate 代理前缀 —— 即该玩家来自基岩版 */
+    fun hasProxyPrefix(name: String): Boolean {
+        val s = name.trimStart()
+        return s.startsWith(".") || s.startsWith("*")
+    }
+
     /**
-     * 把新出现的玩家并入名单：已有等价名字（忽略代理前缀/大小写）时复用旧写法，
-     * 避免同一玩家以 `Steve` 和 `.Steve` 两种形式并存。
+     * 把新出现的玩家并入名单：等价名字（同前缀状态 + 忽略大小写）已存在时不算新增。
      *
-     * **副作用**：Geyser 默认给基岩玩家加 `.` 前缀，正是为了让基岩 `Steve` 和 Java
-     * `Steve` 能同时在线。此处按等价键合并，会把这两个不同玩家并成一个（少一个名字）。
-     * 选择接受：`refreshOnlinePlayers()` 是界面手动触发的 `list` 全量刷新，下一次刷新
-     * 会纠正；若改成精确去重，UI 反而会先多出一条重复记录，体验更差。
+     * **前缀状态必须一起比**：Geyser 给基岩玩家加 `.`，正是为了让基岩 `Steve` 和 Java
+     * `Steve` 能同时在线。只按等价键合并会把这两个不同玩家并成一个 —— 界面上横幅人数
+     * （事件计数）与「在线 N」（名单 size）随即分叉，能看到「2 人在线」但列表只有 1 行。
+     * 因此迁移方向选「宁可多一行也不吞人」：多出来的重复行会被下一次离服事件精确删掉，
+     * 而吞掉的人只能等用户手动刷新才回来。
      *
      * @return 未发生变化时返回**同一个列表实例**，调用方可据此跳过状态更新
      */
     fun mergeInto(current: List<String>, name: String): List<String> {
+        if (name in current) return current
         val key = matchKey(name)
-        if (current.any { matchKey(it) == key }) return current
+        val prefixed = hasProxyPrefix(name)
+        if (current.any { hasProxyPrefix(it) == prefixed && matchKey(it) == key }) return current
         return current + name
     }
 
@@ -155,10 +175,12 @@ object PlayerNames {
      * 精确命中优先：Geyser 同名配置下 `Steve`（Java）与 `.Steve`（基岩）会同时在线，
      * 二者的等价键相同，按等价键全删会连坐两个玩家。
      *
-     * @return 未发生变化时返回**同一个列表实例**
+     * @return 未发生变化时返回**同一个列表实例** —— 调用方必须据此判断「真的删掉了」，
+     *         否则会出现列表 2 行、计数只有 1 的错位
      */
     fun removeFrom(current: List<String>, name: String): List<String> {
-        if (name in current) return current.filterNot { it == name }
+        // 精确命中只删一条（`-` 移除首个匹配），与等价路径的删除粒度保持一致
+        if (name in current) return current - name
         val key = matchKey(name)
         val hits = current.filter { matchKey(it) == key }
         // 等价命中不唯一时说明名单里本就有同名跨平台的两人，无法判断删谁 —— 不动
