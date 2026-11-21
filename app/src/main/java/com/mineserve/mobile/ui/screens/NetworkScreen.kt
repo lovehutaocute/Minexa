@@ -1,6 +1,8 @@
 package com.mineserve.mobile.ui.screens
 
+import android.content.res.Configuration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
 import com.mineserve.mobile.R
 
 import android.app.Activity
@@ -96,6 +98,7 @@ import com.mineserve.mobile.ui.McViewModel
 import com.mineserve.mobile.ui.StatLine
 import com.mineserve.mobile.ui.StatusPill
 import com.mineserve.mobile.ui.WarnNote
+import com.mineserve.mobile.ui.preview.PreviewPane
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.FieldBg
 import com.mineserve.mobile.ui.theme.Indigo
@@ -1380,5 +1383,34 @@ private fun GuideStep(step: String, title: String, description: String) {
             Spacer(Modifier.height(2.dp))
             Text(description, color = Muted, fontSize = 11.sp, lineHeight = 16.sp)
         }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 预览（Android Studio Design 面板专用）：只被 @Preview 调用，release 由 R8 裁掉
+// ════════════════════════════════════════════════════════════════════════════
+
+@Preview(name = "StunToggle · Light", showBackground = true)
+@Preview(name = "StunToggle · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewStunToggle() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            StunToggleRow(title = "STUN 探测", checked = true, onChange = {})
+            StunToggleRow(title = "仅使用公网地址", checked = false, onChange = {})
+        }
+    }
+}
+
+@Preview(name = "GuideStep · Light", showBackground = true)
+@Preview(name = "GuideStep · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewGuideStep() {
+    PreviewPane {
+        GuideStep(
+            step = "1",
+            title = "准备服务端",
+            description = "把 jar 放进服务器目录，或在下载页一键安装。"
+        )
     }
 }

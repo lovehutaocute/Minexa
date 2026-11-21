@@ -1,8 +1,10 @@
 package com.mineserve.mobile.ui.screens
 
 // 性能修改理由：资源订阅保持局部化，输入框使用本地编辑状态，并让概览内容避让输入法。
+import android.content.res.Configuration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
 import com.mineserve.mobile.R
 
 import androidx.compose.animation.AnimatedVisibility
@@ -129,6 +131,7 @@ import com.mineserve.mobile.ui.ProgressTrack
 import com.mineserve.mobile.ui.QqGroupDialog
 import com.mineserve.mobile.ui.StepRow
 import com.mineserve.mobile.ui.installStepLabel
+import com.mineserve.mobile.ui.preview.PreviewPane
 import com.mineserve.mobile.ui.theme.Coral
 import com.mineserve.mobile.ui.theme.CoralSoft
 import com.mineserve.mobile.ui.theme.FieldGray
@@ -1887,6 +1890,71 @@ private fun StartSettingsSheet(
                 note = stringResource(R.string.dash_skip_startup_progress_note),
                 checked = skipStartupProgress,
                 onCheckedChange = { vm.setSkipStartupProgress(it) }
+            )
+        }
+    }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 预览（Android Studio Design 面板专用）：只被 @Preview 调用，release 由 R8 裁掉
+// ════════════════════════════════════════════════════════════════════════════
+
+@Preview(name = "StartStopBar · 运行中", showBackground = true)
+@Preview(name = "StartStopBar · 运行中 (Dark)", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewStartStopBarRunning() {
+    PreviewPane {
+        StartStopBar(
+            isRunning = true,
+            startEnabled = false,
+            stopInFlight = false,
+            forceStopInFlight = false,
+            onStart = {},
+            onStop = {},
+            onForceStop = {}
+        )
+    }
+}
+
+@Preview(name = "StartStopBar · 已停止", showBackground = true)
+@Preview(name = "StartStopBar · 已停止 (Dark)", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewStartStopBarIdle() {
+    PreviewPane {
+        StartStopBar(
+            isRunning = false,
+            startEnabled = true,
+            stopInFlight = false,
+            forceStopInFlight = false,
+            onStart = {},
+            onStop = {},
+            onForceStop = {}
+        )
+    }
+}
+
+@Preview(name = "SheetRow · Light", showBackground = true)
+@Preview(name = "SheetRow · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewSheetRows() {
+    PreviewPane {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            SheetSwitchRow(
+                title = "崩溃后自动重启",
+                note = "进程异常退出时重新拉起",
+                checked = true,
+                onCheckedChange = {}
+            )
+            SheetDropdownRow(
+                label = "Java 运行时",
+                selectedLabel = "Termux Java 17",
+                options = listOf(
+                    SheetOption(ENV_TERMUX_JAVA, "Termux Java 17"),
+                    SheetOption(ENV_PROOT_JAVA, "PRoot JDK 17")
+                ),
+                selectedKey = ENV_TERMUX_JAVA,
+                enabled = true,
+                onSelect = {}
             )
         }
     }

@@ -1,6 +1,8 @@
 package com.mineserve.mobile.ui.screens
 
+import android.content.res.Configuration
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
 import com.mineserve.mobile.R
 
 import android.content.Intent
@@ -75,6 +77,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import com.mineserve.mobile.ui.preview.PreviewPane
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.ui.platform.LocalContext
@@ -1820,4 +1823,41 @@ private fun formatBytes(bytes: Long): String {
     if (mb < 1024) return String.format(java.util.Locale.US, "%.1f MB", mb)
     val gb = mb / 1024.0
     return String.format(java.util.Locale.US, "%.2f GB", gb)
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// 预览（Android Studio Design 面板专用）：只被 @Preview 调用，release 由 R8 裁掉
+// ════════════════════════════════════════════════════════════════════════════
+
+@Preview(name = "BadgeChip · Light", showBackground = true)
+@Preview(name = "BadgeChip · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewBadgeChips() {
+    PreviewPane {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            BadgeChip(
+                text = "Paper",
+                color = MaterialTheme.colorScheme.primary,
+                bg = MaterialTheme.colorScheme.primaryContainer
+            )
+            BadgeChip(
+                text = "已启用",
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                bg = MaterialTheme.colorScheme.surfaceVariant
+            )
+        }
+    }
+}
+
+@Preview(name = "LoaderFilter · Light", showBackground = true)
+@Preview(name = "LoaderFilter · Dark", showBackground = true, uiMode = Configuration.UI_MODE_NIGHT_YES)
+@Composable
+private fun PreviewLoaderFilter() {
+    PreviewPane {
+        LoaderFilterSection(
+            loaders = listOf("Paper", "Purpur", "Fabric"),
+            selected = setOf("Paper"),
+            onToggle = {}
+        )
+    }
 }
