@@ -3,6 +3,7 @@ package com.mineserve.mobile.server
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertSame
 
 /**
  * 玩家名清洗回归测试。
@@ -106,5 +107,44 @@ class PlayerNamesTest {
     fun `tab 分隔的日志不会被粘成一个词`() {
         // 控制字符不能直接删：`Steve\tjoined` 删掉 tab 会变成 `Stevejoined`，\s+ 匹配失败
         assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO] Steve\tjoined the game"))
+    }
+
+    // ── 代理前缀（Geyser `.Steve` / Floodgate `* Steve`） ─────────────
+
+    @Test
+    fun `进服日志保留代理前缀，与 list 响应的写法一致`() {
+        assertEquals(".Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: .Steve joined the game"))
+        assertEquals("* Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: * Steve joined the game"))
+        assertEquals(".Steve", PlayerNames.fromJoinLeaveLine(".Steve has joined the game"))
+        assertEquals(".Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: .Steve[/127.0.0.1:5555] joined the game"))
+    }
+
+    @Test
+    fun `归一化键忽略代理前缀与大小写`() {
+        assertEquals("steve", PlayerNames.matchKey(".Steve"))
+        assertEquals("steve", PlayerNames.matchKey("* Steve"))
+        assertEquals("steve", PlayerNames.matchKey("Steve"))
+        assertEquals("steve", PlayerNames.matchKey("  STEVE "))
+    }
+
+    @Test
+    fun `名单合并不会让同一玩家的两种写法并存`() {
+        val listed = listOf(".Steve", "Alex")
+        // 事件给裸名：复用列表里带前缀的那条，不新增
+        assertEquals(listed, PlayerNames.mergeInto(listed, "Steve"))
+        // 事件给带前缀名、列表里是裸名：同样不新增
+        assertEquals(listOf("Steve"), PlayerNames.mergeInto(listOf("Steve"), ".Steve"))
+        // 新玩家照常加入
+        assertEquals(listOf(".Steve", "Alex", "Bob"), PlayerNames.mergeInto(listed, "Bob"))
+        // 名字没变化时返回同一实例，调用方可跳过状态更新
+        assertSame(listed, PlayerNames.mergeInto(listed, "Steve"))
+    }
+
+    @Test
+    fun `离服按等价名字移除，裸名也能删掉带前缀的记录`() {
+        assertEquals(listOf("Alex"), PlayerNames.removeFrom(listOf(".Steve", "Alex"), "Steve"))
+        assertEquals(emptyList<String>(), PlayerNames.removeFrom(listOf("* Steve"), "Steve"))
+        val listed = listOf(".Steve")
+        assertSame(listed, PlayerNames.removeFrom(listed, "Nobody"))
     }
 }

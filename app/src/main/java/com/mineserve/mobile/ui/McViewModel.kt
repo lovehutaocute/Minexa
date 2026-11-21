@@ -71,6 +71,7 @@ import com.mineserve.mobile.server.TriggerInfo
 import com.mineserve.mobile.server.SafeTextFile
 import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PlayerManager
+import com.mineserve.mobile.server.PlayerNames
 import com.mineserve.mobile.server.BdsEnvironmentManager
 import com.mineserve.mobile.server.BdsPacks
 import com.mineserve.mobile.server.BdsWorldGen
@@ -5037,15 +5038,28 @@ class McViewModel(
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
             .format(java.util.Date())
 
-    /** 在线玩家集合维护（进服：增量添加，去重） */
+    /**
+     * 在线玩家集合维护（进服：增量添加）。
+     *
+     * 按 [PlayerNames.matchKey] 归一化去重：`list` 响应里的名字带 Geyser/Floodgate 前缀
+     * （`.Steve`），而进服日志给的是裸名（`Steve`）—— 不归一化就会同一人两条。
+     */
     private fun addOnlinePlayer(name: String) {
         val cur = _onlinePlayerNames.value
-        if (name !in cur) _onlinePlayerNames.value = cur + name
+        val next = PlayerNames.mergeInto(cur, name)
+        if (next !== cur) _onlinePlayerNames.value = next
     }
 
-    /** 在线玩家集合维护（离服：移除） */
+    /**
+     * 在线玩家集合维护（离服：按等价名字移除）。
+     *
+     * 离服日志可能只给裸名，名单里存的却是带前缀的全名；直接 `==` 删不掉，
+     * 那条记录就会永久留在在线列表。
+     */
     private fun removeOnlinePlayer(name: String) {
-        _onlinePlayerNames.value = _onlinePlayerNames.value.filter { it != name }
+        val cur = _onlinePlayerNames.value
+        val next = PlayerNames.removeFrom(cur, name)
+        if (next !== cur) _onlinePlayerNames.value = next
     }
 
     data class TextEditorFile(val path: String, val name: String, val content: String)

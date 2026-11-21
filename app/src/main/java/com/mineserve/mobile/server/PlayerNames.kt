@@ -74,11 +74,18 @@ object PlayerNames {
     // 正则说明：日志前缀(]: 结尾) + 玩家名(1-16位字母数字下划线) + 可选[IP]后缀 +
     // (has) joined/left the game。以 ": " 锚定前缀结尾，过滤聊天消息
     // （如 "<Steve> I joined the game"）误提取。
+    //
+    // 名字允许带代理前缀：Geyser 默认给基岩玩家加 `.`（`.Steve`），Floodgate 常用
+    // `*`（`* Steve`）。前缀必须保留 —— `list` 响应会原样带前缀，这里若只取裸名，
+    // 同一个玩家会在名单里变成两条（`.Steve` 与 `Steve`），离服只删掉裸名，
+    // `.Steve` 就永久留在在线列表；发给 `kick`/`gamemode` 的名字也必须是带前缀的全名。
 
-    private val joinLeaveStrictRegex =
-        Regex(":\\s*([A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game")
-    private val joinLeaveLooseRegex =
-        Regex("([A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game")
+    private val joinLeaveStrictRegex = Regex(
+        ":\\s*((?:\\*\\s*|\\.)?[A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game"
+    )
+    private val joinLeaveLooseRegex = Regex(
+        "((?:\\*\\s*|\\.)?[A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game"
+    )
 
     /** 聊天前缀 `<Steve>`：用于把聊天内容从进出服日志里排除 */
     private val chatPrefixRegex = Regex("<[^<>]{1,32}>")
@@ -101,5 +108,42 @@ object PlayerNames {
 
         val m = joinLeaveStrictRegex.find(line) ?: joinLeaveLooseRegex.find(line) ?: return null
         return sanitize(m.groupValues[1])
+    }
+
+    // ── 名单合并 ────────────────────────────────────────────────────
+    //
+    // 事件流与 `list` 响应是两条独立来源：`list` 保留代理前缀（`.Steve`），
+    // 进服日志在识别不出前缀时只会给出裸名（`Steve`）。不归一化就会同一人两条，
+    // 且离服删不掉带前缀那条。
+
+    /**
+     * 名字归一化键：去掉 Geyser/Floodgate 前缀（`*`、`.`）与首尾空白，忽略大小写。
+     *
+     * **只用于比较**，绝不用于发送命令 —— 命令必须用带前缀的全名。
+     */
+    fun matchKey(name: String): String =
+        name.trim().removePrefix("*").trim().removePrefix(".").trim().lowercase()
+
+    /**
+     * 把新出现的玩家并入名单：已有等价名字（忽略代理前缀/大小写）时复用旧写法，
+     * 避免同一玩家以 `Steve` 和 `.Steve` 两种形式并存。
+     *
+     * @return 未发生变化时返回**同一个列表实例**，调用方可据此跳过状态更新
+     */
+    fun mergeInto(current: List<String>, name: String): List<String> {
+        val key = matchKey(name)
+        if (current.any { matchKey(it) == key }) return current
+        return current + name
+    }
+
+    /**
+     * 按等价名字从名单移除（离服事件可能给的是裸名，而名单里存的是带前缀的全名）。
+     *
+     * @return 未发生变化时返回**同一个列表实例**
+     */
+    fun removeFrom(current: List<String>, name: String): List<String> {
+        val key = matchKey(name)
+        val next = current.filterNot { matchKey(it) == key }
+        return if (next.size == current.size) current else next
     }
 }
