@@ -126,4 +126,40 @@ class InstallerLibraryManifestTest {
 
         assertTrue(InstallerLibraryManifest.libraries(jar).isEmpty())
     }
+
+    @Test
+    fun `falls back to version json when referenced entry is missing`() {
+        // profile 的 json 字段指向一个 jar 里并不存在的文件名：不能因此丢掉整份清单
+        val profile = """
+            {
+              "json": "/not-there.json",
+              "libraries": [ ${lib("p/1/p-1.jar", "https://maven.neoforged.net/releases/p/1/p-1.jar")} ]
+            }
+        """.trimIndent()
+        val version = """
+            { "libraries": [ ${lib("v/1/v-1.jar", "https://libraries.minecraft.net/v/1/v-1.jar")} ] }
+        """.trimIndent()
+        val jar = jarWith(mapOf("install_profile.json" to profile, "version.json" to version))
+
+        val libs = InstallerLibraryManifest.libraries(jar)
+
+        assertEquals(2, libs.size)
+        assertTrue(libs.any { it.path.startsWith("v/") })
+    }
+
+    @Test
+    fun `rejects path traversal and absolute paths`() {
+        val root = temp.newFolder("libraries")
+
+        assertEquals(
+            File(root, "a/b/c.jar").canonicalPath,
+            InstallerLibraryManifest.resolveTarget(root, "a/b/c.jar")?.path
+        )
+        // 相对穿越
+        assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "../../pwned.jar"))
+        // 带子目录的穿越（规范化后逃出 root）
+        assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "a/../../../pwned.jar"))
+        // 绝对路径：File(root, abs) 在 Java 里就是 abs，必须挡掉
+        assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "/tmp/pwned.jar"))
+    }
 }

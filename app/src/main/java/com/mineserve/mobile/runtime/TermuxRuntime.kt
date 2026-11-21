@@ -2200,8 +2200,23 @@ class TermuxRuntime(context: Context) {
      *    LD_LIBRARY_PATH，会被 glibc 版顶掉直接崩。必须按 [startMc] 宿主分支对 Fcl 的
      *    库路径规则单独拼环境（自己的 lib 在前，绝不含 Termux 目录）。
      *
-     * FCL 自带完整 cacerts，不注入并集信任库属性。输出逐行 [emitLog]，保证控制台可见。
+     * FCL 自带完整 cacerts，一般不注入并集信任库属性（见 [fclHasUsableCacerts]）。
+     * 输出逐行 [emitLog]，保证控制台可见。
      */
+    /**
+     * FCL（Pojav JRE）自带的 `lib/security/cacerts` 是否可读且非空。
+     *
+     * 用途：决定 installer 要不要注入「并集信任库」属性。FCL 包自带的 cacerts 是完整的，
+     * 而并集库可能缺新根证书（ISRG / USERTrust 之类），拿它顶替自带库反而会造出新的
+     * PKIX 失败 —— 所以只有自带库缺件时才回落到并集库。
+     */
+    fun fclHasUsableCacerts(version: JavaVersion): Boolean {
+        val javaBin = fclJre.javaBinary(version)
+        val home = javaBin.parentFile?.parentFile ?: return false
+        val cacerts = File(home, "lib/security/cacerts")
+        return cacerts.isFile && cacerts.length() > 64L * 1024
+    }
+
     fun runFclJavaCommand(
         javaVersion: JavaVersion,
         serverDir: File,

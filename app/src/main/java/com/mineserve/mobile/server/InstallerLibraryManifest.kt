@@ -63,4 +63,19 @@ internal object InstallerLibraryManifest {
             Entry(path, url, artifact["sha1"]?.jsonPrimitive?.contentOrNull)
         }.getOrNull()
     }.distinctBy { it.path }
+
+    /**
+     * 把清单里的相对路径解析到 `libraries/` 下；越界（`../` 穿越、绝对路径）返回 null。
+     *
+     * 这条链路的安全性依赖于此：`path` 完全由远端 jar 内的 JSON 决定，而 jar 本身
+     * 经过镜像/代理，不能假定它没被改过。
+     */
+    fun resolveTarget(libsRoot: File, path: String): File? {
+        // 绝对路径先直接拒：`File(parent, "/abs")` 在 Windows 上会被当成相对路径
+        // （没有盘符），判定依赖平台会把这条防线的行为变得不可预测。
+        if (path.startsWith("/") || path.startsWith("\\") || File(path).isAbsolute) return null
+        val root = libsRoot.canonicalFile
+        val target = File(root, path).canonicalFile
+        return if (target.path.startsWith(root.path + File.separator)) target else null
+    }
 }

@@ -312,23 +312,33 @@ class McServerController(
         javaVendor: JavaVendor = JavaVendor.Termux,
         mirrorUrl: String? = null
     ): Int {
+        val prootGuest = isProotGuestRuntime(javaVendor, javaVersion)
+        // Installer runs before start(), so repair the selected JDK wrapper here as well.
+        // 来宾链路没有宿主侧的 java 包装器可修，跳过（容器内的 JDK 由 apt 管）。
+        // FCL 来源整包自带运行时，autoRepairRuntime 内部直接返回，不会碰 apt。
+        // 只在循环外跑一次：这是自愈动作，重试第二轮再跑纯属浪费几十秒。
+        if (!prootGuest) {
+            termux.autoRepairRuntime(javaVersion, needsFonts = false, vendor = javaVendor)
+        }
+        // 先按 jar 本体探测参数能力，避免给老 installer 传它不认识的 --mirror：
+        // Forge 1.7.10 会直接 UnrecognizedOptionException 抛栈退出（白跑一轮 + 吓人）。
+        val canMirror = mirrorUrl != null && InstallerCapabilities.supportsMirror(File(jarPath))
+        if (mirrorUrl != null && !canMirror) {
+            termux.emitLog("[install] ${File(jarPath).name} 未声明 --mirror 参数，直接使用官方源")
+        }
+        // 执行序列 M → N → M → M：第 2 次摘掉镜像只做「能力探测」，第 3 次起恢复镜像。
+        // 不能单调降级 —— 国内网络下「带镜像失败」多半是 CDN 抖动，摘掉镜像后剩余重试
+        // 全打在不可达的官方源上等于白烧配额。
+        var useMirror = canMirror
+        var probingWithoutMirror = false
+        val maxAttempts = if (canMirror) 4 else 3
         var lastCode = 1
-        var useMirror = mirrorUrl != null
-        var attempt = 0
-        while (true) {
-            attempt++
-            // Installer runs before start(), so repair the selected JDK wrapper here as well.
-            // 来宾链路没有宿主侧的 java 包装器可修，跳过（容器内的 JDK 由 apt 管）。
-            // FCL 来源整包自带运行时，autoRepairRuntime 内部直接返回，不会碰 apt。
-            if (!isProotGuestRuntime(javaVendor, javaVersion)) {
-                termux.autoRepairRuntime(javaVersion, needsFonts = false, vendor = javaVendor)
-            }
+        for (attempt in 1..maxAttempts) {
             val effectiveMirror = if (useMirror) mirrorUrl else null
             // jopt 的 --mirror <URL>；镜像失效时 installer 自己会回落官方源。
             val mirrorArgs = effectiveMirror?.let { arrayOf("--mirror", it) } ?: emptyArray<String>()
-            val trustStoreProps = termux.javaTrustStoreProps(javaVersion)
             lastCode = when {
-                isProotGuestRuntime(javaVendor, javaVersion) ->
+                prootGuest ->
                     termux.runProotInstaller(
                         jarPath,
                         serverDir,
@@ -337,35 +347,46 @@ class McServerController(
                     )
                 // FCL 的 java 不在 Termux PATH 里（在 filesDir/jvm-fcl），execOnce("java")
                 // 只会 127；必须走带 Fcl 专用环境（LD_LIBRARY_PATH 不含 Termux 目录）的命令。
-                // 信任库属性照旧注入：Fcl 包 cacerts 完整时属性无害，缺件时能救回一片 PKIX 失败。
-                javaVendor == JavaVendor.Fcl ->
+                // 信任库只在 FCL 自带 cacerts 不可读时才注入并集库：并集库可能缺新根证书
+                // （ISRG/USERTrust 之类），拿它顶替 FCL 的完整 cacerts 反而更差。
+                javaVendor == JavaVendor.Fcl -> {
+                    val props = if (termux.fclHasUsableCacerts(javaVersion)) {
+                        emptyArray()
+                    } else {
+                        termux.javaTrustStoreProps(javaVersion).also {
+                            if (it.isNotEmpty()) termux.emitLog("[install] Pojav JRE 自带证书库不可用，已注入并集信任库")
+                        }
+                    }
                     termux.runFclJavaCommand(
                         javaVersion, serverDir,
-                        *trustStoreProps,
+                        *props,
                         "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
                     )
+                }
                 else ->
                     // 显式喂一份「并集」信任库：installer 下载 libraries 走 HTTPS，
                     // JDK 自带 cacerts 缺失/残缺时它会全部握手失败（PKIX / trustAnchors）。
                     // 属性能给就给，给不了（库不够好）就退回默认行为。
                     termux.execOnce(
                         "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
-                        *trustStoreProps,
+                        *termux.javaTrustStoreProps(javaVersion),
                         "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
                     )
             }
             if (lastCode == 0) return 0
-            // 带镜像失败一次就摘掉镜像重来：installer 不认 --mirror 时是参数解析直接退出，
-            // 与网络失败在日志上都表现为非 0，只能靠「退一步再试」区分。这一轮不占重试配额。
-            if (useMirror) {
+            if (probingWithoutMirror) {
+                // 探测轮也失败 → 说明不是参数问题，恢复镜像继续试
+                probingWithoutMirror = false
+                useMirror = canMirror
+            } else if (useMirror) {
                 useMirror = false
-                attempt--
-                termux.emitLog("[install] $label 带镜像安装失败（exit=$lastCode），改用官方源重试...")
-                continue
+                probingWithoutMirror = true
+                termux.emitLog("[install] $label 带镜像安装失败（exit=$lastCode），去掉镜像验证是否是参数问题...")
             }
-            if (attempt >= 3) break
-            termux.emitLog("[install] $label 安装失败，${attempt + 1}/3 次重试前等待网络恢复...")
-            delay(attempt * 2000L)
+            if (attempt < maxAttempts) {
+                termux.emitLog("[install] $label 安装失败，准备第 ${attempt + 1}/$maxAttempts 次尝试...")
+                delay(attempt * 2_000L)
+            }
         }
         return lastCode
     }
@@ -378,7 +399,11 @@ class McServerController(
     ): List<InstallerLibraryManifest.Entry> = try {
         InstallerLibraryManifest.libraries(installerJar)
     } catch (e: Exception) {
-        termux.emitLog("[install] 读取 installer 依赖清单失败（${e.message}），跳过依赖库预下载")
+        // 异常类型要打出来：ZipException = jar 损坏（该重新下载），
+        // 其它（JsonDecodingException 等）= 清单格式变了，两种故障方向不同。
+        termux.emitLog(
+            "[install] 读取 installer 依赖清单失败（${e.javaClass.simpleName}: ${e.message}），跳过依赖库预下载"
+        )
         emptyList()
     }
 
@@ -408,8 +433,9 @@ class McServerController(
         var ok = 0; var already = 0; var failed = 0
         for ((index, lib) in libraries.withIndex()) {
             currentCoroutineContext().ensureActive() // 用户点「取消安装」必须能立刻停下
-            val target = File(libsRoot, lib.path).canonicalFile
-            if (!target.path.startsWith(libsRoot.path + File.separator)) {
+            // 规范化后必须仍在 libraries/ 下：path 来自远端 jar 内的 JSON，挡住 ../ 穿越
+            val target = InstallerLibraryManifest.resolveTarget(libsRoot, lib.path)
+            if (target == null) {
                 termux.emitLog("[install] 跳过越界的库路径：${lib.path}")
                 continue
             }
