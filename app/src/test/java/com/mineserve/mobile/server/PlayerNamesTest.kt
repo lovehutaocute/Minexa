@@ -51,10 +51,46 @@ class PlayerNamesTest {
     }
 
     @Test
+    fun `基岩版颜色码被剔除`() {
+        assertEquals("Steve", PlayerNames.sanitize("§aSteve"))
+        assertEquals("Steve", PlayerNames.sanitize("§a§lSteve"))
+        // 十六进制逐对写法：§x §f §f §0 §0 §0 §0 是同一个颜色
+        assertEquals("Stone", PlayerNames.sanitize("§x§f§f§0§0§0§0Stone"))
+    }
+
+    @Test
+    fun `多属性与 256 色残码被剔除而不是丢弃整条名字`() {
+        assertEquals("Steve", PlayerNames.sanitize("[0;1;32mSteve"))
+        assertEquals("Steve", PlayerNames.sanitize("[38;5;202mSteve"))
+    }
+
+    @Test
     fun `list 响应按逗号切分后每段都能正确清洗`() {
         // 现场日志的真实形态：颜色码被拆散到每个名字前后
         val tail = "[0mwehxc147[37m, [0mdeepseek_flash[37m, [0m453_ab[37m"
         val names = tail.split(",").mapNotNull { PlayerNames.sanitize(it) }
         assertEquals(listOf("wehxc147", "deepseek_flash", "453_ab"), names)
+    }
+
+    // ── Java 版进服/离服：脏码粘在名字前，必须在跑正则之前清掉 ──────────
+
+    @Test
+    fun `颜色码前缀的进服日志仍能取到真名`() {
+        assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: [0mSteve joined the game"))
+        assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: [0mSteve[37m joined the game"))
+        assertEquals("deepseek_flash", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: [0mdeepseek_flash has joined the game"))
+    }
+
+    @Test
+    fun `真实 ANSI 序列包裹的离服日志仍能取到真名`() {
+        assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: \u001B[1;32mSteve\u001B[0m left the game"))
+    }
+
+    @Test
+    fun `干净日志与聊天消息的既有行为不变`() {
+        assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: Steve joined the game"))
+        assertEquals("Steve", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: Steve[/127.0.0.1:5555] joined the game"))
+        // 聊天消息不该被当成玩家事件
+        assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: <Steve> I joined the game"))
     }
 }

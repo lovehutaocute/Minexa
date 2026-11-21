@@ -25,18 +25,17 @@ import kotlinx.serialization.builtins.serializer
  */
 class PlayerManager(private val termux: TermuxRuntime) {
 
-    /** 进服/离服日志解析：日志前缀(]: 结尾) + 玩家名(1-16位字母数字下划线) + 可选[IP]后缀 + (has) joined/left the game。
-     * 以 ": " 锚定日志前缀结尾，过滤聊天消息（如 "<Steve> I joined the game"）误提取。 */
-    private val joinLeaveStrictRegex = Regex(":\\s*([A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game")
+    // Java 版的 join/leave 正则与「行级清洗」都在 [PlayerNames] 里，
+    // 因为清洗必须发生在跑正则**之前**（`[0mSteve joined` 会让宽松回退从 `0m` 起匹配）。
 
-    /** 宽松回退：兼容无日志前缀冒号的极端格式（如直接输出 "Steve joined the game"） */
-    private val joinLeaveLooseRegex = Regex("([A-Za-z0-9_]{1,16})(?:\\[[^\\]]*\\])?\\s+(?:has\\s+)?(?:joined|left) the game")
     private val powerNukkitJoinRegex = Regex("(?:^|[: ]\\s*)([A-Za-z0-9_]{1,16})(?:\\[[^]]*])?\\s+logged in with entity id", RegexOption.IGNORE_CASE)
     private val powerNukkitLeaveRegex = Regex("(?:^|[: ]\\s*)([A-Za-z0-9_]{1,16})(?:\\[[^]]*])?\\s+disconnected(?:[: ]|$)", RegexOption.IGNORE_CASE)
 
     fun extractPowerNukkitPlayerEvent(line: String): Pair<String, Boolean>? {
-        powerNukkitJoinRegex.find(line)?.groupValues?.getOrNull(1)?.let { return sanitizePlayerName(it)?.let { n -> n to true } }
-        powerNukkitLeaveRegex.find(line)?.groupValues?.getOrNull(1)?.let { return sanitizePlayerName(it)?.let { n -> n to false } }
+        // 先做行级清洗：`[0mSteve logged in` 会因 `[` 挡住 `(?:^|[: ]\s*)` 而整条漏记
+        val clean = PlayerNames.stripMarkup(line)
+        powerNukkitJoinRegex.find(clean)?.groupValues?.getOrNull(1)?.let { return sanitizePlayerName(it)?.let { n -> n to true } }
+        powerNukkitLeaveRegex.find(clean)?.groupValues?.getOrNull(1)?.let { return sanitizePlayerName(it)?.let { n -> n to false } }
         return null
     }
 
@@ -68,11 +67,13 @@ class PlayerManager(private val termux: TermuxRuntime) {
 
     fun extractBedrockPlayerEvent(line: String): BdsPlayerEvent? {
         if (!line.contains("Player connected", true) && !line.contains("Player disconnected", true)) return null
-        bdsJoinRegex.find(line)?.let { m ->
+        // 行级清洗：`§`/ANSI 残码可能夹在 "Player connected: " 与名字之间
+        val clean = PlayerNames.stripMarkup(line)
+        bdsJoinRegex.find(clean)?.let { m ->
             val name = sanitizePlayerName(m.groupValues[1]) ?: return null
             return BdsPlayerEvent(name, true, m.groupValues.getOrNull(2)?.ifBlank { null })
         }
-        bdsLeaveRegex.find(line)?.let { m ->
+        bdsLeaveRegex.find(clean)?.let { m ->
             val name = sanitizePlayerName(m.groupValues[1]) ?: return null
             return BdsPlayerEvent(name, false, m.groupValues.getOrNull(2)?.ifBlank { null })
         }
@@ -396,13 +397,13 @@ class PlayerManager(private val termux: TermuxRuntime) {
     fun parseOnlinePlayers(logLine: String, onlineCount: Int? = null): List<String>? {
         if (!logLine.contains("players online")) return null
         val regex = Regex("players online:\\s*(.*)")
-        val match = regex.find(logLine) ?: return null
+        val match = regex.find(PlayerNames.stripMarkup(logLine)) ?: return null
         val names = match.groupValues[1].trim()
         if (names.isEmpty()) {
             // 只有确定是 0 人才清空名单
             return if (onlineCount == 0) emptyList() else null
         }
-        // 名字被 ANSI 颜色码包裹时，split 出来的每一段都带 `[0m`/`[37m` 残留，
+        // 名字被颜色码包裹时，split 出来的每一段都带 `[0m`/`[37m`/`§a` 残留，
         // 必须先清洗再校验；清洗后为空的段落（分隔符之间的纯转义）直接丢掉。
         return names.split(",")
             .mapNotNull { sanitizePlayerName(it) }
@@ -419,7 +420,8 @@ class PlayerManager(private val termux: TermuxRuntime) {
      * 也兼容不带 `- ` 前缀的版本。返回 null 表示这行不是名字（收集应当中止）。
      */
     fun parseBedrockListEntry(line: String): String? {
-        val tail = line.substringAfterLast("] ", line).trim()
+        // 先清颜色码再剥 `- ` 前缀：`[INFO] [0m- Steve` 否则会留下前后颠倒的 `- Steve`
+        val tail = PlayerNames.stripMarkup(line.substringAfterLast("] ", line)).trim()
         val name = sanitizePlayerName(tail.removePrefix("- ")) ?: return null
         if (name.length > 32) return null
         if (!bdsPlayerNameRegex.matches(name)) return null
@@ -433,15 +435,15 @@ class PlayerManager(private val termux: TermuxRuntime) {
     /**
      * 从进服/离服日志行中提取玩家名。
      * 支持多种格式：`Steve joined the game`、`Steve has joined the game`、
-     * `Steve[/127.0.0.1:5555] joined the game`（带 IP 后缀）、带日志时间戳前缀等。
-     * 玩家名按 MC 格式（1-16 位字母/数字/下划线）校验，过滤聊天消息等误匹配。
+     * `Steve[/127.0.0.1:5555] joined the game`（带 IP 后缀）、带日志时间戳/颜色码前缀等。
+     *
+     * 实现委托 [PlayerNames.fromJoinLeaveLine]：**先做行级清洗再跑正则**。
+     * 顺序不能反 —— `[0mSteve joined the game` 会让宽松回退从 `0m` 起匹配，
+     * 提取出的 `0mSteve` 已不含 `[`，事后 sanitize 救不回来。
+     *
      * @return 玩家名；无法提取或格式非法时返回 null
      */
-    fun extractPlayerName(logLine: String): String? {
-        // 先严格匹配（冒号锚定日志前缀，防聊天误报），失败再宽松回退（兼容无前缀格式）
-        val m = joinLeaveStrictRegex.find(logLine) ?: joinLeaveLooseRegex.find(logLine) ?: return null
-        return m.groupValues[1]
-    }
+    fun extractPlayerName(logLine: String): String? = PlayerNames.fromJoinLeaveLine(logLine)
 
     // ── 游戏模式切换 ────────────────────────────────────────────
 
