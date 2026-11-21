@@ -71,8 +71,10 @@ internal object InstallerLibraryManifest {
      * 经过镜像/代理，不能假定它没被改过。
      */
     fun resolveTarget(libsRoot: File, path: String): File? {
-        // 绝对路径先直接拒：`File(parent, "/abs")` 在 Windows 上会被当成相对路径
-        // （没有盘符），判定依赖平台会把这条防线的行为变得不可预测。
+        // 绝对路径显式拒绝，不依赖 canonical 比较：POSIX 上 `File(parent, "/abs")` 会逃出
+        // parent，Windows 上同样写法却是相对路径 —— 显式判前缀能让行为与运行平台无关
+        // （单测在 Windows 跑、装机在 Android 跑）。反斜杠前缀在 Unix 只是普通字符，
+        // 这里一并拒掉属于无害的过度防御，省得跨平台差异回来咬人。
         if (path.startsWith("/") || path.startsWith("\\") || File(path).isAbsolute) return null
         val root = libsRoot.canonicalFile
         val target = File(root, path).canonicalFile

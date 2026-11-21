@@ -326,12 +326,17 @@ class McServerController(
         if (mirrorUrl != null && !canMirror) {
             termux.emitLog("[install] ${File(jarPath).name} 未声明 --mirror 参数，直接使用官方源")
         }
-        // 执行序列 M → N → M → M：第 2 次摘掉镜像只做「能力探测」，第 3 次起恢复镜像。
-        // 不能单调降级 —— 国内网络下「带镜像失败」多半是 CDN 抖动，摘掉镜像后剩余重试
-        // 全打在不可达的官方源上等于白烧配额。
+        // 执行序列 M → N → M → M：只在**第 1 次失败后**摘掉镜像做一次能力探测，
+        // 之后恒用镜像。不能单调降级（国内「带镜像失败」多半是 CDN 抖动，剩余重试
+        // 全打在不可达的官方源上等于白烧配额），也不能反复探测（最后一发要留在镜像上）。
         var useMirror = canMirror
-        var probingWithoutMirror = false
+        var probedWithoutMirror = false
         val maxAttempts = if (canMirror) 4 else 3
+        // 信任库属性整个方法只算一次：首次可能 fork 一个 JVM 做 keytool 校验（按 mtime 缓存）。
+        var termuxProps: Array<String>? = null
+        fun props(): Array<String> = termuxProps ?: termux.javaTrustStoreProps(javaVersion).also {
+            termuxProps = it
+        }
         var lastCode = 1
         for (attempt in 1..maxAttempts) {
             val effectiveMirror = if (useMirror) mirrorUrl else null
@@ -350,16 +355,18 @@ class McServerController(
                 // 信任库只在 FCL 自带 cacerts 不可读时才注入并集库：并集库可能缺新根证书
                 // （ISRG/USERTrust 之类），拿它顶替 FCL 的完整 cacerts 反而更差。
                 javaVendor == JavaVendor.Fcl -> {
-                    val props = if (termux.fclHasUsableCacerts(javaVersion)) {
+                    val injected = if (termux.fclHasUsableCacerts(javaVersion)) {
                         emptyArray()
                     } else {
-                        termux.javaTrustStoreProps(javaVersion).also {
-                            if (it.isNotEmpty()) termux.emitLog("[install] Pojav JRE 自带证书库不可用，已注入并集信任库")
+                        props().also {
+                            if (attempt == 1 && it.isNotEmpty()) {
+                                termux.emitLog("[install] Pojav JRE 自带证书库不可用，已注入并集信任库")
+                            }
                         }
                     }
                     termux.runFclJavaCommand(
                         javaVersion, serverDir,
-                        *props,
+                        *injected,
                         "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
                     )
                 }
@@ -369,19 +376,20 @@ class McServerController(
                     // 属性能给就给，给不了（库不够好）就退回默认行为。
                     termux.execOnce(
                         "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
-                        *termux.javaTrustStoreProps(javaVersion),
+                        *props(),
                         "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
                     )
             }
             if (lastCode == 0) return 0
-            if (probingWithoutMirror) {
-                // 探测轮也失败 → 说明不是参数问题，恢复镜像继续试
-                probingWithoutMirror = false
-                useMirror = canMirror
-            } else if (useMirror) {
+            if (attempt == 1 && canMirror) {
+                // 第一次失败：可能是参数不被识别，也可能是网络抖动 —— 摘一次镜像来区分
                 useMirror = false
-                probingWithoutMirror = true
+                probedWithoutMirror = true
                 termux.emitLog("[install] $label 带镜像安装失败（exit=$lastCode），去掉镜像验证是否是参数问题...")
+            } else if (probedWithoutMirror) {
+                // 探测轮也失败 → 不是参数问题，恢复镜像继续试
+                probedWithoutMirror = false
+                useMirror = canMirror
             }
             if (attempt < maxAttempts) {
                 termux.emitLog("[install] $label 安装失败，准备第 ${attempt + 1}/$maxAttempts 次尝试...")

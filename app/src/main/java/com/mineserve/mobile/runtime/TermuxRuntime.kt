@@ -2213,8 +2213,12 @@ class TermuxRuntime(context: Context) {
     fun fclHasUsableCacerts(version: JavaVersion): Boolean {
         val javaBin = fclJre.javaBinary(version)
         val home = javaBin.parentFile?.parentFile ?: return false
-        val cacerts = File(home, "lib/security/cacerts")
-        return cacerts.isFile && cacerts.length() > 64L * 1024
+        // 标准 OpenJDK 是 lib/security/cacerts（Pojav 实测 ~120KB PKCS12）；
+        // 少数定制包把它放到 etc/security/cacerts，两条都看一眼再决定要不要回落。
+        return listOf("lib/security/cacerts", "etc/security/cacerts").any { relative ->
+            val cacerts = File(home, relative)
+            cacerts.isFile && cacerts.length() > 64L * 1024
+        }
     }
 
     fun runFclJavaCommand(
