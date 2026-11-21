@@ -256,12 +256,14 @@ class McServerController(
     /**
      * Forge installer 的 maven 镜像（BMCLAPI，与官方仓同步）。
      *
-     * Forge 的 installer 历来认 `--mirror <URL>` 并真正改写下载 URL（1.12.2 / 1.16.5
+     * Forge 的 installer 认 `--mirror <URL>` 并真正改写下载 URL（1.12.2 / 1.16.5
      * 实测也认，不只是 1.17+），镜像不可用时它自己回落官方源。国内直连
      * maven.minecraftforge.net / maven.neoforged.net 会被 Connection reset。
      *
-     * 不再按 MC 版本号猜能力：某个 installer 构建若真不含该选项，jopt 会在参数解析
-     * 阶段直接退出；这条由 runInstallerWithRetry 的「带镜像失败 → 去掉镜像重试」兜住。
+     * ⚠ 仅对 Forge 生效。NeoForge 用的是 neoforged/LegacyInstaller，它虽然接受
+     * `--mirror`，但那个参数只喂给赞助横幅（`MirrorData`），下载器根本不读 ——
+     * 实测传 `http://127.0.0.1:9/` 仍照常访问 maven.neoforged.net。所以 NeoForge
+     * 的调用点不传本值，改走 [preDownloadInstallerLibraries] 预下依赖库。
      */
     private val installerMavenMirror = "https://bmclapi2.bangbang93.com/maven/"
 
@@ -322,8 +324,15 @@ class McServerController(
         }
         // 先按 jar 本体探测参数能力，避免给老 installer 传它不认识的 --mirror：
         // Forge 1.7.10 会直接 UnrecognizedOptionException 抛栈退出（白跑一轮 + 吓人）。
-        val canMirror = mirrorUrl != null && InstallerCapabilities.supportsMirror(File(jarPath))
-        if (mirrorUrl != null && !canMirror) {
+        // 注意：只有 Forge（2.0 installer）的下载器真的读 --mirror；NeoForge 的
+        // LegacyInstaller 只把它当赞助横幅，所以 NeoForge 调用点根本不传 mirrorUrl
+        // （靠 preDownloadInstallerLibraries 预下依赖库），别在这里给它补。
+        val probe = mirrorUrl?.let { InstallerCapabilities.probe(File(jarPath)) }
+        val canMirror = probe?.supported == true
+        probe?.readFailure?.let {
+            termux.emitLog("[install] installer 包无法解析（$it），先按支持 --mirror 处理；若安装失败请重新下载核心")
+        }
+        if (mirrorUrl != null && probe != null && !probe.supported) {
             termux.emitLog("[install] ${File(jarPath).name} 未声明 --mirror 参数，直接使用官方源")
         }
         // 执行序列 M → N → M → M：只在**第 1 次失败后**摘掉镜像做一次能力探测，

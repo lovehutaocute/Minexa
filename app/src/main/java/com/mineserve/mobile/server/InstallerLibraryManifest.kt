@@ -74,8 +74,15 @@ internal object InstallerLibraryManifest {
         // 绝对路径显式拒绝，不依赖 canonical 比较：POSIX 上 `File(parent, "/abs")` 会逃出
         // parent，Windows 上同样写法却是相对路径 —— 显式判前缀能让行为与运行平台无关
         // （单测在 Windows 跑、装机在 Android 跑）。反斜杠前缀在 Unix 只是普通字符，
-        // 这里一并拒掉属于无害的过度防御，省得跨平台差异回来咬人。
-        if (path.startsWith("/") || path.startsWith("\\") || File(path).isAbsolute) return null
+        // 盘符（`C:\...` / `C:/...`）在 Unix 同样不是绝对路径，这里一并拒掉属于无害的
+        // 过度防御，省得跨平台差异回来咬人。
+        val looksLikeWindowsAbsolute =
+            path.length >= 2 && path[1] == ':' && path[0].isLetter()
+        if (path.startsWith("/") || path.startsWith("\\") || looksLikeWindowsAbsolute ||
+            File(path).isAbsolute
+        ) {
+            return null
+        }
         val root = libsRoot.canonicalFile
         val target = File(root, path).canonicalFile
         return if (target.path.startsWith(root.path + File.separator)) target else null

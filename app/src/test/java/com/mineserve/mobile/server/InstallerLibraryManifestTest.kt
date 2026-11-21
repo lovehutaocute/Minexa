@@ -161,5 +161,10 @@ class InstallerLibraryManifestTest {
         assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "a/../../../pwned.jar"))
         // 绝对路径：File(root, abs) 在 Java 里就是 abs，必须挡掉
         assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "/tmp/pwned.jar"))
+        // 反斜杠前缀：Unix 上只是普通字符，Windows 上是绝对路径 —— 统一拒掉
+        assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "\\tmp\\pwned.jar"))
+        // 盘符路径：只在 Windows 上被 File.isAbsolute 认出来，显式判前缀让行为与平台无关
+        assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "C:\\pwned.jar"))
+        assertEquals(null, InstallerLibraryManifest.resolveTarget(root, "C:/pwned.jar"))
     }
 }

@@ -1,6 +1,7 @@
 package com.mineserve.mobile.server
 
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -26,8 +27,7 @@ class InstallerCapabilitiesTest {
     @get:Rule
     val temp = TemporaryFolder()
 
-    private fun jarWithClasses(name: String, classes: Map<String, ByteArray>): File {
-        val file = File(temp.root, name)
+    private fun writeJar(file: File, classes: Map<String, ByteArray>) {
         JarOutputStream(file.outputStream()).use { out ->
             classes.forEach { (entry, bytes) ->
                 out.putNextEntry(JarEntry(entry))
@@ -35,8 +35,10 @@ class InstallerCapabilitiesTest {
                 out.closeEntry()
             }
         }
-        return file
     }
+
+    private fun jarWithClasses(name: String, classes: Map<String, ByteArray>): File =
+        File(temp.root, name).also { writeJar(it, classes) }
 
     private fun classBytes(vararg tokens: String): ByteArray =
         byteArrayOf(0xCA.toByte(), 0xFE.toByte(), 0xBA.toByte(), 0xBE.toByte()) +
@@ -95,5 +97,28 @@ class InstallerCapabilitiesTest {
         )
 
         assertFalse(InstallerCapabilities.supportsMirror(jar))
+    }
+
+    @Test
+    fun `unreadable jar stays optimistic but reports the reason`() {
+        // 半下载 / 损坏的 jar：JarFile 直接抛异常。判定仍乐观为 true（交给运行期重试），
+        // 但必须把原因带出来 —— 否则控制台只会写「带镜像安装失败」，把用户引向镜像排查。
+        val broken = File(temp.root, "broken.jar").apply { writeText("PK\u0003\u0004 not really a zip") }
+
+        val probe = InstallerCapabilities.probe(broken)
+
+        assertTrue(probe.supported)
+        assertNotNull(probe.readFailure)
+    }
+
+    @Test
+    fun `probe result is cached per jar fingerprint`() {
+        val jar = File(temp.root, "cached.jar")
+        writeJar(jar, mapOf("a/SimpleInstaller.class" to classBytes("installServer", "mirror")))
+
+        assertTrue(InstallerCapabilities.probe(jar).supported)
+        // jar 被替换（长度变了 → fingerprint 变）后必须重扫，不能命中旧结论
+        writeJar(jar, mapOf("a/SimpleInstaller.class" to classBytes("installServer")))
+        assertFalse(InstallerCapabilities.probe(jar).supported)
     }
 }

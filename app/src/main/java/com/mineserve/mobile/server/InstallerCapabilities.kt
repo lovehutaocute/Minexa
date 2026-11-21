@@ -21,6 +21,9 @@ import java.util.jar.JarFile
  * `VersionInfo.mirrorList` 字段 —— 它们的选项表里并没有 `--mirror`。
  * 只按「任意 class 含 mirror」判会把这三代老 installer 误判为支持（2026-11-21 审查实测）。
  *
+ * 已知取舍：判据依赖 jopt 选项表与 `installServer` 同处一类。若上游把选项表拆到父类，
+ * 判定会退化成 false —— 方向是安全的（不传参数不影响安装，只是少了镜像加速）。
+ *
  * 判定为「不支持」时只是不传参数（installer 走官方源，功能不受影响）；
  * 判定为「支持」但实际不认的情况由 `runInstallerWithRetry` 的摘镜像重试兜底。
  */
@@ -28,25 +31,44 @@ internal object InstallerCapabilities {
 
     /** 缓存上限：每个服务器目录的 server.jar 都是新 key，条目小但要封顶。 */
     private const val MAX_CACHE_ENTRIES = 64
-    private val mirrorSupportCache = LinkedHashMap<String, Boolean>()
+
+    /**
+     * 探测结果。
+     *
+     * [readFailure] 非空表示 jar 根本读不动（半下载 / 损坏 / 权限），此时 [supported]
+     * 乐观取 true 交给运行期重试兜底；把原因带出来是为了让调用方能在控制台说清
+     * 「是 jar 坏了」而不是让用户去怀疑镜像。
+     */
+    data class MirrorProbe(val supported: Boolean, val readFailure: String? = null)
+
+    private val cache = LinkedHashMap<String, MirrorProbe>()
 
     private fun fingerprint(jar: File): String =
         "${jar.absolutePath}|${jar.length()}|${jar.lastModified()}"
 
     @Synchronized
-    fun supportsMirror(installerJar: File): Boolean {
+    fun probe(installerJar: File): MirrorProbe {
         val key = fingerprint(installerJar)
-        mirrorSupportCache[key]?.let { return it }
-        val supported = scanForMirror(installerJar)
-        if (mirrorSupportCache.size >= MAX_CACHE_ENTRIES) mirrorSupportCache.clear()
-        mirrorSupportCache[key] = supported
-        return supported
+        cache[key]?.let { return it }
+        val result = scanForMirror(installerJar)
+        // 逐条淘汰最旧（插入序）而不是 clear() 全清：全清会让仍在用的 jar 反复重扫，
+        // 而重扫是「读完整包内所有 class」的开销。
+        while (cache.size >= MAX_CACHE_ENTRIES) {
+            val oldest = cache.keys.firstOrNull() ?: break
+            cache.remove(oldest)
+        }
+        cache[key] = result
+        return result
     }
 
-    private fun scanForMirror(installerJar: File): Boolean = try {
+    /** 只要布尔结论的便捷入口（调用方不关心诊断信息时用）。 */
+    fun supportsMirror(installerJar: File): Boolean = probe(installerJar).supported
+
+    private fun scanForMirror(installerJar: File): MirrorProbe = try {
         JarFile(installerJar).use { jar ->
-            jar.entries().asSequence()
-                .filter { it.name.endsWith(".class") && it.size > 0 }
+            val found = jar.entries().asSequence()
+                // size == 0 的空条目没有内容可扫；-1（未知）要保留，zip 里确实存在。
+                .filter { it.name.endsWith(".class") && it.size != 0L }
                 .any { entry ->
                     jar.getInputStream(entry).use { input ->
                         val bytes = input.readBytes()
@@ -54,10 +76,12 @@ internal object InstallerCapabilities {
                         contains(bytes, INSTALL_SERVER) && contains(bytes, MIRROR)
                     }
                 }
+            MirrorProbe(found)
         }
-    } catch (_: Exception) {
-        // jar 读不动（损坏 / 正在下载）：乐观当作支持，交给运行期重试兜底
-        true
+    } catch (e: Exception) {
+        // jar 读不动（损坏 / 正在下载）：乐观当作支持，交给运行期重试兜底；
+        // 原因带出去让调用方提示「jar 可能损坏」，别把用户引向镜像排查。
+        MirrorProbe(true, "${e.javaClass.simpleName}: ${e.message}")
     }
 
     /** 在类文件字节里找 ASCII 串（常量池 UTF8 明文存放，无需解析 CP 结构）。 */
