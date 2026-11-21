@@ -413,16 +413,26 @@ class McServerController(
     /** 解析 installer jar 里的依赖清单；解析失败只记日志，不阻断安装。 */
     private fun installerLibraries(
         installerJar: File
-    ): List<InstallerLibraryManifest.Entry> = try {
-        InstallerLibraryManifest.libraries(installerJar)
+    ): Pair<List<InstallerLibraryManifest.Entry>, String?> = try {
+        InstallerLibraryManifest.libraries(installerJar) to null
     } catch (e: Exception) {
         // 异常类型要打出来：ZipException = jar 损坏（该重新下载），
         // 其它（JsonDecodingException 等）= 清单格式变了，两种故障方向不同。
-        termux.emitLog(
-            "[install] 读取 installer 依赖清单失败（${e.javaClass.simpleName}: ${e.message}），跳过依赖库预下载"
-        )
-        emptyList()
+        val detail = "${e.javaClass.simpleName}: ${e.message}"
+        termux.emitLog("[install] 读取 installer 依赖清单失败（$detail），跳过依赖库预下载")
+        emptyList<InstallerLibraryManifest.Entry>() to detail
     }
+
+    /**
+     * 预下载结果。[manifestError] 非空 = installer 包本身读不动（损坏/半下载），
+     * 这是与「镜像拉不到库」完全不同的故障方向，必须带回调用方写进最终异常消息里 ——
+     * 否则用户只看到 `exit=1`，不知道该重下核心还是该换网络。
+     */
+    private data class PreDownloadReport(
+        val failed: Int = 0,
+        val total: Int = 0,
+        val manifestError: String? = null
+    )
 
     /**
      * NeoForge 专用：跑 installer 前，把依赖库逐个预下载到 serverDir/libraries/。
@@ -434,16 +444,18 @@ class McServerController(
      * 「已存在且 sha1 匹配」的文件直接跳过网络，所以预下载是正解：下好之后 installer
      * 顺带替我们复检一遍校验和。
      *
-     * 不抛异常：单库下载失败时 installer 仍会自己重试（官方源兜底）。返回失败数。
+     * 不抛异常：单库下载失败时 installer 仍会自己重试（官方源兜底）。
      * 安装重跑（auto-repair 路径）同样受益：已下好的库 sha1 匹配即跳过。
      */
     private suspend fun preDownloadInstallerLibraries(
         installerJar: File,
         serverDir: File,
         mirrorsFor: (String) -> List<String>
-    ): Int {
-        val libraries = installerLibraries(installerJar)
-        if (libraries.isEmpty()) return 0
+    ): PreDownloadReport {
+        val (libraries, manifestError) = installerLibraries(installerJar)
+        if (libraries.isEmpty()) {
+            return PreDownloadReport(total = 0, manifestError = manifestError)
+        }
         termux.emitLog("[install] 依赖库清单 ${libraries.size} 个（install_profile + version json 合并）")
         // 规范化根目录：库路径来自远端 jar 内的 JSON，必须挡住 ../ 穿越写到 libraries/ 之外
         val libsRoot = File(serverDir, "libraries").canonicalFile
@@ -482,7 +494,7 @@ class McServerController(
             "[install] 依赖库预下载：新下 $ok、已存在 $already" +
                 (if (failed > 0) "、失败 $failed（installer 会用官方源重试）" else "，全部就绪")
         )
-        return failed
+        return PreDownloadReport(failed, libraries.size, manifestError)
     }
 
     private fun sha1Of(file: File): String? = runCatching {
@@ -757,11 +769,11 @@ class McServerController(
                 ServerCore.NeoForge -> {
                     // LegacyInstaller 不吃 --mirror（见 preDownloadInstallerLibraries 注释），
                     // 先把依赖库经 BMCLAPI 预下到位，installer 再离线校验。
-                    val preFailed = preDownloadInstallerLibraries(
+                    val report = preDownloadInstallerLibraries(
                         File(jarPath), serverDir, ::neoforgeLibraryMirrors
                     )
-                    if (preFailed > 0) {
-                        termux.emitLog("[install] 有 $preFailed 个依赖库未预下载成功，installer 将尝试官方源")
+                    if (report.failed > 0) {
+                        termux.emitLog("[install] 有 ${report.failed} 个依赖库未预下载成功，installer 将尝试官方源")
                     }
                     val code = runInstallerWithRetry(
                         jarPath, serverDir, normalizedConfig.selectedCore.displayName, installerTempDir,
@@ -769,7 +781,16 @@ class McServerController(
                     )
                     if (code != 0) {
                         FileOps.deleteRecursively(serverDir)
-                        throw RuntimeException("NeoForge installer 执行失败 (exit=$code)")
+                        // 失败原因要写清方向：jar 损坏 → 重下核心；库拉不到 → 换网络/重试。
+                        val hint = buildString {
+                            append("NeoForge installer 执行失败 (exit=$code)")
+                            if (report.manifestError != null) {
+                                append("；installer 包无法解析（${report.manifestError}），请重新下载核心")
+                            } else if (report.failed > 0) {
+                                append("；${report.failed}/${report.total} 个依赖库未能预下载，多为镜像不可达，可换网络或重试")
+                            }
+                        }
+                        throw RuntimeException(hint)
                     }
                 }
                 ServerCore.Quilt -> {

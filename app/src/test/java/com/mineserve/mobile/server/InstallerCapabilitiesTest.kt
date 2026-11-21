@@ -1,5 +1,6 @@
 package com.mineserve.mobile.server
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -120,5 +121,40 @@ class InstallerCapabilitiesTest {
         // jar 被替换（长度变了 → fingerprint 变）后必须重扫，不能命中旧结论
         writeJar(jar, mapOf("a/SimpleInstaller.class" to classBytes("installServer")))
         assertFalse(InstallerCapabilities.probe(jar).supported)
+    }
+
+    @Test
+    fun `read failure is not cached`() {
+        // 读失败常常是瞬时原因（文件正被占用、还在下载）。若把它写进缓存，jar 不变就
+        // 再也不会重探。这里用「同长度 + 同 mtime」把指纹锁死，只有不缓存失败结论才能
+        // 在第二次调用里读出真实答案。
+        val source = File(temp.root, "source.jar").also {
+            writeJar(it, mapOf("a/SimpleInstaller.class" to classBytes("installServer")))
+        }
+        val bytes = source.readBytes()
+        val jar = File(temp.root, "flaky.jar")
+        jar.writeBytes(corruptEndOfCentralDirectory(bytes))
+        val mtime = jar.lastModified()
+
+        assertNotNull(InstallerCapabilities.probe(jar).readFailure)
+
+        jar.writeBytes(bytes)
+        assertTrue("mtime 必须回到原值，否则这条用例测的不是缓存", jar.setLastModified(mtime))
+        val second = InstallerCapabilities.probe(jar)
+
+        assertEquals(null, second.readFailure)
+        assertFalse(second.supported)
+    }
+
+    /** 抹掉 EOCD 签名但保持字节长度不变，让 JarFile 必抛 ZipException。 */
+    private fun corruptEndOfCentralDirectory(bytes: ByteArray): ByteArray {
+        val copy = bytes.copyOf()
+        val signature = byteArrayOf(0x50, 0x4B, 0x05, 0x06)
+        outer@ for (i in copy.size - 22 downTo 0) {
+            for (j in signature.indices) if (copy[i + j] != signature[j]) continue@outer
+            for (k in signature.indices) copy[i + k] = 0
+            return copy
+        }
+        error("EOCD not found")
     }
 }

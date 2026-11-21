@@ -35,10 +35,21 @@ class PlayerManager(private val termux: TermuxRuntime) {
     private val powerNukkitLeaveRegex = Regex("(?:^|[: ]\\s*)([A-Za-z0-9_]{1,16})(?:\\[[^]]*])?\\s+disconnected(?:[: ]|$)", RegexOption.IGNORE_CASE)
 
     fun extractPowerNukkitPlayerEvent(line: String): Pair<String, Boolean>? {
-        powerNukkitJoinRegex.find(line)?.groupValues?.getOrNull(1)?.let { return it to true }
-        powerNukkitLeaveRegex.find(line)?.groupValues?.getOrNull(1)?.let { return it to false }
+        powerNukkitJoinRegex.find(line)?.groupValues?.getOrNull(1)?.let { return sanitizePlayerName(it)?.let { n -> n to true } }
+        powerNukkitLeaveRegex.find(line)?.groupValues?.getOrNull(1)?.let { return sanitizePlayerName(it)?.let { n -> n to false } }
         return null
     }
+
+    // ── 名字清洗 ─────────────────────────────────────────────────
+    //
+    // 服务端会把 ANSI 颜色码写进 `list` 响应（Paper + 上色插件、BDS 的彩色输出），
+    // 而 Android 侧的日志管道会把 ESC 字符（U+001B）本身吞掉，只剩字面 `[0m` / `[37m`。
+    // 不清洗就会被当成名字的一部分，界面出现 `[0mdeepseek_flash` 这类幽灵条目，
+    // 而且用户以为「玩家一直挂着、重开服务器还在」——其实是同一行日志被反复解错。
+    // 具体清洗规则见 [PlayerNames]。
+
+    /** @return 清洗后的名字；解析垃圾（超长、含 `[` 等）返回 null */
+    fun sanitizePlayerName(raw: String): String? = PlayerNames.sanitize(raw)
 
     // ── 官方 BDS（bedrock_server）的玩家事件 ────────────────────────
     //
@@ -58,12 +69,12 @@ class PlayerManager(private val termux: TermuxRuntime) {
     fun extractBedrockPlayerEvent(line: String): BdsPlayerEvent? {
         if (!line.contains("Player connected", true) && !line.contains("Player disconnected", true)) return null
         bdsJoinRegex.find(line)?.let { m ->
-            val name = m.groupValues[1].trim()
-            if (name.isNotEmpty()) return BdsPlayerEvent(name, true, m.groupValues.getOrNull(2)?.ifBlank { null })
+            val name = sanitizePlayerName(m.groupValues[1]) ?: return null
+            return BdsPlayerEvent(name, true, m.groupValues.getOrNull(2)?.ifBlank { null })
         }
         bdsLeaveRegex.find(line)?.let { m ->
-            val name = m.groupValues[1].trim()
-            if (name.isNotEmpty()) return BdsPlayerEvent(name, false, m.groupValues.getOrNull(2)?.ifBlank { null })
+            val name = sanitizePlayerName(m.groupValues[1]) ?: return null
+            return BdsPlayerEvent(name, false, m.groupValues.getOrNull(2)?.ifBlank { null })
         }
         return null
     }
@@ -391,8 +402,11 @@ class PlayerManager(private val termux: TermuxRuntime) {
             // 只有确定是 0 人才清空名单
             return if (onlineCount == 0) emptyList() else null
         }
-        // 玩家名可能包含下划线、数字，按逗号分隔
-        return names.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        // 名字被 ANSI 颜色码包裹时，split 出来的每一段都带 `[0m`/`[37m` 残留，
+        // 必须先清洗再校验；清洗后为空的段落（分隔符之间的纯转义）直接丢掉。
+        return names.split(",")
+            .mapNotNull { sanitizePlayerName(it) }
+            .distinct()
     }
 
     /**
@@ -406,8 +420,8 @@ class PlayerManager(private val termux: TermuxRuntime) {
      */
     fun parseBedrockListEntry(line: String): String? {
         val tail = line.substringAfterLast("] ", line).trim()
-        val name = tail.removePrefix("- ").trim()
-        if (name.isEmpty() || name.length > 32) return null
+        val name = sanitizePlayerName(tail.removePrefix("- ")) ?: return null
+        if (name.length > 32) return null
         if (!bdsPlayerNameRegex.matches(name)) return null
         // 启动日志 / 命令回显经常也是短句，靠这几个词挡掉
         if (name.contains("server", true) || name.contains("player", true)) return null

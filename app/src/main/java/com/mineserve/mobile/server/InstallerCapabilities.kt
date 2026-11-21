@@ -51,13 +51,17 @@ internal object InstallerCapabilities {
         val key = fingerprint(installerJar)
         cache[key]?.let { return it }
         val result = scanForMirror(installerJar)
-        // 逐条淘汰最旧（插入序）而不是 clear() 全清：全清会让仍在用的 jar 反复重扫，
-        // 而重扫是「读完整包内所有 class」的开销。
-        while (cache.size >= MAX_CACHE_ENTRIES) {
-            val oldest = cache.keys.firstOrNull() ?: break
-            cache.remove(oldest)
+        // 只缓存「真的扫过」的结论：readFailure 多为瞬时原因（文件正被占用、权限抖动、
+        // 还在下载），缓存住会让同一份 jar 再也得不到重探机会，直到进程重启。
+        if (result.readFailure == null) {
+            // 逐条淘汰最旧（插入序）而不是 clear() 全清：全清会让仍在用的 jar 反复重扫，
+            // 而重扫是「读完整包内所有 class」的开销。
+            while (cache.size >= MAX_CACHE_ENTRIES) {
+                val oldest = cache.keys.firstOrNull() ?: break
+                cache.remove(oldest)
+            }
+            cache[key] = result
         }
-        cache[key] = result
         return result
     }
 
