@@ -184,8 +184,11 @@ class PlayerNamesTest {
         // 断言挡住 `.example` 后，宽松回退会继续右移并落到 `has` 上
         assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: com.example has joined the game"))
         assertNull(PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: foo.bar has left the game"))
+        // 严格分支不施加守卫：`has` 是合法玩家名，被 `: ` 锚定就是真名
+        assertEquals("has", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: has joined the game"))
+        assertEquals("Has", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: Has left the game"))
         // 保留字守卫只挡语法词，合法玩家名照旧
         assertEquals("Game", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: Game joined the game"))
-        assertEquals("The", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: The has joined the game"))
+        assertEquals("hasan", PlayerNames.fromJoinLeaveLine("[12:00:00 INFO]: hasan joined the game"))
     }
 }

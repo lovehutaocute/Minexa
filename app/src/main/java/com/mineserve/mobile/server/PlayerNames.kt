@@ -17,7 +17,7 @@ package com.mineserve.mobile.server
  * 宽松回退的名字段带左边界断言 `(?<![A-Za-z0-9_.])`，代理前缀只在词首才被识别：
  * `com.example joined the game` 是主机名/插件名而非玩家事件，不加断言会产出 `.example`。
  * 断言挡住之后回退还会继续往右找词首，于是 `com.example has joined the game` 会落到
- * `has` 上 —— 由 [reservedTokens] 在出口处兜住。
+ * `has` 上 —— 由 [reservedTokens] 在**回退分支**上兜住（严格分支不拦，`has` 是真名）。
  */
 object PlayerNames {
 
@@ -101,12 +101,15 @@ object PlayerNames {
     private val chatPrefixRegex = Regex("<[^<>]{1,32}>")
 
     /**
-     * 语法词白名单：宽松回退可能把事件短语里的词当成名字。
+     * 语法词黑名单：宽松回退可能把事件短语里的词当成名字。
      *
-     * 只有 `has` 需要挡：`(?:has\s+)?` 是可选的，`com.example has joined the game` 里
+     * **只作用于宽松回退分支**（严格分支由 `:` 锚定，捕获组在这个位置只可能是真名）。
+     * 唯一需要挡的是 `has`：`(?:has\s+)?` 可选，`com.example has joined the game` 里
      * 断言挡掉 `example` 后，回退从 `has` 起照样能命中「…joined the game」。
-     * 不一起挡 `joined`/`left`/`the`/`game` —— 它们在正则结构上不可能成为捕获组，
-     * 而 `Game` 是完全合法的玩家名，挡掉会造成真玩家消失。
+     *
+     * 不扩词表：`joined`/`left`/`the`/`game` 在 `\s+(?:has\s+)?(?:joined|left)` 的结构下
+     * 不可能成为捕获组，而 `Game`、`has` 本身都是合法玩家名 —— 这是一张「语法词」表，
+     * 不是「非法名」表，别往里加名字。
      */
     private val reservedTokens = setOf("has")
 
@@ -126,8 +129,12 @@ object PlayerNames {
             .minOrNull()
         if (chat != null && eventAt != null && chat.range.first < eventAt) return null
 
-        val m = joinLeaveStrictRegex.find(line) ?: joinLeaveLooseRegex.find(line) ?: return null
-        return sanitize(m.groupValues[1])?.takeUnless { it.lowercase() in reservedTokens }
+        val strict = joinLeaveStrictRegex.find(line)
+        val m = strict ?: joinLeaveLooseRegex.find(line) ?: return null
+        val name = sanitize(m.groupValues[1])
+        // 守卫只在回退分支上生效：`INFO]: has joined the game` 里 `has` 是被 `: ` 锚定的
+        // 真玩家，照原样返回；只有回退才可能把事件短语的 `has` 当成名字。
+        return if (strict == null) name?.takeUnless { it.lowercase() in reservedTokens } else name
     }
 
     // ── 名单合并 ────────────────────────────────────────────────────

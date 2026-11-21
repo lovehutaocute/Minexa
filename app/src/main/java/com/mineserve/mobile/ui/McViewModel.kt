@@ -1925,29 +1925,17 @@ class McViewModel(
             when {
                 bdsEvent != null -> {
                     val name = bdsEvent.name
-                    // 只有名单状态真的变化时才动计数：重连会先 disconnected 再 connected，
-                    // 可能重复打印，靠名单是否变化去重避免计数漂移（与 Java/PowerNukkit 同源）
-                    val changed = if (bdsEvent.joined) addOnlinePlayer(name) else removeOnlinePlayer(name)
+                    // 重连会先 disconnected 再 connected，可能重复打印；名单是否变化
+                    // 由 setPlayerOnline 判定，计数与名单同源，重复行不会让计数漂移
+                    setPlayerOnline(name, bdsEvent.joined)
                     playerManager.noteBedrockPlayer(name, bdsEvent.xuid)
-                    if (changed) {
-                        repo.updateServerState {
-                            it.copy(
-                                onlinePlayers = (it.onlinePlayers + if (bdsEvent.joined) 1 else -1)
-                                    .coerceAtLeast(0)
-                            )
-                        }
-                    }
                     recordPlayerEvent(name, if (bdsEvent.joined) "进服" else "离服")
                     notifyPlayerEvent(name, bdsEvent.joined)
                     handled = true
                 }
                 playerManager.extractPowerNukkitPlayerEvent(line) != null -> {
                     val (name, joined) = playerManager.extractPowerNukkitPlayerEvent(line)!!
-                    val changed = if (joined) addOnlinePlayer(name) else removeOnlinePlayer(name)
-                    // 只在名单真的变化时动计数，避免重复事件让数字与列表分叉
-                    if (changed) {
-                        repo.updateServerState { it.copy(onlinePlayers = (it.onlinePlayers + if (joined) 1 else -1).coerceAtLeast(0)) }
-                    }
+                    setPlayerOnline(name, joined)
                     recordPlayerEvent(name, if (joined) "进服" else "离服")
                     notifyPlayerEvent(name, joined)
                     handled = true
@@ -1955,11 +1943,7 @@ class McViewModel(
                 line.contains("joined the game") -> {
                     // 仅当提取到真实玩家名（日志前缀 + 合法名字）时才计数与记录，避免聊天消息误报
                     playerManager.extractPlayerName(line)?.let { name ->
-                        if (addOnlinePlayer(name)) {
-                            repo.updateServerState {
-                                it.copy(onlinePlayers = (it.onlinePlayers + 1).coerceAtLeast(0))
-                            }
-                        }
+                        setPlayerOnline(name, true)
                         recordPlayerEvent(name, "进服")
                         notifyPlayerEvent(name, true)
                     }
@@ -1967,13 +1951,7 @@ class McViewModel(
                 }
                 line.contains("left the game") -> {
                     playerManager.extractPlayerName(line)?.let { name ->
-                        // 名单没变（玩家本不在、或同名跨平台无法判断删谁）就不减计数，
-                        // 否则会留下「计数 1、列表 2 行」的错位
-                        if (removeOnlinePlayer(name)) {
-                            repo.updateServerState {
-                                it.copy(onlinePlayers = (it.onlinePlayers - 1).coerceAtLeast(0))
-                            }
-                        }
+                        setPlayerOnline(name, false)
                         recordPlayerEvent(name, "离服")
                         notifyPlayerEvent(name, false)
                     }
@@ -5045,35 +5023,23 @@ class McViewModel(
             .format(java.util.Date())
 
     /**
-     * 在线玩家集合维护（进服：增量添加）。
+     * 玩家上线/下线的**唯一**入口：改名单 + 同步 `onlinePlayers` 计数。
      *
-     * 按 [PlayerNames.mergeInto] 归一化去重：同前缀状态 + 忽略大小写已存在时不算新增。
+     * 计数只在名单真的变化时才增减，两条链路永远同源 —— 分开写会让横幅人数
+     * （`serverState.onlinePlayers`）与「在线 N」（名单 size）分叉，出现
+     * 「2 人在线」但列表只有一行的矛盾显示。判定也靠 [PlayerNames] 的等价关系
+     * （前缀 + 忽略大小写），别在这里另写一套 `equals`。
      *
-     * @return 名单是否真的变化 —— 调用方据此决定要不要动 `onlinePlayers` 计数，
-     *         否则计数与名单 size 会分叉（横幅写 2、标签写 1）
+     * @return 名单是否真的变化（重复进服行、玩家本不在名单、同名跨平台无法判断删谁 → false）
      */
-    private fun addOnlinePlayer(name: String): Boolean {
+    private fun setPlayerOnline(name: String, joined: Boolean): Boolean {
         val cur = _onlinePlayerNames.value
-        val next = PlayerNames.mergeInto(cur, name)
+        val next = if (joined) PlayerNames.mergeInto(cur, name) else PlayerNames.removeFrom(cur, name)
         if (next === cur) return false
         _onlinePlayerNames.value = next
-        return true
-    }
-
-    /**
-     * 在线玩家集合维护（离服：按等价名字移除）。
-     *
-     * 离服日志可能只给裸名，名单里存的却是带前缀的全名；直接 `==` 删不掉，
-     * 那条记录就会永久留在在线列表。
-     *
-     * @return 名单是否真的变化 —— 没删掉任何一行（玩家本就不在名单、或同名跨平台无法
-     *         判断删谁）时必须返回 false，让调用方别去减计数
-     */
-    private fun removeOnlinePlayer(name: String): Boolean {
-        val cur = _onlinePlayerNames.value
-        val next = PlayerNames.removeFrom(cur, name)
-        if (next === cur) return false
-        _onlinePlayerNames.value = next
+        repo.updateServerState {
+            it.copy(onlinePlayers = (it.onlinePlayers + if (joined) 1 else -1).coerceAtLeast(0))
+        }
         return true
     }
 
@@ -7251,6 +7217,10 @@ class McViewModel(
             var wasRunning = false
             serverState.collect { state ->
                 if (wasRunning && !state.isRunning) {
+                    // 服务端已停：在线名单与计数一起归零。只清一个会留下「列表 0 行、计数 3」，
+                    // 而两者下一次对齐要等到重启就绪后那次 list —— 期间界面上就是个假数字。
+                    _onlinePlayerNames.value = emptyList()
+                    repo.updateServerState { if (it.isRunning) it else it.copy(onlinePlayers = 0) }
                     interruptPlayerSessions()
                     _lastRunLog.value = withContext(Dispatchers.IO) {
                         delay(150)
