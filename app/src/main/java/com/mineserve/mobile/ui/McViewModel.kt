@@ -84,6 +84,7 @@ import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.vm.AppUpdateDelegate
 import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
+import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
@@ -227,12 +228,12 @@ class McViewModel(
     private val _bdsUpdateState = MutableStateFlow<BdsUpdateProgress>(BdsUpdateProgress.Idle)
     val bdsUpdateState: StateFlow<BdsUpdateProgress> = _bdsUpdateState.asStateFlow()
 
-    /** 历史版本清单（「BDS 核心版本 → 历史版本」弹窗的数据源） */
-    private val _bdsVersions = MutableStateFlow<List<BdsVersionEntry>>(emptyList())
-    val bdsVersions: StateFlow<List<BdsVersionEntry>> = _bdsVersions.asStateFlow()
+    private val bdsCoreUpdateDelegate by lazy { BdsCoreUpdateDelegate(app, viewModelScope) }
 
-    private val _bdsVersionsState = MutableStateFlow(BdsVersionListState())
-    val bdsVersionsState: StateFlow<BdsVersionListState> = _bdsVersionsState.asStateFlow()
+    /** 历史版本清单（「BDS 核心版本 → 历史版本」弹窗的数据源） */
+    val bdsVersions: StateFlow<List<BdsVersionEntry>> get() = bdsCoreUpdateDelegate.bdsVersions
+
+    val bdsVersionsState: StateFlow<BdsVersionListState> get() = bdsCoreUpdateDelegate.bdsVersionsState
 
     private var bdsCheckJob: Job? = null
 
@@ -296,31 +297,7 @@ class McViewModel(
      * 失败不清空已有列表：用户可能只是想刷新一下，弱网下拉空一张白名单
      * 比保留上一次结果 + 一行错误更糟。
      */
-    fun loadBdsVersions(force: Boolean = false) {
-        if (_bdsVersionsState.value.loading) return
-        _bdsVersionsState.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
-            val result = BdsVersionCatalogLoader.load(app, force)
-            result.fold(
-                onSuccess = { catalog ->
-                    _bdsVersions.value = catalog.entries
-                    _bdsVersionsState.value = BdsVersionListState(
-                        loading = false,
-                        loaded = true,
-                        fromCache = catalog.fromCache,
-                        notes = catalog.notes,
-                        error = if (catalog.entries.isEmpty()) str(R.string.bds_version_list_empty) else null
-                    )
-                },
-                onFailure = { e ->
-                    _bdsVersionsState.value = _bdsVersionsState.value.copy(
-                        loading = false,
-                        error = e.message ?: str(R.string.bds_version_list_failed)
-                    )
-                }
-            )
-        }
-    }
+    fun loadBdsVersions(force: Boolean = false) = bdsCoreUpdateDelegate.loadBdsVersions(force)
 
     /**
      * 把当前 BDS 服务器更新到 [channel] 上的官方最新构建。
