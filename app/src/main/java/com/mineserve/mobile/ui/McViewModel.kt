@@ -81,6 +81,7 @@ import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.ExternalBackupsDelegate
 import com.mineserve.mobile.ui.vm.FileBrowserDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
+import com.mineserve.mobile.ui.vm.JavaAddonsDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
@@ -3245,19 +3246,30 @@ class McViewModel(
 
     // ── Java 版：世界 / 数据包 / 资源包 ─────────────────────────
 
-    private val _javaDataPacks = MutableStateFlow<List<JavaWorlds.DataPack>>(emptyList())
-    val javaDataPacks: StateFlow<List<JavaWorlds.DataPack>> = _javaDataPacks.asStateFlow()
+    private val javaAddonsDelegate by lazy {
+        JavaAddonsDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManagerProvider = { worldManager },
+            activeDirName = ::activeDirName,
+            refreshActiveCore = ::refreshActiveCore,
+            isJavaCore = ::isJavaCore,
+            setJavaDimensions = { worldListDelegate.setJavaDimensions(it) },
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _javaAddonsLoading = MutableStateFlow(false)
-    val javaAddonsLoading: StateFlow<Boolean> = _javaAddonsLoading.asStateFlow()
+    val javaDataPacks: StateFlow<List<JavaWorlds.DataPack>> get() = javaAddonsDelegate.javaDataPacks
+
+    val javaAddonsLoading: StateFlow<Boolean> get() = javaAddonsDelegate.javaAddonsLoading
 
     /** 资源包配置（Java 侧单包模型）；基岩系或读不到时为 null。 */
-    private val _resourcePack = MutableStateFlow<JavaResourcePack.Config?>(null)
-    val resourcePack: StateFlow<JavaResourcePack.Config?> = _resourcePack.asStateFlow()
+    val resourcePack: StateFlow<JavaResourcePack.Config?> get() = javaAddonsDelegate.resourcePack
 
     /** 资源包配置的静态校验问题（空 = 没有明显问题）。 */
-    private val _resourcePackIssues = MutableStateFlow<List<String>>(emptyList())
-    val resourcePackIssues: StateFlow<List<String>> = _resourcePackIssues.asStateFlow()
+    val resourcePackIssues: StateFlow<List<String>> get() = javaAddonsDelegate.resourcePackIssues
 
     /** 当前世界可单独重置的维度。 */
     val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> get() = worldListDelegate.javaDimensions
@@ -3282,32 +3294,7 @@ class McViewModel(
     }
 
     /** 读 Java 侧的世界附加内容（数据包 + 资源包 + 维度）。 */
-    fun loadJavaAddons() {
-        refreshActiveCore()
-        val dirName = activeDirName() ?: return
-        if (!isJavaCore()) return
-        viewModelScope.launch {
-            _javaAddonsLoading.value = true
-            try {
-                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
-                _javaDataPacks.value = withContext(Dispatchers.IO) {
-                    runCatching { worldManager.scanJavaDataPacks(dirName, world) }.getOrDefault(emptyList())
-                }
-                worldListDelegate.setJavaDimensions(withContext(Dispatchers.IO) {
-                    runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
-                })
-                val cfg = withContext(Dispatchers.IO) {
-                    runCatching { worldManager.readResourcePack(dirName) }.getOrNull()
-                }
-                _resourcePack.value = cfg
-                _resourcePackIssues.value = cfg?.let { JavaResourcePack.issues(it) }.orEmpty()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_load_failed)}：${e.message}")
-            } finally {
-                _javaAddonsLoading.value = false
-            }
-        }
-    }
+    fun loadJavaAddons() = javaAddonsDelegate.loadJavaAddons()
 
     /**
      * 新建 Java 版世界：只写 `server.properties` 的四个键，服务端下次启动生成。
@@ -3383,59 +3370,10 @@ class McViewModel(
     }
 
     /** 保存资源包配置（URL / SHA-1 / ID / 提示语 / 是否强制）。 */
-    fun saveResourcePack(config: JavaResourcePack.Config) {
-        val dirName = activeDirName() ?: return
-        val url = JavaResourcePack.normalizeUrl(config.url)
-        if (url == null) { _errorFlow.tryEmit(str(R.string.jv_rp_bad_url)); return }
-        val sha1 = JavaResourcePack.normalizeSha1(config.sha1)
-        if (sha1 == null) { _errorFlow.tryEmit(str(R.string.jv_rp_bad_sha1)); return }
-        if (!requireServerStopped(str(R.string.jv_rp_title))) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    worldManager.writeResourcePack(dirName, config.copy(url = url, sha1 = sha1))
-                }
-                if (ok) {
-                    _resourcePack.value = config.copy(url = url, sha1 = sha1)
-                    _resourcePackIssues.value = JavaResourcePack.issues(config.copy(url = url, sha1 = sha1))
-                    _messageFlow.tryEmit(str(R.string.jv_rp_saved))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.jv_write_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_write_failed)}：${e.message}")
-            }
-        }
-    }
+    fun saveResourcePack(config: JavaResourcePack.Config) = javaAddonsDelegate.saveResourcePack(config)
 
     /** 从用户选的文件算 SHA-1 并填进资源包配置。 */
-    fun fillResourcePackSha1(uri: Uri) {
-        viewModelScope.launch {
-            try {
-                val hash = withContext(Dispatchers.IO) {
-                    val f = java.io.File(app.cacheDir, "rp_${System.currentTimeMillis()}.zip")
-                    app.contentResolver.openInputStream(uri)?.use { input ->
-                        f.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    try {
-                        JavaResourcePack.sha1(f)
-                    } finally {
-                        f.delete()
-                    }
-                }
-                val current = _resourcePack.value ?: JavaResourcePack.Config()
-                if (hash == null) {
-                    _errorFlow.tryEmit(str(R.string.jv_rp_sha1_failed))
-                } else {
-                    _resourcePack.value = current.copy(sha1 = hash)
-                    _resourcePackIssues.value = JavaResourcePack.issues(current.copy(sha1 = hash))
-                    _messageFlow.tryEmit(str(R.string.jv_rp_sha1_filled))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_rp_sha1_failed)}：${e.message}")
-            }
-        }
-    }
+    fun fillResourcePackSha1(uri: Uri) = javaAddonsDelegate.fillResourcePackSha1(uri)
 
     private val worldMaintenanceDelegate by lazy {
         WorldMaintenanceDelegate(
