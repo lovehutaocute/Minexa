@@ -92,6 +92,7 @@ import com.mineserve.mobile.server.ServerImporter
 import com.mineserve.mobile.server.TunnelManager
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
+import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
@@ -199,8 +200,19 @@ class McViewModel(
 
     // ── 在线模式（正版验证）出网自检 ───────────────────────────────
 
-    private val _bdsProbeRunning = MutableStateFlow(false)
-    val bdsProbeRunning: StateFlow<Boolean> = _bdsProbeRunning.asStateFlow()
+    private val bdsNetworkProbeDelegate by lazy {
+        BdsNetworkProbeDelegate(
+            context = app,
+            scope = viewModelScope,
+            activeDirName = ::activeDirName,
+            runProbe = repo.termuxRuntime::probeBdsNetwork,
+            emitLog = repo.termuxRuntime::emitLog,
+            reportError = { _errorFlow.tryEmit(it) },
+            reportMessage = { _messageFlow.tryEmit(it) }
+        )
+    }
+
+    val bdsProbeRunning: StateFlow<Boolean> get() = bdsNetworkProbeDelegate.bdsProbeRunning
 
     /**
      * 在容器里探一次 DNS / TCP / CA，把结论写进控制台。
@@ -209,50 +221,7 @@ class McViewModel(
      * 完全分不清是 DNS 污染、TCP 被墙、还是容器缺证书。这里替他把三段拆开测，
      * 并给出下一步该改哪里。
      */
-    fun probeBdsNetwork() {
-        if (_bdsProbeRunning.value) return
-        _bdsProbeRunning.value = true
-        viewModelScope.launch {
-            try {
-                repo.termuxRuntime.emitLog("[probe] 开始容器内网络自检（在线模式 / 正版验证用）")
-                val lines = repo.termuxRuntime.probeBdsNetwork(activeDirName())
-                lines.forEach { repo.termuxRuntime.emitLog("[probe] $it") }
-                if (lines.any { it.startsWith("CA 修复: 已从系统根证书补入") }) {
-                    repo.termuxRuntime.emitLog("[probe] 根证书已补好，请直接重新启动服务器验证")
-                }
-                _messageFlow.tryEmit(bdsProbeConclusion(lines))
-            } catch (e: Exception) {
-                repo.termuxRuntime.emitLog("[probe] 自检失败：${e.message}")
-                _errorFlow.tryEmit(str(R.string.bds_env_probe_failed, e.message ?: "?"))
-            } finally {
-                _bdsProbeRunning.value = false
-            }
-        }
-    }
-
-    /** 把自检输出压成一句人话（判据只有「哪一段先断」） */
-    private fun bdsProbeConclusion(lines: List<String>): String {
-        val dnsFail = lines.filter { it.startsWith("DNS 失败") }
-        val tcpFail = lines.filter { it.startsWith("TCP 失败") }
-        val tlsFail = lines.filter { it.startsWith("TLS 失败") }
-        val ok = lines.count { it.startsWith("TCP ok") }
-        return when {
-            lines.isEmpty() || lines.any { it.startsWith("容器未就绪") || it.startsWith("proot 不可用") } ->
-                str(R.string.bds_env_probe_need_env)
-            dnsFail.isNotEmpty() ->
-                str(R.string.bds_env_probe_dns_fail, dnsFail.size)
-            tcpFail.isNotEmpty() && ok > 0 ->
-                str(R.string.bds_env_probe_partial, ok, tcpFail.size)
-            tcpFail.isNotEmpty() ->
-                str(R.string.bds_env_probe_tcp_fail, tcpFail.size)
-            // TCP 通但 TLS 断：典型 SNI 拦截，必须让代理接管 TCP
-            tlsFail.isNotEmpty() ->
-                str(R.string.bds_env_probe_tls_fail, tlsFail.size)
-            lines.any { it.contains("CA 证书: 缺失") } ->
-                str(R.string.bds_env_probe_no_ca)
-            else -> str(R.string.bds_env_probe_ok)
-        }
-    }
+    fun probeBdsNetwork() = bdsNetworkProbeDelegate.probeBdsNetwork()
 
     // ── BDS 核心版本与在线更新 ───────────────────────────────────
     //
