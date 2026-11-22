@@ -1,6 +1,7 @@
 package com.mineserve.mobile.ui.vm
 
 import android.content.Context
+import android.net.Uri
 import com.mineserve.mobile.R
 import com.mineserve.mobile.server.BdsPacks
 import com.mineserve.mobile.server.WorldManager
@@ -133,6 +134,96 @@ internal class BdsAddonsDelegate(
             } catch (e: Exception) {
                 reportError("${str(R.string.ad_write_failed)}：${e.message}")
             }
+        }
+    }
+
+    /**
+     * 安装包目录里躺着的压缩包（`.mcpack` / `.mcaddon`）。
+     *
+     * 装好后把原压缩包挪到 `.minexa/imported-archives/`：它留在 `behavior_packs/` 里
+     * 既不会被 BDS 正确读取（`.mcaddon`），也会让下次扫描重复列出同一个包。
+     */
+    fun installAddonArchive(archive: BdsPacks.Archive) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.ad_install_archive))) return
+        scope.launch {
+            try {
+                val out = withContext(Dispatchers.IO) {
+                    installArchiveFile(dirName, archive.file, archiveOut = true)
+                }
+                reportArchiveInstall(out)
+            } catch (e: Exception) {
+                reportError("${str(R.string.ad_install_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /**
+     * 从系统文件选择器导入 `.mcpack` / `.mcaddon`。
+     *
+     * 先复制到 cache：SAF 给的流只能顺序读一次，而解压要按条目随机定位，
+     * 且 [BdsPacks.installArchive] 需要真实文件路径。
+     */
+    fun importAddonFromUri(uri: Uri, displayName: String) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.ad_import_archive))) return
+        scope.launch {
+            var temp: java.io.File? = null
+            try {
+                temp = withContext(Dispatchers.IO) {
+                    val name = displayName.ifBlank { "addon_${System.currentTimeMillis()}.mcpack" }
+                    val f = java.io.File(app.cacheDir, "addon_" + System.currentTimeMillis() + "_" +
+                        name.substringAfterLast('/').takeLast(40))
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        f.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    f.takeIf { it.isFile && it.length() > 0 }
+                }
+                if (temp == null) {
+                    reportError(str(R.string.ad_install_failed))
+                    return@launch
+                }
+                val out = withContext(Dispatchers.IO) {
+                    installArchiveFile(dirName, temp, archiveOut = false)
+                }
+                reportArchiveInstall(out)
+            } catch (e: Exception) {
+                reportError("${str(R.string.ad_install_failed)}：${e.message}")
+            } finally {
+                runCatching { temp?.delete() }
+            }
+        }
+    }
+
+    /** 解压安装的实际执行（同步，调用方放到 IO 线程）。 */
+    private fun installArchiveFile(
+        dirName: String,
+        archive: java.io.File,
+        archiveOut: Boolean
+    ): BdsPacks.ArchiveInstall {
+        val serverDir = worldManager.serverDir(dirName)
+        val out = if (archiveOut) {
+            java.io.File(serverDir, ".minexa/imported-archives/" + archive.name)
+        } else {
+            null
+        }
+        return BdsPacks.installArchive(
+            archive = archive,
+            destFor = { kind -> java.io.File(serverDir, kind.dirName) },
+            archiveOut = out
+        )
+    }
+
+    private fun reportArchiveInstall(result: BdsPacks.ArchiveInstall) {
+        when {
+            result.success -> {
+                val names = result.installed.map { it.name }.distinct().take(3).joinToString("、")
+                reportMessage(str(R.string.ad_install_ok, names))
+                loadAddons()
+            }
+            result.skipped.isNotEmpty() ->
+                reportMessage(str(R.string.ad_install_skipped, result.skipped.first()))
+            else -> reportError(result.error ?: str(R.string.ad_install_failed))
         }
     }
 
