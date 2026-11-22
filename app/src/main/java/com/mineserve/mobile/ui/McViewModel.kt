@@ -92,6 +92,7 @@ import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
 import com.mineserve.mobile.ui.vm.ModsDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
+import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
@@ -125,9 +126,6 @@ import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.InetSocketAddress
@@ -3816,133 +3814,30 @@ class McViewModel(
         val lastExitReason: String? = null
     )
 
-    private val _playerHistory: MutableStateFlow<List<PlayerHistoryEntry>> by lazy { MutableStateFlow(emptyList()) }
-    val playerHistory: StateFlow<List<PlayerHistoryEntry>> by lazy { _playerHistory.asStateFlow() }
-
-    private val legacyPlayerHistoryFile: java.io.File get() = java.io.File(app.filesDir, "player_history.json")
-    private fun playerHistoryFile() = java.io.File(app.filesDir, "player-history/${activeDirName() ?: "unselected"}.json")
-
-    private val historyJson: Json by lazy { Json { ignoreUnknownKeys = true } }
-
-    /** 历史记录文件读写互斥，避免多人进出服时并发写导致 JSON 损坏 */
-    private val historyMutex: Mutex by lazy { Mutex() }
-
-    /** 启动时异步加载历史记录文件（文件缺失/损坏时从空历史开始） */
-    private fun loadPlayerHistory() {
-        // Activity data is isolated by active server. Do not merge a previous server's snapshot.
-        _playerHistory.value = emptyList()
-        viewModelScope.launch(Dispatchers.IO) {
-            historyMutex.withLock {
-                try {
-                    val f = playerHistoryFile()
-                    if (!f.exists() && legacyPlayerHistoryFile.exists()) {
-                        f.parentFile?.mkdirs()
-                        legacyPlayerHistoryFile.copyTo(f, overwrite = false)
-                    }
-                    if (f.exists()) {
-                        val fileList = historyJson.decodeFromString<List<PlayerHistoryEntry>>(f.readText())
-                        val merged = fileList.distinct().sortedByDescending { it.time }
-                        _playerHistory.value = merged
-                        // A process restart has no trustworthy leave timestamp. Preserve it as interrupted.
-                        val interrupted = merged.map { if (it.event == "进服" && it.sessionEnd == null) it.copy(interrupted = true) else it }
-                        _playerHistory.value = interrupted
-                        f.writeText(historyJson.encodeToString(interrupted))
-                    }
-                } catch (e: Exception) {
-                    // 忽略损坏文件
-                }
-            }
-        }
+    private val playerHistoryDelegate by lazy {
+        PlayerHistoryDelegate(
+            app = app,
+            scope = viewModelScope,
+            activeDirName = ::activeDirName,
+            timeNow = ::timeNow,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
-    /** 追加一条进服/离服事件并异步持久化（保留最近 500 条） */
-    private fun recordPlayerEvent(player: String, event: String) {
-        val now = System.currentTimeMillis()
-        val previous = _playerHistory.value
-        val open = previous.firstOrNull { it.player.equals(player, true) && it.event == "进服" && it.sessionEnd == null && !it.interrupted }
-        val entry = if (event == "离服" && open != null) {
-            PlayerHistoryEntry(player, event, timeNow(), open.sessionStart ?: now, now)
-        } else {
-            PlayerHistoryEntry(player, event, timeNow(), if (event == "进服") now else null, null)
-        }
-        _playerHistory.value = listOf(entry) + previous.map {
-            if (event == "离服" && it == open) it.copy(sessionEnd = now) else it
-        }
-        val snapshot = _playerHistory.value
-        viewModelScope.launch(Dispatchers.IO) {
-            historyMutex.withLock {
-                try {
-                    val file = playerHistoryFile(); file.parentFile?.mkdirs()
-                    file.writeText(historyJson.encodeToString(snapshot))
-                } catch (e: Exception) {
-                    // 写入失败不阻断运行
-                }
-            }
-        }
-    }
+    val playerHistory: StateFlow<List<PlayerHistoryEntry>> get() = playerHistoryDelegate.playerHistory
 
-    fun playerActivitySummaries(): List<PlayerActivitySummary> {
-        val entries = _playerHistory.value
-        return entries.groupBy { it.player }.map { (player, rows) ->
-            val seconds = rows.filter { it.event == "离服" && !it.interrupted }.sumOf { ((it.sessionEnd ?: 0L) - (it.sessionStart ?: 0L)).coerceAtLeast(0L) / 1000 }
-            val lastJoin = rows.filter { it.event == "进服" }.maxByOrNull { it.time }
-            val lastLeave = rows.filter { it.event == "离服" }.maxByOrNull { it.time }
-            PlayerActivitySummary(
-                player = player,
-                sessions = rows.count { it.event == "离服" },
-                totalSeconds = seconds,
-                active = rows.any { it.event == "进服" && it.sessionEnd == null },
-                lastJoinTime = lastJoin?.time,
-                lastLeaveTime = lastLeave?.time,
-                lastExitReason = lastLeave?.let {
-                    if (it.interrupted) str(R.string.vm_exit_interrupted) else str(R.string.vm_exit_unknown)
-                }
-            )
-        }.sortedByDescending { it.totalSeconds }
-    }
+    private fun loadPlayerHistory() = playerHistoryDelegate.loadPlayerHistory()
 
-    fun interruptPlayerSessions() {
-        val open = _playerHistory.value.filter { it.event == "进服" && it.sessionEnd == null }
-        if (open.isEmpty()) return
-        val replacements = open.associateWith { it.copy(interrupted = true) }
-        _playerHistory.value = _playerHistory.value.map { replacements[it] ?: it }
-        val snapshot = _playerHistory.value
-        viewModelScope.launch(Dispatchers.IO) { historyMutex.withLock {
-            try {
-                val file = playerHistoryFile(); file.parentFile?.mkdirs(); file.writeText(historyJson.encodeToString(snapshot))
-            } catch (e: Exception) {
-                // 写入失败不阻断运行（与 recordPlayerEvent 一致）：viewModelScope 无 CoroutineExceptionHandler，
-                // 磁盘满/目录不可写时异常逸出协程会直接崩溃 App。
-            }
-        } }
-    }
+    private fun recordPlayerEvent(player: String, event: String) = playerHistoryDelegate.recordPlayerEvent(player, event)
 
-    fun clearPlayerHistory() {
-        _playerHistory.value = emptyList()
-        viewModelScope.launch(Dispatchers.IO) { historyMutex.withLock {
-            try {
-                playerHistoryFile().delete()
-            } catch (e: Exception) {
-                // 删除失败不阻断运行
-            }
-        } }
-    }
+    fun playerActivitySummaries(): List<PlayerActivitySummary> = playerHistoryDelegate.playerActivitySummaries()
 
-    fun exportPlayerHistory(uri: android.net.Uri) = viewModelScope.launch {
-        try {
-            withContext(Dispatchers.IO) {
-                app.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { out ->
-                    out.appendLine("player,event,time,session_start,session_end,duration_seconds,interrupted")
-                    _playerHistory.value.forEach { row ->
-                        fun csv(v: String) = "\"${v.replace("\"", "\"\"")}\""
-                        val duration = if (row.sessionStart != null && row.sessionEnd != null && !row.interrupted) ((row.sessionEnd - row.sessionStart) / 1000).toString() else ""
-                        out.appendLine(listOf(csv(row.player), csv(row.event), csv(row.time), row.sessionStart ?: "", row.sessionEnd ?: "", duration, row.interrupted).joinToString(","))
-                    }
-                } ?: error(str(R.string.err_open_export))
-            }
-            _messageFlow.tryEmit(str(R.string.msg_history_exported))
-        } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.err_export_fail)) }
-    }
+    fun interruptPlayerSessions() = playerHistoryDelegate.interruptPlayerSessions()
+
+    fun clearPlayerHistory() = playerHistoryDelegate.clearPlayerHistory()
+
+    fun exportPlayerHistory(uri: android.net.Uri) = playerHistoryDelegate.exportPlayerHistory(uri)
 
     private fun timeNow(): String =
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
