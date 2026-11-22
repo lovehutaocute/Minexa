@@ -11,7 +11,6 @@ import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.FileOps
 import com.mineserve.mobile.data.VersionSelection
 import com.mineserve.mobile.data.AutomationTask
-import com.mineserve.mobile.data.AutomationScheduler
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.ProotDistro
@@ -84,6 +83,7 @@ import com.mineserve.mobile.server.TunnelManager
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.vm.AppUpdateDelegate
+import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
@@ -2457,46 +2457,27 @@ class McViewModel(
 
     // ── 自动化定时任务（更多 → 自动化） ──────────────────────────
 
-    /**
-     * 变更任务列表并落盘、重排下一次闹钟。
-     *
-     * 未排期的启用任务在此统一补上 [AutomationTask.nextRunMs]，保证调度器拿到的
-     * 就是落盘后的最终值（与 [updateScheduleConfig] 同样的读改写策略，避免陈旧快照覆盖）。
-     */
-    private fun updateAutomationTasks(transform: (List<AutomationTask>) -> List<AutomationTask>) {
-        val updated = try {
-            repo.updateAndSaveConfig { config ->
-                config.copy(
-                    automationTasks = AutomationScheduler.withNextRunsAssigned(transform(config.automationTasks))
-                )
-            }
-        } catch (e: Exception) {
-            _errorFlow.tryEmit(str(R.string.s191, e.message))
-            return
-        }
-        AutomationScheduler.register(app, updated.automationTasks)
+    private val automationTasksDelegate by lazy {
+        AutomationTasksDelegate(
+            app = app,
+            updateAndSaveConfig = repo::updateAndSaveConfig,
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
     /** 新增任务（重置排期，由更新逻辑重算）。 */
-    fun addAutomationTask(task: AutomationTask) =
-        updateAutomationTasks { it + task.copy(nextRunMs = 0L) }
+    fun addAutomationTask(task: AutomationTask) = automationTasksDelegate.addAutomationTask(task)
 
     /** 覆盖编辑一条任务（重置排期）。 */
-    fun updateAutomationTask(task: AutomationTask) = updateAutomationTasks { list ->
-        list.map { if (it.id == task.id) task.copy(nextRunMs = 0L) else it }
-    }
+    fun updateAutomationTask(task: AutomationTask) = automationTasksDelegate.updateAutomationTask(task)
 
-    fun deleteAutomationTask(id: String) = updateAutomationTasks { list -> list.filterNot { it.id == id } }
+    fun deleteAutomationTask(id: String) = automationTasksDelegate.deleteAutomationTask(id)
 
     /** 启用/停用任务；重新启用时重置排期。 */
-    fun setAutomationTaskEnabled(id: String, enabled: Boolean) = updateAutomationTasks { list ->
-        list.map { if (it.id == id) it.copy(enabled = enabled, nextRunMs = if (enabled) 0L else it.nextRunMs) else it }
-    }
+    fun setAutomationTaskEnabled(id: String, enabled: Boolean) = automationTasksDelegate.setAutomationTaskEnabled(id, enabled)
 
     /** 手动立即执行一次任务（交由前台服务在自身作用域内完成）。 */
-    fun runAutomationTaskNow(id: String) {
-        com.mineserve.mobile.service.McForegroundService.enqueueAutomationTask(app, id)
-    }
+    fun runAutomationTaskNow(id: String) = automationTasksDelegate.runAutomationTaskNow(id)
 
     /** 变更定时计划时同步保存并重注册下一次闹钟。 */
     private fun updateScheduleConfig(transform: (McConfig) -> McConfig) {
