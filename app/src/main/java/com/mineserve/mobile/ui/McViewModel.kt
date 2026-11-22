@@ -38,7 +38,6 @@ import com.mineserve.mobile.data.LegacyPrivateStore
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.NativeLibraryBundler
-import com.mineserve.mobile.runtime.TrustStoreRepair
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
@@ -93,6 +92,7 @@ import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
+import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
 import com.mineserve.mobile.ui.vm.formatBytes
 import com.mineserve.mobile.ui.vm.formatCoreSize
@@ -5594,9 +5594,17 @@ class McViewModel(
     private val _currentCrashInsight = MutableStateFlow<CrashInsight?>(null)
     val currentCrashInsight: StateFlow<CrashInsight?> = _currentCrashInsight.asStateFlow()
 
+    private val trustStoreRepairDelegate by lazy {
+        TrustStoreRepairDelegate(
+            scope = viewModelScope,
+            config = config,
+            termuxRuntime = repo.termuxRuntime,
+            refreshJava = ::refreshJava
+        )
+    }
+
     /** 崩溃弹窗「一键修复证书库」的进度与结果（弹窗内就地展示）。 */
-    private val _trustStoreRepair = MutableStateFlow(TrustStoreRepairUi())
-    val trustStoreRepair: StateFlow<TrustStoreRepairUi> = _trustStoreRepair.asStateFlow()
+    val trustStoreRepair: StateFlow<TrustStoreRepairUi> get() = trustStoreRepairDelegate.trustStoreRepair
 
     /** 本次启动的日志视图（关键日志 / 全部日志）；与报告 sidecar 一一对应 */
     private val _currentCrashLog = MutableStateFlow<CrashLogView?>(null)
@@ -5776,23 +5784,7 @@ class McViewModel(
      * 崩溃弹窗里的「一键修复」：重装当前 Java + ca-certificates，必要时用本机证书包
      * 原地重建 cacerts。修复期间弹窗保持打开，结果就地展示。
      */
-    fun repairJavaTrustStore() {
-        if (_trustStoreRepair.value.running) return
-        val cfg = config.value
-        _trustStoreRepair.value = TrustStoreRepairUi(running = true)
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    repo.termuxRuntime.repairTrustStore(cfg.selectedJavaVersion, cfg.selectedJavaVendor)
-                }.getOrElse { TrustStoreRepair(false, "修复过程出错：${it.message ?: it::class.java.simpleName}") }
-            }
-            _trustStoreRepair.value = TrustStoreRepairUi(running = false, ok = result.ok, message = result.summary)
-            if (result.ok) {
-                // 环境页读的是缓存列表，不刷新会继续显示旧状态。
-                refreshJava()
-            }
-        }
-    }
+    fun repairJavaTrustStore() = trustStoreRepairDelegate.repairJavaTrustStore()
 
     /** 手动刷新在线知识库规则包（分析页可选入口，失败静默）。 */
     fun refreshCrashKnowledge() {
@@ -5808,7 +5800,7 @@ class McViewModel(
         _currentCrashAnalysis.value = null
         _currentCrashInsight.value = null
         _currentCrashLog.value = null
-        _trustStoreRepair.value = TrustStoreRepairUi()
+        trustStoreRepairDelegate.clearResult()
     }
 
     /** 删除崩溃报告 */
