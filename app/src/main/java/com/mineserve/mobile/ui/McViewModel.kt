@@ -92,6 +92,7 @@ import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
 import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
+import com.mineserve.mobile.ui.vm.TextEditorDelegate
 import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
 import com.mineserve.mobile.ui.vm.TunnelControlsDelegate
 import com.mineserve.mobile.ui.vm.formatBytes
@@ -3417,25 +3418,22 @@ class McViewModel(
     }
 
     data class TextEditorFile(val path: String, val name: String, val content: String)
-    private val _textEditorFile = MutableStateFlow<TextEditorFile?>(null)
-    val textEditorFile: StateFlow<TextEditorFile?> = _textEditorFile.asStateFlow()
+    private val textEditorDelegate by lazy {
+        TextEditorDelegate(
+            app = app,
+            scope = viewModelScope,
+            fileManagerRoot = { fileManagerRoot },
+            refreshFiles = ::refreshFiles,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+    val textEditorFile: StateFlow<TextEditorFile?> get() = textEditorDelegate.textEditorFile
 
-    fun openTextFile(file: java.io.File) = viewModelScope.launch {
-        try {
-            val content = withContext(Dispatchers.IO) { SafeTextFile.read(fileManagerRoot, file) }
-            _textEditorFile.value = TextEditorFile(content.file.absolutePath, content.file.name, content.text)
-        } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.err_open_text)) }
-    }
-    fun closeTextFile() { _textEditorFile.value = null }
-    fun saveTextFile(path: String, text: String) = viewModelScope.launch {
-        try {
-            withContext(Dispatchers.IO) { SafeTextFile.write(fileManagerRoot, java.io.File(path), text) }
-            _textEditorFile.value = TextEditorFile(path, java.io.File(path).name, text)
-            _messageFlow.tryEmit(str(R.string.msg_file_saved))
-            refreshFiles()
-        } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.err_save_text)) }
-    }
-    fun canEditTextFile(file: java.io.File) = file.isFile && SafeTextFile.isSupported(file)
+    fun openTextFile(file: java.io.File) = textEditorDelegate.openTextFile(file)
+    fun closeTextFile() = textEditorDelegate.closeTextFile()
+    fun saveTextFile(path: String, text: String) = textEditorDelegate.saveTextFile(path, text)
+    fun canEditTextFile(file: java.io.File) = textEditorDelegate.canEditTextFile(file)
 
     /** 请求在线玩家列表（发送 list 命令，结果通过日志解析全量校正名单） */
     fun refreshOnlinePlayers() {
