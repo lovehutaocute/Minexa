@@ -83,7 +83,6 @@ import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
 import com.mineserve.mobile.server.tunnel.StunDiagnostics
 import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
-import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngineStore
 import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
 import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntimeDownloader
@@ -93,6 +92,7 @@ import com.mineserve.mobile.server.TunnelManager
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
+import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
@@ -901,80 +901,32 @@ class McViewModel(
         val sha256: String? = null
     )
 
-    private val _easyTierEngine = MutableStateFlow(EasyTierEngineInfo())
-    val easyTierEngine: StateFlow<EasyTierEngineInfo> = _easyTierEngine.asStateFlow()
-
-    private val _easyTierEngineMessage = MutableStateFlow<String?>(null)
-    val easyTierEngineMessage: StateFlow<String?> = _easyTierEngineMessage.asStateFlow()
-
-    fun clearEasyTierEngineMessage() {
-        _easyTierEngineMessage.value = null
+    private val easyTierEngineDelegate by lazy {
+        EasyTierEngineDelegate(
+            context = app,
+            scope = viewModelScope,
+            stopEasyTier = tunnelManager::stopEasyTier
+        )
     }
+
+    val easyTierEngine: StateFlow<EasyTierEngineInfo> get() = easyTierEngineDelegate.easyTierEngine
+
+    val easyTierEngineMessage: StateFlow<String?> get() = easyTierEngineDelegate.easyTierEngineMessage
+
+    fun clearEasyTierEngineMessage() = easyTierEngineDelegate.clearEasyTierEngineMessage()
 
     /** 在线下载状态（与 frpc 引擎共用 [DownloadState]）。 */
-    private val _easyTierDownload = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val easyTierDownload: StateFlow<DownloadState> = _easyTierDownload.asStateFlow()
+    val easyTierDownload: StateFlow<DownloadState> get() = easyTierEngineDelegate.easyTierDownload
 
     /** 刷新 EasyTier 引擎状态（含 SHA-256 计算，走 IO 线程）。 */
-    fun refreshEasyTierEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val installed = EasyTierEngineStore.isInstalled()
-            _easyTierEngine.value = EasyTierEngineInfo(
-                installed = installed,
-                version = if (installed) EasyTierEngineStore.ENGINE_VERSION else null,
-                sizeBytes = if (installed) EasyTierEngineStore.engineFile().length() else 0,
-                sha256 = if (installed) EasyTierEngineStore.installedSha256() else null
-            )
-        }
-    }
+    fun refreshEasyTierEngine() = easyTierEngineDelegate.refreshEasyTierEngine()
 
-    fun downloadEasyTierEngine() {
-        if (_easyTierDownload.value is DownloadState.Downloading) return
-        viewModelScope.launch(Dispatchers.IO) {
-            _easyTierDownload.value = DownloadState.Downloading(-1f)
-            try {
-                val version = EasyTierEngineStore.download { fraction ->
-                    _easyTierDownload.value = DownloadState.Downloading(fraction)
-                }
-                _easyTierEngineMessage.value = str(R.string.vm_engine_downloaded) +
-                    str(R.string.vm_version_suffix, version)
-            } catch (e: Exception) {
-                _easyTierEngineMessage.value =
-                    str(R.string.vm_download_failed, e.message ?: str(R.string.vm_network_unavailable))
-            } finally {
-                _easyTierDownload.value = DownloadState.Idle
-                refreshEasyTierEngine()
-            }
-        }
-    }
+    fun downloadEasyTierEngine() = easyTierEngineDelegate.downloadEasyTierEngine()
 
     /** 从用户选中的文件导入 EasyTier 引擎（.so）。 */
-    fun importEasyTierEngine(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                app.contentResolver.openInputStream(uri)?.use { input ->
-                    EasyTierEngineStore.install(input)
-                } ?: throw IllegalStateException(str(R.string.vm_cannot_read_file))
-                _easyTierEngineMessage.value = str(R.string.vm_engine_imported) +
-                    str(R.string.vm_version_suffix, EasyTierEngineStore.ENGINE_VERSION)
-                refreshEasyTierEngine()
-            } catch (e: Exception) {
-                _easyTierEngineMessage.value = str(R.string.vm_import_failed, e.message ?: "")
-            }
-        }
-    }
+    fun importEasyTierEngine(uri: Uri) = easyTierEngineDelegate.importEasyTierEngine(uri)
 
-    fun uninstallEasyTierEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            // 先走完整的停止流程（会把组网卡片同步成「已停止」），再删文件。
-            // 直接删文件时实例和 TUN 都还在，正是用户报的「删了还有残留」。
-            runCatching { tunnelManager.stopEasyTier() }
-            val ok = EasyTierEngineStore.uninstall()
-            _easyTierEngineMessage.value =
-                if (ok) str(R.string.vm_engine_uninstalled) else str(R.string.vm_uninstall_failed)
-            refreshEasyTierEngine()
-        }
-    }
+    fun uninstallEasyTierEngine() = easyTierEngineDelegate.uninstallEasyTierEngine()
 
     // ── frpc 引擎（内置引擎，不依赖 Termux） ────────────────────────
 
@@ -3215,7 +3167,7 @@ class McViewModel(
     val easyTierAvailable: Boolean get() = EasyTierEngine.available
 
     /** 引擎文件是否已下载到本地（与"能否加载"是两回事：加载还依赖首次使用）。 */
-    val easyTierEngineInstalled: Boolean get() = EasyTierEngineStore.isInstalled()
+    val easyTierEngineInstalled: Boolean get() = easyTierEngineDelegate.easyTierEngineInstalled
 
     /**
      * 补齐组网身份：网络名或密钥为空时自动生成一套。
