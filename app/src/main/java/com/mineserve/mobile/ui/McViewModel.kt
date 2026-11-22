@@ -90,6 +90,7 @@ import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
+import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
@@ -104,7 +105,6 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
@@ -2005,75 +2005,39 @@ class McViewModel(
     // PMMP 用 PHP 运行（不是 Java），首次启动时按需下载。
     // 依赖管理页的「PHP 版本选择」与启动控制卡片的运行环境列表共用这一份状态。
 
-    private val _installedPhp = MutableStateFlow<Set<PhpVersion>>(emptySet())
-    val installedPhp: StateFlow<Set<PhpVersion>> = _installedPhp.asStateFlow()
+    private val phpRuntimeDelegate by lazy {
+        PhpRuntimeDelegate(
+            app = app,
+            scope = viewModelScope,
+            termuxRuntime = repo.termuxRuntime,
+            config = config,
+            isBootstrapped = isBootstrapped,
+            isInstalling = isInstalling,
+            setInstalling = { _isInstalling.value = it },
+            setJavaOperation = { _javaOperation.value = it },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    val installedPhp: StateFlow<Set<PhpVersion>> = phpRuntimeDelegate.installedPhp
 
     /** 当前所选 PHP 版本（来自 config，配置未加载时回退默认） */
-    val selectedPhpVersion: StateFlow<PhpVersion> = config
-        .map { it.selectedPhpVersion }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, PhpVersion.Default)
+    val selectedPhpVersion: StateFlow<PhpVersion> = phpRuntimeDelegate.selectedPhpVersion
 
     /** 当前 PHP 版本是否已安装 */
-    val phpInstalled: StateFlow<Boolean> = combine(_installedPhp, selectedPhpVersion) { installed, selected ->
-        selected in installed
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val phpInstalled: StateFlow<Boolean> = phpRuntimeDelegate.phpInstalled
 
-    fun refreshPhp() {
-        if (!isBootstrapped.value) { _installedPhp.value = emptySet(); return }
-        viewModelScope.launch(Dispatchers.IO) {
-            _installedPhp.value = repo.termuxRuntime.installedPhpVersions()
-        }
-    }
+    fun refreshPhp() = phpRuntimeDelegate.refreshPhp()
 
     /** 选择 PHP 版本（依赖管理页与启动控制卡片共用） */
     fun setPhpVersion(version: PhpVersion) = updateConfig { it.copy(selectedPhpVersion = version) }
 
     /** 安装指定 PHP 运行环境（~10MB，含 PMMP 必需扩展） */
-    fun installPhp(version: PhpVersion = config.value.selectedPhpVersion) {
-        if (!isBootstrapped.value || _isInstalling.value) return
-        if (repo.termuxRuntime.isMcRunning()) {
-            _errorFlow.tryEmit(str(R.string.msg_php_running))
-            return
-        }
-        _isInstalling.value = true
-        _javaOperation.value = str(R.string.msg_php_op_installing)
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.installPhp(version) { line -> repo.termuxRuntime.emitLog(line) }
-                }
-                refreshPhp()
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_php_installed, version.displayName))
-                else _errorFlow.tryEmit(str(R.string.err_php_install_fail, version.displayName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(e.message ?: str(R.string.err_php_install_fail, version.displayName))
-            } finally {
-                _javaOperation.value = null
-                _isInstalling.value = false
-            }
-        }
-    }
+    fun installPhp(version: PhpVersion = config.value.selectedPhpVersion) = phpRuntimeDelegate.installPhp(version)
 
     /** 卸载指定 PHP 运行环境（直接删除对应目录，PocketMine 下次启动会重新下载） */
-    fun deletePhp(version: PhpVersion = config.value.selectedPhpVersion) {
-        if (!isBootstrapped.value || _isInstalling.value) return
-        _isInstalling.value = true
-        _javaOperation.value = str(R.string.msg_php_op_deleting)
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { repo.termuxRuntime.deletePhp(version) }
-                refreshPhp()
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_php_deleted, version.displayName))
-                else _errorFlow.tryEmit(str(R.string.err_php_delete_fail, version.displayName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(e.message ?: str(R.string.err_php_delete_fail, version.displayName))
-            } finally {
-                _javaOperation.value = null
-                _isInstalling.value = false
-            }
-        }
-    }
+    fun deletePhp(version: PhpVersion = config.value.selectedPhpVersion) = phpRuntimeDelegate.deletePhp(version)
 
     // ── 运行模式（Java / PHP）─────────────────────────────────────
     //
