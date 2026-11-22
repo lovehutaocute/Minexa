@@ -1,6 +1,7 @@
 package com.mineserve.mobile.ui.vm
 
 import android.content.Context
+import android.net.Uri
 import com.mineserve.mobile.R
 import com.mineserve.mobile.server.SafeTextFile
 import com.mineserve.mobile.ui.McViewModel.FileEntry
@@ -16,6 +17,7 @@ import kotlinx.coroutines.withContext
 internal class FileBrowserDelegate(
     private val app: Context,
     private val scope: CoroutineScope,
+    private val reportMessage: (String) -> Unit,
     private val reportError: (String) -> Unit
 ) {
     private val _fileList = MutableStateFlow<List<FileEntry>>(emptyList())
@@ -130,6 +132,94 @@ internal class FileBrowserDelegate(
     fun refreshFiles() {
         val path = _currentPath.value
         if (path.isEmpty()) loadFilesRoot() else loadFiles(java.io.File(path))
+    }
+
+    /** 上传文件：从 Uri 复制到目标目录 */
+    fun uploadFile(uri: android.net.Uri, targetDir: java.io.File) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val input = app.contentResolver.openInputStream(uri)
+                        ?: throw RuntimeException(str(R.string.err_open_file))
+                    val fileName = queryFileName(uri) ?: "uploaded_${System.currentTimeMillis()}"
+                    val targetFile = java.io.File(targetDir, fileName)
+                    input.use { ins ->
+                        java.io.FileOutputStream(targetFile).use { fos ->
+                            ins.copyTo(fos)
+                        }
+                    }
+                }
+                reportMessage(str(R.string.s307))
+                loadFiles(java.io.File(currentPath.value))
+            } catch (e: Exception) {
+                reportError(str(R.string.s308, e.message))
+            }
+        }
+    }
+
+    /** 导出文件/文件夹到用户选择的 Uri（文件夹打包为 zip） */
+    fun exportPathToUri(source: java.io.File, uri: android.net.Uri) {
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    val output = app.contentResolver.openOutputStream(uri)
+                        ?: throw RuntimeException(str(R.string.err_open_export))
+                    output.use { os ->
+                        if (source.isDirectory) {
+                            // 文件夹打包为 zip
+                            java.util.zip.ZipOutputStream(os).use { zos ->
+                                source.walkTopDown().filter { it.isFile }.forEach { f ->
+                                    val entryName = source.toURI().relativize(f.toURI()).path
+                                    zos.putNextEntry(java.util.zip.ZipEntry(entryName))
+                                    f.inputStream().use { it.copyTo(zos) }
+                                    zos.closeEntry()
+                                }
+                            }
+                        } else {
+                            source.inputStream().use { it.copyTo(os) }
+                        }
+                    }
+                }
+                // 写完主动扫一次 + 把落盘路径告诉用户。
+                // SAF 写进 Downloads 的文件不会自动进 MediaStore，部分文件管理器
+                // 要等扫描后才显示 —— 这正是「导出成功但找不到文件」的最常见成因。
+                val path = scanExportedUri(uri)
+                reportMessage(
+                    if (path != null) str(R.string.export_saved_to, path) else str(R.string.s309)
+                )
+            } catch (e: Exception) {
+                reportError(str(R.string.s257, e.message))
+            }
+        }
+    }
+
+    /**
+     * 把 SAF 的 `content://` 目标反解成真实路径并触发媒体扫描。
+     *
+     * 只处理最常见的 `primary:`（主存储）docId；反解不出来时返回 null，
+     * 调用方退回普通的「导出完成」提示——不猜路径，避免给出一个错的。
+     */
+    private fun scanExportedUri(uri: Uri): String? = runCatching {
+        val docId = android.provider.DocumentsContract.getDocumentId(uri)
+        val rel = docId.substringAfter(':', missingDelimiterValue = "")
+        if (rel.isBlank()) return@runCatching null
+        val file = java.io.File(android.os.Environment.getExternalStorageDirectory(), rel)
+        if (!file.isFile) return@runCatching null
+        android.media.MediaScannerConnection.scanFile(app, arrayOf(file.absolutePath), null, null)
+        file.absolutePath
+    }.getOrNull()
+
+    /** 从 Uri 查询文件名 */
+    private fun queryFileName(uri: android.net.Uri): String? {
+        return try {
+            val cursor = app.contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (nameIndex >= 0 && it.moveToFirst()) it.getString(nameIndex) else null
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     private fun str(id: Int, vararg args: Any?): String =
