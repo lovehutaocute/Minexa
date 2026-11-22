@@ -88,11 +88,11 @@ import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
 import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntimeDownloader
 import com.mineserve.mobile.server.PowerNukkitXConfigManager
-import com.mineserve.mobile.server.PowerNukkitXLayout
 import com.mineserve.mobile.server.ServerImporter
 import com.mineserve.mobile.server.TunnelManager
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
+import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
 import com.mineserve.mobile.ui.vm.formatBytes
 import com.mineserve.mobile.ui.vm.formatCoreSize
@@ -823,90 +823,28 @@ class McViewModel(
 
     // ── 服务器图标（server-icon.png） ────────────────────────
 
+    private val serverIconDelegate by lazy {
+        ServerIconDelegate(
+            context = app,
+            scope = viewModelScope,
+            activeDirName = ::activeDirName,
+            serverDirFor = { dirName -> repo.termuxRuntime.serverDirFor(dirName) },
+            reportError = { _errorFlow.tryEmit(it) },
+            reportMessage = { _messageFlow.tryEmit(it) }
+        )
+    }
+
     /** 图标变更信号（UI 用于重载预览） */
-    private val _serverIconVersion = MutableStateFlow(0)
-    val serverIconVersion: StateFlow<Int> = _serverIconVersion.asStateFlow()
+    val serverIconVersion: StateFlow<Int> get() = serverIconDelegate.serverIconVersion
 
     /** 当前核心的 server-icon.png 文件（不存在返回 null） */
-    fun serverIconFile(): File? {
-        val dirName = activeDirName() ?: return null
-        val dir = repo.termuxRuntime.serverDirFor(dirName)
-        return if (PowerNukkitXLayout.isPowerNukkitX(dir)) null
-        else File(dir, "server-icon.png")
-            .takeIf { it.exists() }
-    }
+    fun serverIconFile(): File? = serverIconDelegate.serverIconFile()
 
     /** 更换服务器图标：读取 Uri → 居中裁剪缩放 64×64 → PNG 写入 server-icon.png */
-    fun setServerIcon(uri: Uri) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (PowerNukkitXLayout.isPowerNukkitX(repo.termuxRuntime.serverDirFor(dirName))) {
-            _errorFlow.tryEmit(str(R.string.err_pnx_icon_full))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val input = app.contentResolver.openInputStream(uri)
-                        ?: throw RuntimeException(str(R.string.err_read_image))
-                    val src = input.use { android.graphics.BitmapFactory.decodeStream(it) }
-                        ?: throw RuntimeException(str(R.string.err_parse_image))
-                    try {
-                        // 居中裁剪为正方形后缩放到 64×64
-                        val size = minOf(src.width, src.height)
-                        val x = (src.width - size) / 2
-                        val y = (src.height - size) / 2
-                        val square = android.graphics.Bitmap.createBitmap(src, x, y, size, size)
-                        try {
-                            val icon = android.graphics.Bitmap.createScaledBitmap(square, 64, 64, true)
-                            try {
-                                val target = File(repo.termuxRuntime.serverDirFor(dirName), "server-icon.png")
-                                target.parentFile?.mkdirs()
-                                java.io.FileOutputStream(target).use { fos ->
-                                    icon.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, fos)
-                                }
-                            } finally {
-                                if (!icon.isRecycled) icon.recycle()
-                            }
-                        } finally {
-                            if (square !== src && !square.isRecycled) square.recycle()
-                        }
-                    } finally {
-                        if (!src.isRecycled) src.recycle()
-                    }
-                }
-                _messageFlow.tryEmit(str(R.string.ui_server_icon_updated))
-                _serverIconVersion.value++
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.ui_server_icon_fail, e.message))
-            }
-        }
-    }
+    fun setServerIcon(uri: Uri) = serverIconDelegate.setServerIcon(uri)
 
     /** 恢复默认：删除 server-icon.png */
-    fun removeServerIcon() {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (PowerNukkitXLayout.isPowerNukkitX(repo.termuxRuntime.serverDirFor(dirName))) {
-            _errorFlow.tryEmit(str(R.string.err_pnx_icon))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    File(repo.termuxRuntime.serverDirFor(dirName), "server-icon.png").delete()
-                }
-                _messageFlow.tryEmit(str(R.string.ui_server_icon_reset_done))
-                _serverIconVersion.value++
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.ui_server_icon_fail, e.message))
-            }
-        }
-    }
+    fun removeServerIcon() = serverIconDelegate.removeServerIcon()
 
     /** 控制台行环形缓冲，避免每行 O(n) 拷贝 */
     private val consoleBuffer = LogBuffer<String>(MAX_LOG_LINES)
