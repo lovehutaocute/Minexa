@@ -36,8 +36,6 @@ import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.NativeLibraryBundler
 import com.mineserve.mobile.data.TunnelState
-import com.mineserve.mobile.data.TunnelStatus
-import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.data.FrpProfile
 import com.mineserve.mobile.data.DiagnosticCheck
 import com.mineserve.mobile.data.DiagnosticReport
@@ -69,8 +67,6 @@ import com.mineserve.mobile.server.WorldGenLedger
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
 import com.mineserve.mobile.server.tunnel.StunDiagnostics
-import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
-import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
 import com.mineserve.mobile.server.PowerNukkitXConfigManager
 import com.mineserve.mobile.server.ServerImporter
@@ -2361,7 +2357,6 @@ class McViewModel(
             updateConfig = ::updateConfig,
             refreshServerPropertiesNow = ::refreshServerPropertiesNow,
             realServerPort = ::realServerPort,
-            reportStart = ::reportStart,
             reportMessage = { _messageFlow.tryEmit(it) },
             reportError = { _errorFlow.tryEmit(it) }
         )
@@ -2403,167 +2398,35 @@ class McViewModel(
      * 引擎是否可用。未下载时为 false —— UI 据此禁用并给出下载指引。
      * 下载完成后再次调用即返回 true（引擎是延迟加载的）。
      */
-    val easyTierAvailable: Boolean get() = EasyTierEngine.available
+    val easyTierAvailable: Boolean get() = tunnelControlsDelegate.easyTierAvailable
 
     /** 引擎文件是否已下载到本地（与"能否加载"是两回事：加载还依赖首次使用）。 */
     val easyTierEngineInstalled: Boolean get() = easyTierEngineDelegate.easyTierEngineInstalled
 
-    /**
-     * 补齐组网身份：网络名或密钥为空时自动生成一套。
-     *
-     * 「填个网络名就能分享给任何人」的前提是**用户不用自己想名字**。
-     * 名字生成成 `mc-xxxxxx` 这种带随机后缀的形式，两个人同时第一次用也不会撞名。
-     * 已有值的字段一律不覆盖 —— 用户改过的网络名不能被一次进入页面就冲掉。
-     */
-    fun ensureEasyTierIdentity() {
-        val cfg = config.value
-        if (cfg.easyTierNetworkName.isNotBlank() && cfg.easyTierNetworkSecret.isNotBlank()) return
-        updateConfig {
-            it.copy(
-                easyTierNetworkName = it.easyTierNetworkName.ifBlank {
-                    "mc-" + EasyTierSettings.generateSecret().take(6)
-                },
-                easyTierNetworkSecret = it.easyTierNetworkSecret.ifBlank {
-                    EasyTierSettings.generateSecret()
-                }
-            )
-        }
-    }
+    /** 补齐组网身份：已有网络名和密钥不覆盖。 */
+    fun ensureEasyTierIdentity() = tunnelControlsDelegate.ensureEasyTierIdentity()
 
-    /**
-     * 换一套网络密钥。
-     *
-     * 用途是「把之前那批人踢出去」：EasyTier 没有账号体系、没有 ACL，
-     * 密钥是**唯一**的访问控制手段，泄漏了只能换。
-     */
-    fun regenerateEasyTierSecret() {
-        updateConfig { it.copy(easyTierNetworkSecret = EasyTierSettings.generateSecret()) }
-        _messageFlow.tryEmit(str(R.string.easytier_secret_regenerated))
-    }
+    /** 换一套网络密钥。 */
+    fun regenerateEasyTierSecret() = tunnelControlsDelegate.regenerateEasyTierSecret()
 
-    /**
-     * 本机在虚拟网里的地址（`虚拟IP:转发端口`）。网络名为空时返回空串。
-     *
-     * 端口取的是**转发端口**而不是服务端端口：两个监听不能占同一个端口，
-     * 谁后绑谁失败（见 `EasyTierSettings.toToml`）。服务端端口一变，
-     * 转发目标跟着变，但玩家看到的端口固定是转发端口。
-     */
-    fun easyTierAddress(): String {
-        val cfg = config.value
-        val name = cfg.easyTierNetworkName.trim()
-        val ip = cfg.easyTierVirtualIp.trim()
-            .ifBlank { if (name.isBlank()) "" else EasyTierSettings.deriveVirtualIp(name) }
-        return EasyTierSettings.playerAddress(ip, realServerPort())
-    }
+    /** 本机在虚拟网里的地址（`虚拟IP:转发端口`）。网络名为空时返回空串。 */
+    fun easyTierAddress(): String = tunnelControlsDelegate.easyTierAddress()
 
-    /** 给玩家的整段说明。复制按钮与二维码用的是**同一份文本**，不允许各拼一套。 */
-    fun easyTierShareText(): String {
-        val cfg = config.value
-        return str(
-            R.string.easytier_share_text,
-            cfg.easyTierNetworkName.trim(),
-            cfg.easyTierNetworkSecret.trim(),
-            easyTierAddress()
-        )
-    }
+    /** 给玩家的整段说明。复制按钮与二维码用同一份文本。 */
+    fun easyTierShareText(): String = tunnelControlsDelegate.easyTierShareText()
 
-    fun startEasyTier() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
-        if (!EasyTierEngine.available) {
-            _errorFlow.tryEmit(str(R.string.easytier_engine_missing))
-            return
-        }
-        if (easyTierState.value.status == TunnelStatus.Starting) {
-            _errorFlow.tryEmit(str(R.string.s200))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // 端口真源，理由同 STUN：配置文件被外部改动过时，
-                // port_forward 会把虚拟网里的流量转到一个没人监听的端口上。
-                refreshServerPropertiesNow()
-                val targetPort = realServerPort()
-                val result = tunnelManager.startEasyTier(
-                    config.value.copy(localPort = targetPort, tunnelType = TunnelType.EasyTier)
-                )
-                val failure = result.exceptionOrNull()
-                if (failure != null) {
-                    _errorFlow.tryEmit(failure.message ?: str(R.string.s204, ""))
-                } else {
-                    reportStart(easyTierState.value)
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s206, e.message))
-            }
-        }
-    }
+    fun startEasyTier() = tunnelControlsDelegate.startEasyTier()
 
-    fun stopEasyTier() {
-        viewModelScope.launch {
-            try {
-                tunnelManager.stopEasyTier()
-                _messageFlow.tryEmit(str(R.string.s207))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s208, e.message))
-            }
-        }
-    }
+    fun stopEasyTier() = tunnelControlsDelegate.stopEasyTier()
 
-    /**
-     * 用户在系统 VPN 授权框上点了「拒绝」/直接返回。
-     *
-     * 必须单独提示：`establish()` 在无授权时只返回 null，日志里也只有一句
-     * 「系统拒绝」，从那条信息看不出是用户自己关掉的还是系统拦的。
-     */
-    fun notifyEasyTierVpnDenied() {
-        _errorFlow.tryEmit(str(R.string.easytier_vpn_denied))
-    }
+    /** 用户在系统 VPN 授权框上点了「拒绝」/直接返回。 */
+    fun notifyEasyTierVpnDenied() = tunnelControlsDelegate.notifyEasyTierVpnDenied()
 
     /** 复制给玩家的整段说明（组网卡片与引导页共用）。 */
-    fun copyEasyTierGuide(context: android.content.Context) {
-        val text = easyTierShareText()
-        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-            as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("EasyTier", text))
-        _messageFlow.tryEmit(str(R.string.easytier_copied))
-    }
-
-    /**
-     * 启动调用返回后的统一提示。
-     *
-     * 注意：STUN 后端的 start() 是**异步就绪**的 —— 它立即返回，实际探测在后台
-     * 进行，就绪/失败稍后经状态流反映。所以这里只能提示「正在启动」，
-     * 不能按 Running 判定成功，否则网络慢时会误报失败。结果由界面观察状态流得出。
-     */
-    private fun reportStart(st: TunnelState) {
-        when (st.status) {
-            TunnelStatus.Running -> {
-                val url = st.publicUrl
-                _messageFlow.tryEmit(
-                    if (url.isNotBlank()) str(R.string.msg_tunnel_started_url, url)
-                    else str(R.string.msg_tunnel_started)
-                )
-            }
-            TunnelStatus.Starting -> _messageFlow.tryEmit(str(R.string.s203))
-            TunnelStatus.Failed -> _errorFlow.tryEmit(str(R.string.s204, st.errorMessage))
-            else -> _messageFlow.tryEmit(str(R.string.s205))
-        }
-    }
+    fun copyEasyTierGuide(context: android.content.Context) = tunnelControlsDelegate.copyEasyTierGuide(context)
 
     /** 复制任意公网地址（FRP 与 STUN 卡片各自传入自己那条通道的地址）。 */
-    fun copyPublicUrl(context: android.content.Context, url: String) {
-        if (url.isBlank()) {
-            _errorFlow.tryEmit(str(R.string.s209))
-            return
-        }
-        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-            as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Tunnel URL", url))
-        _messageFlow.tryEmit(str(R.string.s210, url))
-    }
+    fun copyPublicUrl(context: android.content.Context, url: String) = tunnelControlsDelegate.copyPublicUrl(context, url)
 
     fun sendCommand(line: String) {
         try {

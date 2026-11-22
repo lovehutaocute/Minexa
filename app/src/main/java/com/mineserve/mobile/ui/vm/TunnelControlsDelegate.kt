@@ -11,6 +11,8 @@ import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.TunnelStatus
 import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.server.TunnelManager
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
+import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -24,7 +26,6 @@ internal class TunnelControlsDelegate(
     private val updateConfig: ((McConfig) -> McConfig) -> Unit,
     private val refreshServerPropertiesNow: suspend () -> Unit,
     private val realServerPort: () -> Int,
-    private val reportStart: (TunnelState) -> Unit,
     private val reportMessage: (String) -> Unit,
     private val reportError: (String) -> Unit
 ) {
@@ -167,6 +168,165 @@ internal class TunnelControlsDelegate(
                 reportError(str(R.string.s208, e.message))
             }
         }
+    }
+
+    val easyTierAvailable: Boolean get() = EasyTierEngine.available
+
+    /**
+     * 补齐组网身份：网络名或密钥为空时自动生成一套。
+     *
+     * 「填个网络名就能分享给任何人」的前提是**用户不用自己想名字**。
+     * 名字生成成 `mc-xxxxxx` 这种带随机后缀的形式，两个人同时第一次用也不会撞名。
+     * 已有值的字段一律不覆盖 —— 用户改过的网络名不能被一次进入页面就冲掉。
+     */
+    fun ensureEasyTierIdentity() {
+        val cfg = config.value
+        if (cfg.easyTierNetworkName.isNotBlank() && cfg.easyTierNetworkSecret.isNotBlank()) return
+        updateConfig {
+            it.copy(
+                easyTierNetworkName = it.easyTierNetworkName.ifBlank {
+                    "mc-" + EasyTierSettings.generateSecret().take(6)
+                },
+                easyTierNetworkSecret = it.easyTierNetworkSecret.ifBlank {
+                    EasyTierSettings.generateSecret()
+                }
+            )
+        }
+    }
+
+    /**
+     * 换一套网络密钥。
+     *
+     * 用途是「把之前那批人踢出去」：EasyTier 没有账号体系、没有 ACL，
+     * 密钥是**唯一**的访问控制手段，泄漏了只能换。
+     */
+    fun regenerateEasyTierSecret() {
+        updateConfig { it.copy(easyTierNetworkSecret = EasyTierSettings.generateSecret()) }
+        reportMessage(str(R.string.easytier_secret_regenerated))
+    }
+
+    /**
+     * 本机在虚拟网里的地址（`虚拟IP:转发端口`）。网络名为空时返回空串。
+     *
+     * 端口取的是**转发端口**而不是服务端端口：两个监听不能占同一个端口，
+     * 谁后绑谁失败（见 `EasyTierSettings.toToml`）。服务端端口一变，
+     * 转发目标跟着变，但玩家看到的端口固定是转发端口。
+     */
+    fun easyTierAddress(): String {
+        val cfg = config.value
+        val name = cfg.easyTierNetworkName.trim()
+        val ip = cfg.easyTierVirtualIp.trim()
+            .ifBlank { if (name.isBlank()) "" else EasyTierSettings.deriveVirtualIp(name) }
+        return EasyTierSettings.playerAddress(ip, realServerPort())
+    }
+
+    /** 给玩家的整段说明。复制按钮与二维码用的是**同一份文本**，不允许各拼一套。 */
+    fun easyTierShareText(): String {
+        val cfg = config.value
+        return str(
+            R.string.easytier_share_text,
+            cfg.easyTierNetworkName.trim(),
+            cfg.easyTierNetworkSecret.trim(),
+            easyTierAddress()
+        )
+    }
+
+    fun startEasyTier() {
+        if (!isBootstrapped.value) {
+            reportError(str(R.string.s192))
+            return
+        }
+        if (!EasyTierEngine.available) {
+            reportError(str(R.string.easytier_engine_missing))
+            return
+        }
+        if (tunnelManager.easyTierState.value.status == TunnelStatus.Starting) {
+            reportError(str(R.string.s200))
+            return
+        }
+        scope.launch {
+            try {
+                // 端口真源，理由同 STUN：配置文件被外部改动过时，
+                // port_forward 会把虚拟网里的流量转到一个没人监听的端口上。
+                refreshServerPropertiesNow()
+                val targetPort = realServerPort()
+                val result = tunnelManager.startEasyTier(
+                    config.value.copy(localPort = targetPort, tunnelType = TunnelType.EasyTier)
+                )
+                val failure = result.exceptionOrNull()
+                if (failure != null) {
+                    reportError(failure.message ?: str(R.string.s204, ""))
+                } else {
+                    reportStart(tunnelManager.easyTierState.value)
+                }
+            } catch (e: Exception) {
+                reportError(str(R.string.s206, e.message))
+            }
+        }
+    }
+
+    fun stopEasyTier() {
+        scope.launch {
+            try {
+                tunnelManager.stopEasyTier()
+                reportMessage(str(R.string.s207))
+            } catch (e: Exception) {
+                reportError(str(R.string.s208, e.message))
+            }
+        }
+    }
+
+    /**
+     * 用户在系统 VPN 授权框上点了「拒绝」/直接返回。
+     *
+     * 必须单独提示：`establish()` 在无授权时只返回 null，日志里也只有一句
+     * 「系统拒绝」，从那条信息看不出是用户自己关掉的还是系统拦的。
+     */
+    fun notifyEasyTierVpnDenied() {
+        reportError(str(R.string.easytier_vpn_denied))
+    }
+
+    /** 复制给玩家的整段说明（组网卡片与引导页共用）。 */
+    fun copyEasyTierGuide(context: android.content.Context) {
+        val text = easyTierShareText()
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("EasyTier", text))
+        reportMessage(str(R.string.easytier_copied))
+    }
+
+    /**
+     * 启动调用返回后的统一提示。
+     *
+     * 注意：STUN 后端的 start() 是**异步就绪**的 —— 它立即返回，实际探测在后台
+     * 进行，就绪/失败稍后经状态流反映。所以这里只能提示「正在启动」，
+     * 不能按 Running 判定成功，否则网络慢时会误报失败。结果由界面观察状态流得出。
+     */
+    private fun reportStart(st: TunnelState) {
+        when (st.status) {
+            TunnelStatus.Running -> {
+                val url = st.publicUrl
+                reportMessage(
+                    if (url.isNotBlank()) str(R.string.msg_tunnel_started_url, url)
+                    else str(R.string.msg_tunnel_started)
+                )
+            }
+            TunnelStatus.Starting -> reportMessage(str(R.string.s203))
+            TunnelStatus.Failed -> reportError(str(R.string.s204, st.errorMessage))
+            else -> reportMessage(str(R.string.s205))
+        }
+    }
+
+    /** 复制任意公网地址（FRP 与 STUN 卡片各自传入自己那条通道的地址）。 */
+    fun copyPublicUrl(context: android.content.Context, url: String) {
+        if (url.isBlank()) {
+            reportError(str(R.string.s209))
+            return
+        }
+        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
+            as android.content.ClipboardManager
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Tunnel URL", url))
+        reportMessage(str(R.string.s210, url))
     }
 
     private fun str(id: Int, vararg args: Any?): String =
