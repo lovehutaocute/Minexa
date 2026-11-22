@@ -92,6 +92,7 @@ import com.mineserve.mobile.server.ServerImporter
 import com.mineserve.mobile.server.TunnelManager
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
+import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
 import com.mineserve.mobile.ui.vm.formatBytes
@@ -2239,41 +2240,30 @@ class McViewModel(
         val visible: Boolean get() = candidates.isNotEmpty() && !running
     }
 
-    private val _legacyMigration = MutableStateFlow(LegacyMigrationState())
-    val legacyMigration: StateFlow<LegacyMigrationState> = _legacyMigration.asStateFlow()
+    private val legacyMigrationDelegate by lazy {
+        LegacyMigrationDelegate(
+            context = app,
+            scope = viewModelScope,
+            currentConfigOrNull = repo::currentConfigOrNull,
+            updateAndSaveConfig = { transform -> repo.updateAndSaveConfig(transform) },
+            termux3Log = ::termux3Log,
+            reportError = { _errorFlow.tryEmit(it) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            refreshStoragePermission = ::refreshStoragePermission
+        )
+    }
+
+    val legacyMigration: StateFlow<LegacyMigrationState> get() = legacyMigrationDelegate.legacyMigration
 
     /**
      * 扫描旧版私有目录，发现可迁移的服务器就置为可见（由 McApp 在启动时调用）。
      *
      * 扫描本身只读不写：**绝不**因为「发现了旧文件」就自动搬，搬不搬由用户决定。
      */
-    fun checkLegacyMigration() {
-        viewModelScope.launch {
-            // 不用 currentConfig()：它可能 runBlocking 读盘。这里等一次内存态就绪再走，
-            // 拿不到（极端情况）就放弃本轮，下次启动仍会重新扫描。
-            val cfg = repo.currentConfigOrNull()
-                ?: run {
-                    kotlinx.coroutines.delay(600)
-                    repo.currentConfigOrNull()
-                }
-                ?: return@launch
-            val list = withContext(Dispatchers.IO) {
-                com.mineserve.mobile.server.LegacyServerMigration.scan(app, cfg)
-            }
-            _legacyMigration.value = LegacyMigrationState(
-                candidates = list,
-                scanned = true
-            )
-            if (list.isNotEmpty()) {
-                termux3Log("检测到 ${list.size} 个旧版服务器待迁移：${list.joinToString(", ") { it.dirName }}")
-            }
-        }
-    }
+    fun checkLegacyMigration() = legacyMigrationDelegate.checkLegacyMigration()
 
     /** 用户选择「以后再说」：只关闭本次提示，下次启动仍会扫描 */
-    fun dismissLegacyMigration() {
-        _legacyMigration.value = _legacyMigration.value.copy(candidates = emptyList())
-    }
+    fun dismissLegacyMigration() = legacyMigrationDelegate.dismissLegacyMigration()
 
     /**
      * 执行迁移：复制 → 校验 → 改名 → 删源，然后把结果写回配置。
@@ -2283,62 +2273,8 @@ class McViewModel(
      *
      * @param skipUnreadable 用户已确认「忽略无法读取的文件」后继续
      */
-    fun runLegacyMigration(skipUnreadable: Boolean = false) {
-        val state = _legacyMigration.value
-        if (state.running || state.candidates.isEmpty()) return
-        val candidates = state.candidates
-        _legacyMigration.value = state.copy(
-            running = true,
-            progressDone = 0,
-            progressTotal = candidates.size,
-            progressName = candidates.first().dirName,
-            canSkipFailed = false,
-            lastError = null
-        )
-        viewModelScope.launch {
-            val outcomes = com.mineserve.mobile.server.LegacyServerMigration.migrateAll(
-                app, candidates, allowSkipUnreadable = skipUnreadable
-            ) { done, total, name ->
-                _legacyMigration.value = _legacyMigration.value.copy(
-                    progressDone = done, progressTotal = total, progressName = name
-                )
-            }
-            val root = com.mineserve.mobile.data.ServerStorage.internalRoot(app)
-            repo.updateAndSaveConfig { current ->
-                com.mineserve.mobile.server.LegacyServerMigration.applyOutcomes(current, outcomes, root)
-            }
-            val ok = outcomes.count { it.success }
-            val failed = outcomes.filter { !it.success }
-            val skipped = outcomes.flatMap { it.skipped }
-            // 失败但「只因个别文件读不出来」时保留候选，让用户能当场选「忽略并继续」；
-            // 否则关掉对话框，等下次冷启动再问。
-            val canSkip = failed.isNotEmpty() && failed.all { it.canSkip }
-            val errorText = if (failed.isEmpty()) null else
-                failed.joinToString("; ") { "${it.dirName}: ${it.error ?: "未知错误"}" }
-            _legacyMigration.value = LegacyMigrationState(
-                candidates = if (canSkip) candidates else emptyList(),
-                scanned = true,
-                canSkipFailed = canSkip,
-                lastError = errorText
-            )
-            if (failed.isEmpty()) {
-                _messageFlow.tryEmit(str(R.string.legacy_migrate_done, ok))
-                if (skipped.isNotEmpty()) {
-                    _errorFlow.tryEmit(str(R.string.legacy_migrate_skipped, skipped.size, skipped.take(3).joinToString("、")))
-                }
-            } else {
-                _errorFlow.tryEmit(
-                    str(
-                        R.string.legacy_migrate_partial,
-                        ok,
-                        errorText ?: ""
-                    )
-                )
-            }
-            // 迁移进来的目录直接登记完成，不需要再走「扫描未登记目录」
-            refreshStoragePermission()
-        }
-    }
+    fun runLegacyMigration(skipUnreadable: Boolean = false) =
+        legacyMigrationDelegate.runLegacyMigration(skipUnreadable)
 
     fun refreshJava() {
         // 刻意不检查 isBootstrapped：FCL 来源的 JRE 与 Termux 环境无关，
