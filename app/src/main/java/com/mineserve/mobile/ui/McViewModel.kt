@@ -97,6 +97,7 @@ import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
+import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
 import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
 import com.mineserve.mobile.ui.vm.formatBytes
@@ -113,7 +114,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -121,7 +121,6 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
@@ -378,92 +377,40 @@ class McViewModel(
     private val _termuxBusy = MutableStateFlow(false)
     val termuxBusy: StateFlow<Boolean> = _termuxBusy.asStateFlow()
 
-    private val terminalMutex = Mutex()
-    @Volatile private var interactiveTerminalSessionId: String? = null
-    private val _terminalSessions = MutableStateFlow(
-        listOf(
-            TerminalSession("minecraft", str(R.string.mc_console_label), TerminalSessionType.Minecraft),
-            TerminalSession("termux-1", "Termux 1", TerminalSessionType.Termux)
+    private val terminalSessionsDelegate by lazy {
+        TerminalSessionsDelegate(
+            app = app,
+            scope = viewModelScope,
+            termuxRuntime = repo.termuxRuntime,
+            isBootstrapped = isBootstrapped,
+            isUiVisible = { uiVisible },
+            maxLogLines = MAX_LOG_LINES,
+            logFlushMs = LOG_FLUSH_MS,
+            idleLogFlushMs = IDLE_LOG_FLUSH_MS
         )
-    )
-    val terminalSessions: StateFlow<List<TerminalSession>> = _terminalSessions.asStateFlow()
-    private val _activeTerminalSessionId = MutableStateFlow("minecraft")
-    val activeTerminalSessionId: StateFlow<String> = _activeTerminalSessionId.asStateFlow()
-
-    fun createTerminalSession() {
-        val next = (_terminalSessions.value.count { it.type == TerminalSessionType.Termux } + 1)
-        val id = "termux-${System.nanoTime()}"
-        _terminalSessions.update { it + TerminalSession(id, "Termux $next", TerminalSessionType.Termux) }
-        _activeTerminalSessionId.value = id
     }
 
-    fun selectTerminalSession(id: String) { _activeTerminalSessionId.value = id }
+    val terminalSessions: StateFlow<List<TerminalSession>> get() = terminalSessionsDelegate.terminalSessions
+    val activeTerminalSessionId: StateFlow<String> get() = terminalSessionsDelegate.activeTerminalSessionId
+
+    fun createTerminalSession() = terminalSessionsDelegate.createTerminalSession()
+
+    fun selectTerminalSession(id: String) = terminalSessionsDelegate.selectTerminalSession(id)
 
     fun setLogTranslationEnabled(enabled: Boolean) {
         _logTranslationEnabled.value = enabled
         terminalDisplayDirty = true
     }
 
-    fun closeTerminalSession(id: String) {
-        val session = _terminalSessions.value.firstOrNull { it.id == id } ?: return
-        if (session.type == TerminalSessionType.Minecraft) return
-        // 用 update 原子读改写：终端刷新协程（Dispatchers.Default）会对同一 StateFlow 做 map 写回，
-        // 原先「读 remaining → 整条写回」的跨线程读改写会互相覆盖，导致新建会话整条消失或本轮输出被丢。
-        var nextActive: String? = null
-        _terminalSessions.update { list ->
-            val remaining = list.filterNot { it.id == id }
-            if (remaining.none { it.type == TerminalSessionType.Termux }) {
-                val fallback = TerminalSession("termux-${System.nanoTime()}", "Termux 1", TerminalSessionType.Termux)
-                nextActive = fallback.id
-                remaining + fallback
-            } else {
-                if (_activeTerminalSessionId.value == id) nextActive = remaining.first().id
-                remaining
-            }
-        }
-        // 回收该会话的输出缓冲：此前只有 clearTerminalSession 会清，反复新建/关闭会让条目永久残留
-        synchronized(terminalOutputBuffers) { terminalOutputBuffers.remove(id) }
-        nextActive?.let { _activeTerminalSessionId.value = it }
-    }
+    fun closeTerminalSession(id: String) = terminalSessionsDelegate.closeTerminalSession(id)
 
-    fun executeTerminalCommand(id: String, command: String) {
-        if (command.isBlank()) return
-        val session = _terminalSessions.value.firstOrNull { it.id == id } ?: return
-        if (session.type != TerminalSessionType.Termux || !isBootstrapped.value) return
-        viewModelScope.launch {
-            terminalMutex.withLock {
-                updateTerminalSession(id) { it.copy(busy = true) }
-                enqueueTerminalLine(id, "$ $command")
-                interactiveTerminalSessionId = id
-                try {
-                    withContext(Dispatchers.IO) { repo.termuxRuntime.refreshTermux() }
-                    val exit = withContext(Dispatchers.IO) {
-                        repo.termuxRuntime.execTermux(command) { line -> enqueueTerminalLine(id, line) }
-                    }
-                    if (exit != 0) enqueueTerminalLine(id, str(R.string.term_exit_code, exit))
-                } catch (e: Exception) {
-                    enqueueTerminalLine(id, str(R.string.term_exec_error, e.message))
-                } finally {
-                    interactiveTerminalSessionId = null
-                    updateTerminalSession(id) { it.copy(busy = false) }
-                }
-            }
-        }
-    }
+    fun executeTerminalCommand(id: String, command: String) = terminalSessionsDelegate.executeTerminalCommand(id, command)
 
     /** 向当前 Termux 会话中的命令发送一行 stdin。 */
-    fun sendTerminalInput(id: String, input: String) {
-        if (input.isBlank() || interactiveTerminalSessionId != id) return
-        if (repo.termuxRuntime.sendTermuxInput(input)) {
-            enqueueTerminalLine(id, "> $input")
-        }
-    }
+    fun sendTerminalInput(id: String, input: String) = terminalSessionsDelegate.sendTerminalInput(id, input)
 
     /** 清空指定终端会话的显示行（保留会话本身） */
-    fun clearTerminalSession(id: String) {
-        synchronized(terminalOutputBuffers) { terminalOutputBuffers.remove(id) }
-        updateTerminalSession(id) { it.copy(lines = kotlinx.collections.immutable.persistentListOf()) }
-    }
+    fun clearTerminalSession(id: String) = terminalSessionsDelegate.clearTerminalSession(id)
 
     /** 清空 MC 控制台缓冲 */
     fun clearConsole() {
@@ -557,20 +504,6 @@ class McViewModel(
             } finally {
                 terminalHistoryLoading = false
             }
-        }
-    }
-
-    private fun updateTerminalSession(id: String, transform: (TerminalSession) -> TerminalSession) {
-        // update 原子读改写：调用方既有 Dispatchers.Default 的行刷新循环，也有主线程的会话增删，
-        // 直接 `value = value.map{}` 会跨线程丢更新（新建的会话整条消失 / 本轮终端输出被丢弃）。
-        _terminalSessions.update { list -> list.map { if (it.id == id) transform(it) else it } }
-    }
-
-    private val terminalOutputBuffers = mutableMapOf<String, LogBuffer<String>>()
-
-    private fun enqueueTerminalLine(id: String, line: String) {
-        synchronized(terminalOutputBuffers) {
-            terminalOutputBuffers.getOrPut(id) { LogBuffer(MAX_LOG_LINES) }.add(line)
         }
     }
 
@@ -5948,28 +5881,7 @@ class McViewModel(
                 }
             }
         }
-        viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                // 同上：终端会话面板不可见时降频；界面不在前台（uiVisible=false）同样降频。
-                val terminalVisible = _terminalSessions.subscriptionCount.value > 0 ||
-                    _activeTerminalSessionId.subscriptionCount.value > 0
-                if (!uiVisible || !terminalVisible) {
-                    delay(IDLE_LOG_FLUSH_MS)
-                    continue
-                }
-                delay(LOG_FLUSH_MS)
-                val batch = synchronized(terminalOutputBuffers) {
-                    terminalOutputBuffers.mapValues { (_, buffer) -> buffer.snapshotAndClear() }
-                        .filterValues { it.isNotEmpty() }
-                }
-                batch.forEach { (id, lines) ->
-                    updateTerminalSession(id) { session ->
-                        val additions = lines.map { TerminalLogProcessor.process(it, false) }
-                        session.copy(lines = (session.lines + additions).takeLast(MAX_LOG_LINES).toImmutableList())
-                    }
-                }
-            }
-        }
+        terminalSessionsDelegate.startOutputFlush()
     }
 
     // ── 后台保活（开机自启 / 周期保活） ─────────────────────────────
