@@ -93,6 +93,7 @@ import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
 import com.mineserve.mobile.ui.vm.ModsDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
 import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
+import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
@@ -3773,22 +3774,34 @@ class McViewModel(
     // 声明位置在 init 之后，必须用 lazy 延迟初始化，避免构造函数未完成时读到 null
     private val playerManager: PlayerManager by lazy { PlayerManager(repo.termuxRuntime) }
 
-    private val _ops = MutableStateFlow<List<PlayerManager.OpEntry>>(emptyList())
-    val ops: StateFlow<List<PlayerManager.OpEntry>> = _ops.asStateFlow()
+    private val playerListsDelegate by lazy {
+        PlayerListsDelegate(
+            app = app,
+            scope = viewModelScope,
+            playerManager = playerManager,
+            propertiesManager = propertiesManager,
+            powerNukkitXConfigManager = powerNukkitXConfigManager,
+            activeDirName = ::activeDirName,
+            isBdsActive = { activeBdsCore() != null },
+            isPowerNukkitXActive = ::isPowerNukkitXActive,
+            serverProperties = { serverProperties.value },
+            setWhitelistProperty = { key, enabled -> serverPropertiesDelegate.setWhitelistProperty(key, enabled) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _whitelist = MutableStateFlow<List<PlayerManager.WhitelistEntry>>(emptyList())
-    val whitelist: StateFlow<List<PlayerManager.WhitelistEntry>> = _whitelist.asStateFlow()
+    val ops: StateFlow<List<PlayerManager.OpEntry>> get() = playerListsDelegate.ops
 
-    private val _bannedPlayers = MutableStateFlow<List<PlayerManager.BannedEntry>>(emptyList())
-    val bannedPlayers: StateFlow<List<PlayerManager.BannedEntry>> = _bannedPlayers.asStateFlow()
+    val whitelist: StateFlow<List<PlayerManager.WhitelistEntry>> get() = playerListsDelegate.whitelist
+
+    val bannedPlayers: StateFlow<List<PlayerManager.BannedEntry>> get() = playerListsDelegate.bannedPlayers
 
     /** 白名单开关状态（由 server.properties 的 white-list 控制） */
-    private val _whitelistEnabled = MutableStateFlow(false)
-    val whitelistEnabled: StateFlow<Boolean> = _whitelistEnabled.asStateFlow()
+    val whitelistEnabled: StateFlow<Boolean> get() = playerListsDelegate.whitelistEnabled
 
     /** 当前 server.properties 配置的默认 OP 等级（null 表示未配置，使用 MC 默认 4） */
-    private val _defaultOpLevel = MutableStateFlow<Int?>(null)
-    val defaultOpLevel: StateFlow<Int?> = _defaultOpLevel.asStateFlow()
+    val defaultOpLevel: StateFlow<Int?> get() = playerListsDelegate.defaultOpLevel
 
     /** 在线玩家名列表（从日志解析） */
     private val _onlinePlayerNames: MutableStateFlow<List<String>> by lazy { MutableStateFlow(emptyList()) }
@@ -3892,35 +3905,7 @@ class McViewModel(
     }
 
     /** 刷新玩家数据（OP/白名单/封禁列表） */
-    fun refreshPlayers() {
-        val dirName = activeDirName() ?: return
-        // 官方 BDS 的玩家数据文件与 Java 版完全不同：
-        //  - OP → permissions.json（permission=operator，只有 xuid）
-        //  - 白名单 → allowlist.json
-        //  - 没有封禁文件
-        // 所以整条读取链都要按核心分别走，否则 BDS 下三个列表永远为空。
-        val bds = activeBdsCore() != null
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    if (bds) playerManager.loadBedrockXuidNames(dirName)
-                    _ops.value = playerManager.readOps(dirName, bds)
-                    _whitelist.value = playerManager.readWhitelist(dirName, bds)
-                    _bannedPlayers.value = playerManager.readBanned(dirName, bds)
-                    if (bds) playerManager.saveBedrockXuidNames(dirName)
-                    // 同步白名单开关状态（从 server.properties 读取；BDS 的键名是 allow-list）
-                    val props = if (isPowerNukkitXActive()) powerNukkitXConfigManager.read(dirName)
-                    else propertiesManager.readProperties(dirName)
-                    _whitelistEnabled.value =
-                        props[if (bds) "allow-list" else "white-list"]?.equals("true", ignoreCase = true) == true
-                    // 同步默认 OP 等级（op-permission-level）；BDS 没有等级概念
-                    _defaultOpLevel.value = if (bds) null else props["op-permission-level"]?.toIntOrNull()
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s265, e.message))
-            }
-        }
-    }
+    fun refreshPlayers() = playerListsDelegate.refreshPlayers()
 
     /**
      * 命令发送后延迟刷新，等待 MC 完成回写 JSON 文件
@@ -3989,35 +3974,7 @@ class McViewModel(
     }
 
     /** 切换白名单开关 */
-    fun toggleWhitelist(enabled: Boolean) {
-        val bds = activeBdsCore() != null
-        val dirName = activeDirName()
-        viewModelScope.launch {
-            // 官方 BDS 的硬约束：关闭正版验证（online-mode=false）时不允许开白名单，
-            // 服务端启动时会直接报错并退出。这里先读盘确认，别让用户把服务器按死。
-            if (bds && enabled) {
-                val onlineMode = withContext(Dispatchers.IO) {
-                    dirName?.let { propertiesManager.readProperties(it)["online-mode"] }?.equals("true", true)
-                } ?: (serverProperties.value["online-mode"]?.equals("true", true) == true)
-                if (!onlineMode) {
-                    _whitelistEnabled.value = false
-                    _errorFlow.tryEmit(str(R.string.bds_players_allowlist_needs_online_mode))
-                    return@launch
-                }
-            }
-            val sent = if (enabled) playerManager.whitelistOn(bds) else playerManager.whitelistOff(bds)
-            if (sent) {
-                _whitelistEnabled.value = enabled
-                // 同步镜像：概览页的白名单提示读的是 [serverProperties]，只改 _whitelistEnabled
-                // 的话要等下一次读配置文件才会更新，提示会慢半拍。
-                val key = if (bds) "allow-list" else "white-list"
-                serverPropertiesDelegate.setWhitelistProperty(key, enabled)
-                _messageFlow.tryEmit(if (enabled) str(R.string.msg_whitelist_toggled_on) else str(R.string.msg_whitelist_toggled_off))
-            } else {
-                _errorFlow.tryEmit(str(R.string.s274))
-            }
-        }
-    }
+    fun toggleWhitelist(enabled: Boolean) = playerListsDelegate.toggleWhitelist(enabled)
 
     fun kickPlayer(name: String, reason: String = "") {
         if (name.isBlank()) return
