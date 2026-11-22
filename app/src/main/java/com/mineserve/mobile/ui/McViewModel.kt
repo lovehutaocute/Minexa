@@ -123,8 +123,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import kotlinx.collections.immutable.ImmutableList
-import kotlinx.collections.immutable.persistentListOf
-import kotlinx.collections.immutable.toImmutableList
 import kotlinx.serialization.Serializable
 import java.net.Inet4Address
 import java.net.NetworkInterface
@@ -378,11 +376,9 @@ class McViewModel(
 
     // ── Termux 终端（会话面板） ─────────────────────────────
 
-    private val _termuxLines = MutableStateFlow<ImmutableList<String>>(persistentListOf())
-    val termuxLines: StateFlow<ImmutableList<String>> = _termuxLines.asStateFlow()
+    val termuxLines: StateFlow<ImmutableList<String>> get() = terminalSessionsDelegate.termuxLines
 
-    private val _termuxBusy = MutableStateFlow(false)
-    val termuxBusy: StateFlow<Boolean> = _termuxBusy.asStateFlow()
+    val termuxBusy: StateFlow<Boolean> get() = terminalSessionsDelegate.termuxBusy
 
     private val terminalSessionsDelegate by lazy {
         TerminalSessionsDelegate(
@@ -423,50 +419,7 @@ class McViewModel(
     fun loadRecentTerminalLog() = consoleLogDelegate.loadRecentTerminalLog()
 
     /** 执行 Termux shell 命令（IO 线程，输出实时追加到 termuxLines，命令回显 $ cmd） */
-    fun execTermuxCommand(command: String) {
-        if (command.isBlank() || _termuxBusy.value) return
-        // 环境未初始化完成时禁止输入（bootstrap 下载/解压/装依赖中，命令必然失败）
-        if (!isBootstrapped.value) {
-            appendTermux(str(R.string.termux_not_ready))
-            return
-        }
-        viewModelScope.launch {
-            _termuxBusy.value = true
-            try {
-                // 命令执行前快速自愈：apt/pkg 新装包命令立即可用，无需重启
-                withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.refreshTermux()
-                }
-                appendTermux("$ " + command)
-                val exit = withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.execTermux(command) { line ->
-                        appendTermux(line)
-                    }
-                }
-                if (exit != 0) {
-                    val hint = when (exit) {
-                        126 -> str(R.string.termux_hint_126)
-                        127 -> str(R.string.termux_hint_127)
-                        else -> ""
-                    }
-                    appendTermux(str(R.string.term_exit_code, exit) + hint)
-                    // 失败时输出环境诊断，便于定位根因
-                    appendTermux(repo.termuxRuntime.diagnoseCommand(command))
-                }
-            } catch (e: Exception) {
-                appendTermux(str(R.string.term_exec_error, e.message))
-            } finally {
-                _termuxBusy.value = false
-            }
-        }
-    }
-
-    private val legacyTermuxBuffer = LogBuffer<String>(MAX_LOG_LINES)
-
-    /** 追加到旧版日志缓冲，由后台批处理协程发布，避免逐行触发重组。 */
-    private fun appendTermux(line: String) {
-        legacyTermuxBuffer.add(line)
-    }
+    fun execTermuxCommand(command: String) = terminalSessionsDelegate.execTermuxCommand(command)
 
     // ── 服务器图标（server-icon.png） ────────────────────────
 
@@ -5711,23 +5664,7 @@ class McViewModel(
             }
         }
         consoleLogDelegate.startOutputFlush()
-        viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                // 空闲降频：LogsScreen 不在前台、或 Activity 已停止（collectAsState 不销毁订阅数仍 >0）时，
-                // 每 200ms 醒一次纯属浪费（App 退到后台仍每秒唤醒 5~10 次，是待机耗电的主要来源）。
-                // 注意这里只延长"发布"的间隔，buffer 仍在持续接收，不会丢日志。
-                if (!uiVisible || _termuxLines.subscriptionCount.value <= 0) {
-                    delay(IDLE_LOG_FLUSH_MS)
-                    continue
-                }
-                delay(LOG_FLUSH_MS)
-                val batch = legacyTermuxBuffer.snapshotAndClear()
-                if (batch.isNotEmpty()) {
-                    val current = _termuxLines.value
-                    _termuxLines.value = (current + batch).takeLast(MAX_LOG_LINES).toImmutableList()
-                }
-            }
-        }
+        terminalSessionsDelegate.startLegacyOutputFlush()
         terminalSessionsDelegate.startOutputFlush()
     }
 

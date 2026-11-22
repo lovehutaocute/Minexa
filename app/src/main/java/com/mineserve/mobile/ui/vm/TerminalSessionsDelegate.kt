@@ -7,6 +7,8 @@ import com.mineserve.mobile.ui.LogBuffer
 import com.mineserve.mobile.ui.TerminalLogProcessor
 import com.mineserve.mobile.ui.TerminalSession
 import com.mineserve.mobile.ui.TerminalSessionType
+import kotlinx.collections.immutable.ImmutableList
+import kotlinx.collections.immutable.persistentListOf
 import kotlinx.collections.immutable.toImmutableList
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -146,6 +148,78 @@ internal class TerminalSessionsDelegate(
                         val additions = lines.map { TerminalLogProcessor.process(it, false) }
                         session.copy(lines = (session.lines + additions).takeLast(maxLogLines).toImmutableList())
                     }
+                }
+            }
+        }
+    }
+
+    private val _termuxLines = MutableStateFlow<ImmutableList<String>>(persistentListOf())
+    val termuxLines: StateFlow<ImmutableList<String>> = _termuxLines.asStateFlow()
+
+    private val _termuxBusy = MutableStateFlow(false)
+    val termuxBusy: StateFlow<Boolean> = _termuxBusy.asStateFlow()
+
+    /** 执行 Termux shell 命令（IO 线程，输出实时追加到 termuxLines，命令回显 $ cmd） */
+    fun execTermuxCommand(command: String) {
+        if (command.isBlank() || _termuxBusy.value) return
+        // 环境未初始化完成时禁止输入（bootstrap 下载/解压/装依赖中，命令必然失败）
+        if (!isBootstrapped.value) {
+            appendTermux(str(R.string.termux_not_ready))
+            return
+        }
+        scope.launch {
+            _termuxBusy.value = true
+            try {
+                // 命令执行前快速自愈：apt/pkg 新装包命令立即可用，无需重启
+                withContext(Dispatchers.IO) {
+                    termuxRuntime.refreshTermux()
+                }
+                appendTermux("$ " + command)
+                val exit = withContext(Dispatchers.IO) {
+                    termuxRuntime.execTermux(command) { line ->
+                        appendTermux(line)
+                    }
+                }
+                if (exit != 0) {
+                    val hint = when (exit) {
+                        126 -> str(R.string.termux_hint_126)
+                        127 -> str(R.string.termux_hint_127)
+                        else -> ""
+                    }
+                    appendTermux(str(R.string.term_exit_code, exit) + hint)
+                    // 失败时输出环境诊断，便于定位根因
+                    appendTermux(termuxRuntime.diagnoseCommand(command))
+                }
+            } catch (e: Exception) {
+                appendTermux(str(R.string.term_exec_error, e.message))
+            } finally {
+                _termuxBusy.value = false
+            }
+        }
+    }
+
+    private val legacyTermuxBuffer = LogBuffer<String>(maxLogLines)
+
+    /** 追加到旧版日志缓冲，由后台批处理协程发布，避免逐行触发重组。 */
+    private fun appendTermux(line: String) {
+        legacyTermuxBuffer.add(line)
+    }
+
+    fun startLegacyOutputFlush() {
+        scope.launch(Dispatchers.Default) {
+            while (true) {
+                // 空闲降频：LogsScreen 不在前台、或 Activity 已停止（collectAsState 不销毁订阅数仍 >0）时，
+                // 每 200ms 醒一次纯属浪费（App 退到后台仍每秒唤醒 5~10 次，是待机耗电的主要来源）。
+                // 注意这里只延长"发布"的间隔，buffer 仍在持续接收，不会丢日志。
+                if (!isUiVisible() || _termuxLines.subscriptionCount.value <= 0) {
+                    delay(idleLogFlushMs)
+                    continue
+                }
+                delay(logFlushMs)
+                val batch = legacyTermuxBuffer.snapshotAndClear()
+                if (batch.isNotEmpty()) {
+                    val current = _termuxLines.value
+                    _termuxLines.value = (current + batch).takeLast(maxLogLines).toImmutableList()
                 }
             }
         }
