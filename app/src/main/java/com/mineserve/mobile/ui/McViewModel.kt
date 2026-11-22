@@ -84,6 +84,7 @@ import com.mineserve.mobile.ui.vm.AppUpdateDelegate
 import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
+import com.mineserve.mobile.ui.vm.ConsoleClearMarks
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
@@ -99,7 +100,6 @@ import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
 import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
 import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
-import com.mineserve.mobile.ui.vm.clearMarkKey
 import com.mineserve.mobile.ui.vm.formatBytes
 import com.mineserve.mobile.ui.vm.formatCoreSize
 import com.mineserve.mobile.ui.vm.formatDiagnosticBytes
@@ -417,7 +417,7 @@ class McViewModel(
         // 只清内存是不够的：[loadRecentTerminalLog] 每次进终端页都会从磁盘日志
         // 补读几百行，刚清掉的内容会原样回到屏幕上 —— 用户看到的是「清除没生效」。
         // 这里记下清除时刻的文件长度，下次只补读这之后的新增。
-        activeDirName()?.let { markConsoleCleared(it) }
+        activeDirName()?.let { consoleClearMarks.markConsoleCleared(it) }
         consoleBuffer.clear()
         pendingConsoleBuffer.clear()
         terminalConsoleBuffer.clear()
@@ -432,32 +432,8 @@ class McViewModel(
         _terminalConsoleLines.value = persistentListOf()
     }
 
-    /**
-     * 终端「清除」的落点：日志文件字节偏移，按服务器（dirName）记账。
-     *
-     * 内存一份给当前进程，SharedPreferences 一份给「杀进程重进」——
-     * 用户清完屏关掉 App 再打开，历史日志同样不该复活。
-     */
-    private val consoleClearMarks = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-    private fun terminalPrefs() = app.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
-
-    private fun markConsoleCleared(dirName: String) {
-        val length = runCatching {
-            repo.termuxRuntime.mcLogFileFor(dirName)?.length() ?: 0L
-        }.getOrDefault(0L)
-        consoleClearMarks[dirName] = length
-        runCatching { terminalPrefs().edit().putLong(clearMarkKey(dirName), length).apply() }
-    }
-
-    private fun consoleClearMark(dirName: String): Long =
-        consoleClearMarks[dirName] ?: runCatching {
-            terminalPrefs().getLong(clearMarkKey(dirName), 0L)
-        }.getOrDefault(0L).also { consoleClearMarks[dirName] = it }
-
-    private fun dropConsoleClearMark(dirName: String) {
-        consoleClearMarks[dirName] = 0L
-        runCatching { terminalPrefs().edit().remove(clearMarkKey(dirName)).apply() }
+    private val consoleClearMarks by lazy {
+        ConsoleClearMarks(app) { dirName -> repo.termuxRuntime.mcLogFileFor(dirName) }
     }
 
     /** 进入 MC 终端时异步补读磁盘日志，实时输出仍由 consoleFlow 持续追加。 */
@@ -471,7 +447,7 @@ class McViewModel(
                 // （见下方刷新循环），服务端在跑时历史补读一返回就必然命中 `!=` 被整段丢弃，
                 // 表现为「App 重启后进终端看不到历史，只有新追加的行」。
                 val clearGen = consoleClearGeneration
-                val mark = consoleClearMark(dirName)
+                val mark = consoleClearMarks.consoleClearMark(dirName)
                 val history = withContext(Dispatchers.IO) {
                     val fileLength = runCatching {
                         repo.termuxRuntime.mcLogFileFor(dirName)?.length() ?: 0L
@@ -479,7 +455,7 @@ class McViewModel(
                     // 文件比清除落点还短：latest.log 已被新一轮运行覆盖，旧落点失效，
                     // 此时整份读才符合「新的一轮日志」的预期。
                     val offset = if (fileLength < mark) 0L else mark
-                    if (offset == 0L && mark != 0L) dropConsoleClearMark(dirName)
+                    if (offset == 0L && mark != 0L) consoleClearMarks.dropConsoleClearMark(dirName)
                     repo.termuxRuntime.readRecentMcLog(dirName, fromOffset = offset)
                 }
                 // 读盘期间用户可能点了「清除」：此时写回历史等于把清除撤销掉。
