@@ -73,6 +73,7 @@ import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
+import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
 import com.mineserve.mobile.ui.vm.CrashDetailsDelegate
 import com.mineserve.mobile.ui.vm.CrashReportFilesDelegate
@@ -98,7 +99,6 @@ import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
 import com.mineserve.mobile.ui.vm.TextEditorDelegate
 import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
 import com.mineserve.mobile.ui.vm.TunnelControlsDelegate
-import com.mineserve.mobile.ui.vm.formatCoreSize
 import com.mineserve.mobile.ui.vm.formatDiagnosticBytes
 import com.mineserve.mobile.ui.vm.modrinthLoader
 import com.mineserve.mobile.ui.vm.previewLayers as parsePreviewLayers
@@ -3540,9 +3540,20 @@ class McViewModel(
     /** 版本列表加载中 */
     val isLoadingVersions: StateFlow<Boolean> get() = coreVersionsDelegate.isLoadingVersions
 
+    private val coreDownloadDelegate by lazy {
+        CoreDownloadDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            controller = controller,
+            serverDirFor = { repo.termuxRuntime.serverDirFor(it) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     /** 服务端核心下载中 */
-    private val _isDownloadingCore = MutableStateFlow(false)
-    val isDownloadingCore: StateFlow<Boolean> = _isDownloadingCore.asStateFlow()
+    val isDownloadingCore: StateFlow<Boolean> get() = coreDownloadDelegate.isDownloadingCore
 
     /** 核心下载进度信息（已下载字节、总字节、速度 bytes/s），仅在下载中有效 */
     data class DownloadProgress(
@@ -3583,47 +3594,13 @@ class McViewModel(
         }
     }
 
-    private val _downloadProgress = MutableStateFlow(DownloadProgress())
-    val downloadProgress: StateFlow<DownloadProgress> = _downloadProgress.asStateFlow()
+    val downloadProgress: StateFlow<DownloadProgress> get() = coreDownloadDelegate.downloadProgress
 
     /** 加载指定核心的可用版本列表，并校正当前版本。force 为 true 时忽略缓存。 */
     fun loadVersions(core: ServerCore, force: Boolean = false) = coreVersionsDelegate.loadVersions(core, force)
 
     /** 下载服务端核心（使用自定义名称，保存到独立目录），成功返回 true */
-    fun downloadCore(customName: String) {
-        if (_isDownloadingCore.value) return
-        if (customName.isBlank()) {
-            _errorFlow.tryEmit(str(R.string.s295))
-            return
-        }
-        // 重名拦截：重名会让列表里出现两个无法区分的条目，且历史上会共用同一目录。
-        // 这里在下载前直接拒绝，并提示改用别的名字（目录名即便被去重，显示名仍会撞车）。
-        controller.duplicateNameOf(customName, config.value)?.let { existing ->
-            _errorFlow.tryEmit(str(R.string.dl_duplicate_name, existing))
-            return
-        }
-        // 版本为空 = 刚切过核心还没重新选。放行只会拼出一个 404 的下载地址，
-        // 用户看到的是「下载失败」，真正的原因却在上一屏。
-        if (config.value.mcVersion.isBlank()) {
-            _errorFlow.tryEmit(str(R.string.msg_version_required))
-            return
-        }
-        _isDownloadingCore.value = true
-        _downloadProgress.value = DownloadProgress()
-        viewModelScope.launch {
-            try {
-                controller.downloadCore(config.value, customName.trim()) { downloaded, total, speed ->
-                    _downloadProgress.value = DownloadProgress(downloaded, total, speed)
-                }
-                _messageFlow.tryEmit(str(R.string.s296, customName.trim()))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s297, e.message))
-            } finally {
-                _isDownloadingCore.value = false
-                _downloadProgress.value = DownloadProgress()
-            }
-        }
-    }
+    fun downloadCore(customName: String) = coreDownloadDelegate.downloadCore(customName)
 
     /** 选择要启动的核心（按名称） */
     fun setActiveCore(name: String) {
@@ -3633,58 +3610,7 @@ class McViewModel(
 
     /** 删除一个已安装的核心（按名称） */
     /** 校验已安装核心；未知核心只检查原文件，绝不自动下载或覆盖。 */
-    fun verifyOrRepairCore(dirName: String) {
-        val cfg = config.value
-        val core = cfg.installedCores.firstOrNull { it.dirName == dirName } ?: return
-        // BDS 的「核心」不是一个 JAR：它是官方 zip 解开的主程序 + 一批 x86_64 动态库
-        // + 默认配置，用「jar manifest 是否可读」当判据必然误判成损坏，随后的「修复」
-        // 会重下整包、把用户改过的 server.properties / 白名单覆盖掉。
-        // 因此直接拒绝，并说明该走哪条恢复路径。
-        if (core.core == com.mineserve.mobile.data.ServerCore.Bds) {
-            _errorFlow.tryEmit(str(R.string.err_core_bds_no_verify))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val serverDir = repo.termuxRuntime.serverDirFor(dirName)
-                val entryName = core.serverFile?.trim()?.substringAfterLast('/')?.substringAfterLast('\\')?.takeIf { it.isNotBlank() }
-                if (entryName == null) {
-                    _errorFlow.tryEmit(str(R.string.err_core_unknown_no_repair, "未指定启动文件"))
-                    return@launch
-                }
-                val jar = java.io.File(serverDir, entryName)
-                val valid = withContext(Dispatchers.IO) {
-                    if (!jar.isFile) false
-                    else if (core.core == com.mineserve.mobile.data.ServerCore.Unknown) true
-                    else runCatching {
-                        java.util.jar.JarFile(jar).use { jf -> jf.manifest != null }
-                    }.getOrDefault(false)
-                }
-                if (valid) {
-                    _messageFlow.tryEmit(str(R.string.msg_core_verify_ok, core.name, formatCoreSize(jar.length())))
-                    return@launch
-                }
-                if (core.core == com.mineserve.mobile.data.ServerCore.Unknown) {
-                    _errorFlow.tryEmit(str(R.string.err_core_unknown_no_repair, entryName))
-                    return@launch
-                }
-                _messageFlow.tryEmit(str(R.string.msg_core_repairing, core.name))
-                _isDownloadingCore.value = true
-                try {
-                    val downloadConfig = cfg.copy(selectedCore = core.core, mcVersion = core.version)
-                    withContext(Dispatchers.IO) {
-                        controller.downloadCoreTo(jar.absolutePath, downloadConfig, dirName) { _, _, _ -> }
-                    }
-                    _messageFlow.tryEmit(str(R.string.msg_core_repaired, core.name))
-                } finally {
-                    _isDownloadingCore.value = false
-                }
-            } catch (e: Exception) {
-                _isDownloadingCore.value = false
-                _errorFlow.tryEmit(str(R.string.err_core_repair_fail, e.message))
-            }
-        }
-    }
+    fun verifyOrRepairCore(dirName: String) = coreDownloadDelegate.verifyOrRepairCore(dirName)
 
     /**
      * 删除一个已安装核心（磁盘目录 + 配置登记）。
