@@ -84,6 +84,81 @@ internal class ExternalBackupsDelegate(
         }
     }
 
+    /** 列出外部备份 zip（供备份页展示） */
+    fun externalBackups(): List<java.io.File> = com.mineserve.mobile.server.ExternalBackupStore.listBackups()
+
+    fun externalBackupInfo(file: java.io.File): BackupManager.ExternalBackupInfo =
+        backupManager.parseExternalBackup(file.name, file.lastModified())
+
+    /** 删除外部备份文件 */
+    fun deleteExternalBackup(name: String) {
+        scope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) {
+                    backupManager.deleteExternalBackup(name)
+                }
+                if (ok) reportMessage(str(R.string.msg_backup_deleted, name))
+                else reportError(str(R.string.err_backup_delete_fail, name))
+            } catch (e: Exception) {
+                reportError(str(R.string.err_backup_delete_fail, e.message))
+            }
+        }
+    }
+
+    /** 从手机其他位置导入备份 zip 到外部备份目录（SAF 选择） */
+    fun importBackupToExternal(uri: android.net.Uri) {        scope.launch {
+            try {
+                if (!com.mineserve.mobile.server.ExternalBackupStore.ensure()) {
+                    reportError(str(R.string.err_ext_dir_unavailable))
+                    return@launch
+                }
+                val fileName = withContext(Dispatchers.IO) {
+                    app.contentResolver.query(
+                        uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+                    )?.use { c ->
+                        if (c.moveToFirst()) c.getString(0) else null
+                    } ?: "backup_${System.currentTimeMillis()}.zip"
+                }
+                val safeName = fileName?.takeIf { it.endsWith(".zip") } ?: "backup_${System.currentTimeMillis()}.zip"
+                val target = java.io.File(com.mineserve.mobile.server.ExternalBackupStore.rootDir, safeName)
+                withContext(Dispatchers.IO) {
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        target.outputStream().use { output -> input.copyTo(output) }
+                    }
+                }
+                reportMessage(str(R.string.msg_backup_imported, safeName))
+            } catch (e: Exception) {
+                reportError(str(R.string.err_backup_import_fail, e.message))
+            }
+        }
+    }
+
+    /** 重命名外部备份文件 */
+    fun renameExternalBackup(oldName: String, newName: String) {
+        scope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) { backupManager.renameExternalBackup(oldName, newName) }
+                if (ok) reportMessage(str(R.string.bk_rename_done, newName))
+                else reportError(str(R.string.bk_rename_fail))
+            } catch (e: Exception) {
+                reportError(str(R.string.bk_rename_fail))
+            }
+        }
+    }
+
+    /** 校验外部备份 zip 完整性 */
+    fun validateExternalBackup(name: String) {
+        scope.launch {
+            try {
+                val ok = withContext(Dispatchers.IO) { backupManager.validateZip(name) }
+                if (ok) reportMessage(str(R.string.bk_validate_done, name))
+                else reportError(str(R.string.bk_validate_fail, name))
+            } catch (e: Exception) {
+                reportError(str(R.string.bk_validate_fail, name))
+            }
+        }
+    }
+
     private fun str(id: Int, vararg args: Any?): String =
         app.getString(id, *args)
 }
