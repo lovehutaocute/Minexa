@@ -77,6 +77,7 @@ import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
+import com.mineserve.mobile.ui.vm.CrashReportFilesDelegate
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.ExternalBackupsDelegate
@@ -4002,28 +4003,22 @@ class McViewModel(
 
     private val crashReportManager = CrashReportManager(repo.termuxRuntime)
 
-    private val _crashReports = MutableStateFlow<List<CrashReportManager.CrashReport>>(emptyList())
-    val crashReports: StateFlow<List<CrashReportManager.CrashReport>> = _crashReports.asStateFlow()
+    private val crashReportFilesDelegate by lazy {
+        CrashReportFilesDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            crashReportManager = crashReportManager,
+            refreshKnowledgeIfStale = { crashKnowledgeBase.refreshIfStale() },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    val crashReports: StateFlow<List<CrashReportManager.CrashReport>> get() = crashReportFilesDelegate.crashReports
 
     /** 加载崩溃报告列表 */
-    fun loadCrashReports() {
-        viewModelScope.launch {
-            try {
-                _crashReports.value = withContext(Dispatchers.IO) {
-                    val native = config.value.installedCores.flatMap { core ->
-                        crashReportManager.listNativeCrashReports(core.dirName)
-                    }
-                    (crashReportManager.listCrashReports() + native).sortedByDescending { it.createdTime }
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s287, e.message))
-            }
-        }
-        // 进崩溃页时顺带到点刷新在线规则包（24h 节流；失败静默，不影响本地分析）
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { crashKnowledgeBase.refreshIfStale() }
-        }
-    }
+    fun loadCrashReports() = crashReportFilesDelegate.loadCrashReports()
 
     /** 当前查看的崩溃报告全文（供 UI 展示） */
     private val _currentCrashContent = MutableStateFlow<String?>(null)
@@ -4173,7 +4168,7 @@ class McViewModel(
     fun readCrashReport(fileName: String) {
         viewModelScope.launch {
             try {
-                val path = _crashReports.value.firstOrNull { it.fileName == fileName }?.path
+                val path = crashReports.value.firstOrNull { it.fileName == fileName }?.path
                 val text = withContext(Dispatchers.IO) {
                     path?.let { File(it).takeIf { f -> f.isFile }?.readText() }
                 }
@@ -4245,56 +4240,16 @@ class McViewModel(
     }
 
     /** 删除崩溃报告 */
-    fun deleteCrashReport(fileName: String) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { crashReportManager.deleteCrashReport(fileName) }
-                _messageFlow.tryEmit(str(R.string.s290, fileName))
-                loadCrashReports()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s291, e.message))
-            }
-        }
-    }
+    fun deleteCrashReport(fileName: String) = crashReportFilesDelegate.deleteCrashReport(fileName)
 
-    /** 清空所有崩溃报告 */
     /** 读取应用自身崩溃日志（全局 uncaught handler 写入），无则返回 null */
-    fun appCrashLog(): String? {
-        val dir = java.io.File(app.filesDir, "home")
-        val candidates = listOf(
-            java.io.File(dir, "crash_log.txt"),
-            java.io.File(dir, "crash_log_read.txt")
-        )
-        val file = candidates.firstOrNull { it.exists() && it.length() > 0 } ?: return null
-        return try {
-            val text = file.readText()
-            if (text.length > 4000) text.takeLast(4000) else text
-        } catch (_: Exception) {
-            null
-        }
-    }
+    fun appCrashLog(): String? = crashReportFilesDelegate.appCrashLog()
 
     /** 清空应用崩溃日志文件 */
-    fun clearAppCrashLog() {
-        try {
-            val dir = java.io.File(app.filesDir, "home")
-            java.io.File(dir, "crash_log.txt").delete()
-            java.io.File(dir, "crash_log_read.txt").delete()
-        } catch (_: Exception) {
-        }
-    }
+    fun clearAppCrashLog() = crashReportFilesDelegate.clearAppCrashLog()
 
-    fun clearCrashReports() {
-        viewModelScope.launch {
-            try {
-                val count = withContext(Dispatchers.IO) { crashReportManager.clearAllCrashReports() }
-                _messageFlow.tryEmit(str(R.string.s292, count))
-                loadCrashReports()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s293, e.message))
-            }
-        }
-    }
+    /** 清空所有崩溃报告 */
+    fun clearCrashReports() = crashReportFilesDelegate.clearCrashReports()
 
     // ── 定时备份配置 ────────────────────────────────────────────────
 
