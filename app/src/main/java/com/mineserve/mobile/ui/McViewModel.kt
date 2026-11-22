@@ -22,11 +22,9 @@ import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.MinecraftVersionNormalizer
 import com.mineserve.mobile.data.ServerPort
 import com.mineserve.mobile.data.BdsEnvStatus
-import com.mineserve.mobile.data.BdsBuildCatalog
 import com.mineserve.mobile.data.BdsChannel
 import com.mineserve.mobile.data.BdsCoreStatus
 import com.mineserve.mobile.data.BdsUpdateProgress
-import com.mineserve.mobile.data.BdsVersionCatalogLoader
 import com.mineserve.mobile.data.BdsVersionEntry
 import com.mineserve.mobile.data.BdsVersionListState
 import com.mineserve.mobile.data.InstalledCore
@@ -222,20 +220,26 @@ class McViewModel(
     // （决定**能不能跑**），这里是官方核心本体（决定**跑的是哪个版本**）。
     // 版本来自 Mojang 官方 links 接口，更新流程见 `BdsUpdater`。
 
-    private val _bdsCoreStatus = MutableStateFlow(BdsCoreStatus())
-    val bdsCoreStatus: StateFlow<BdsCoreStatus> = _bdsCoreStatus.asStateFlow()
+    private val bdsCoreUpdateDelegate by lazy {
+        BdsCoreUpdateDelegate(
+            app = app,
+            scope = viewModelScope,
+            controller = controller,
+            serverState = serverState,
+            activeBdsCore = ::activeBdsCore,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _bdsUpdateState = MutableStateFlow<BdsUpdateProgress>(BdsUpdateProgress.Idle)
-    val bdsUpdateState: StateFlow<BdsUpdateProgress> = _bdsUpdateState.asStateFlow()
+    val bdsCoreStatus: StateFlow<BdsCoreStatus> get() = bdsCoreUpdateDelegate.bdsCoreStatus
 
-    private val bdsCoreUpdateDelegate by lazy { BdsCoreUpdateDelegate(app, viewModelScope) }
+    val bdsUpdateState: StateFlow<BdsUpdateProgress> get() = bdsCoreUpdateDelegate.bdsUpdateState
 
     /** 历史版本清单（「BDS 核心版本 → 历史版本」弹窗的数据源） */
     val bdsVersions: StateFlow<List<BdsVersionEntry>> get() = bdsCoreUpdateDelegate.bdsVersions
 
     val bdsVersionsState: StateFlow<BdsVersionListState> get() = bdsCoreUpdateDelegate.bdsVersionsState
-
-    private var bdsCheckJob: Job? = null
 
     /** 当前选中的服务器若为官方 BDS，返回它的登记信息 */
     private fun activeBdsCore(): InstalledCore? {
@@ -249,47 +253,7 @@ class McViewModel(
      *
      * @param force true 时绕过 10 分钟缓存（用户点「检查更新」）
      */
-    fun checkBdsCoreUpdate(force: Boolean = false) {
-        val core = activeBdsCore()
-        if (core == null) {
-            _bdsCoreStatus.value = BdsCoreStatus()
-            return
-        }
-        if (_bdsCoreStatus.value.checking) return
-        bdsCheckJob?.cancel()
-        bdsCheckJob = viewModelScope.launch {
-            // 版本以磁盘上的 bds-version.txt 为准：用户可能手动换过核心，
-            // 而配置里的 version 是下载时写下的，两者会不一致
-            val installed = withContext(Dispatchers.IO) {
-                controller.bdsInstalledVersion(core.dirName) ?: core.version
-            }
-            _bdsCoreStatus.update {
-                it.copy(dirName = core.dirName, installedVersion = installed, checking = true, error = null)
-            }
-            val result = BdsBuildCatalog.load(app, force)
-            _bdsCoreStatus.update { previous ->
-                result.fold(
-                    onSuccess = { catalog ->
-                        previous.copy(
-                            stable = catalog.stable,
-                            preview = catalog.preview,
-                            fromCache = catalog.fromCache,
-                            checked = true,
-                            checking = false,
-                            error = null
-                        )
-                    },
-                    onFailure = { e ->
-                        previous.copy(
-                            checked = true,
-                            checking = false,
-                            error = e.message ?: str(R.string.bds_update_check_failed)
-                        )
-                    }
-                )
-            }
-        }
-    }
+    fun checkBdsCoreUpdate(force: Boolean = false) = bdsCoreUpdateDelegate.checkBdsCoreUpdate(force)
 
     /**
      * 加载 BDS 历史版本清单（进「历史版本」弹窗时调）。
@@ -305,14 +269,7 @@ class McViewModel(
      * 服务器在运行时先优雅停服（`stop` → 等待退出）；停不下来就放弃更新，
      * 绝不在运行中替换核心 —— 那样进程会继续用旧 inode，界面却显示已更新。
      */
-    fun updateBdsCore(channel: BdsChannel) {
-        val target = _bdsCoreStatus.value.build(channel)
-        if (target == null) {
-            _errorFlow.tryEmit(str(R.string.bds_update_no_build))
-            return
-        }
-        installBdsVersion(target.version)
-    }
+    fun updateBdsCore(channel: BdsChannel) = bdsCoreUpdateDelegate.updateBdsCore(channel)
 
     /**
      * 把当前 BDS 服务器换成 [version]（任意历史版本，可升可降）。
@@ -320,90 +277,7 @@ class McViewModel(
      * 版本清单里 1.21.62+ 的条目只有版本号，直链与 SHA-256 要按需取一次
      * metadata；这一步在弹窗里点「安装」后立刻发生，失败就只报错、不动磁盘。
      */
-    /**
-     * BDS 换版「在途」闸门。
-     *
-     * 不能只靠 `_bdsUpdateState is Running`：那个状态要等 [runBdsSwitch] 内部才置位，
-     * 而 [installBdsVersion] 之前还有一次远端元数据解析（可能数秒）。这期间第二次点击
-     * 看到的仍是 Idle 而放行，两条流程会同时停服、各自备份、各自下载并替换
-     * `bedrock_server` 与动态库，最终目录可能由两个版本的文件拼成。
-     */
-    @Volatile
-    private var bdsSwitchInFlight = false
-
-    fun installBdsVersion(version: String) {
-        val core = activeBdsCore()
-        if (core == null) {
-            _errorFlow.tryEmit(str(R.string.bds_update_need_core))
-            return
-        }
-        if (bdsSwitchInFlight || _bdsUpdateState.value is BdsUpdateProgress.Running) return
-        bdsSwitchInFlight = true
-        viewModelScope.launch {
-            try {
-                val entry = withContext(Dispatchers.IO) {
-                    BdsVersionCatalogLoader.resolve(app, version)
-                }.getOrElse { e ->
-                    _errorFlow.tryEmit(str(R.string.bds_version_resolve_failed, e.message ?: version))
-                    return@launch
-                }
-                runBdsSwitch(core, entry)
-            } finally {
-                bdsSwitchInFlight = false
-            }
-        }
-    }
-
-    /** 真正的换版流程：停服 → 备份 → 下载校验 → 兼容解压 → 落地复检 */
-    private suspend fun runBdsSwitch(
-        core: InstalledCore,
-        entry: BdsVersionEntry
-    ) {
-        val status = _bdsCoreStatus.value
-        lastBdsTarget = entry.version
-        try {
-            if (serverState.value.isRunning) {
-                _bdsUpdateState.value = BdsUpdateProgress.Running(
-                    channel = entry.channel,
-                    version = entry.version,
-                    phase = str(R.string.bds_update_stopping)
-                )
-                if (!controller.stopGracefully()) {
-                    _bdsUpdateState.value = BdsUpdateProgress.Failed(
-                        str(R.string.bds_update_stop_failed), false, entry.version
-                    )
-                    return
-                }
-            }
-            val current = status.installedVersion ?: core.version
-            val result = controller.updateBdsCore(core.dirName, current, entry) { event ->
-                _bdsUpdateState.value = BdsUpdateProgress.Running(
-                    channel = entry.channel,
-                    version = entry.version,
-                    phase = event.message.ifBlank { bdsPhaseLabel(event.phase) },
-                    progress = event.progress
-                )
-            }
-            _bdsUpdateState.value = BdsUpdateProgress.Done(
-                version = result.version,
-                backupName = java.io.File(result.backupPath).name,
-                keptOldEntry = result.keptOldEntry,
-                integrity = result.integrity
-            )
-            _bdsCoreStatus.update { it.copy(installedVersion = result.version, checked = true) }
-            _messageFlow.tryEmit(str(R.string.bds_update_done, result.version))
-        } catch (e: com.mineserve.mobile.server.BdsUpdater.UpdateFailed) {
-            _bdsUpdateState.value = BdsUpdateProgress.Failed(
-                e.message ?: str(R.string.bds_update_check_failed), e.rolledBack, entry.version
-            )
-            _errorFlow.tryEmit(e.message ?: str(R.string.bds_update_check_failed))
-        } catch (e: Exception) {
-            _bdsUpdateState.value = BdsUpdateProgress.Failed(
-                e.message ?: str(R.string.bds_update_check_failed), false, entry.version
-            )
-            _errorFlow.tryEmit(str(R.string.bds_update_failed, e.message ?: ""))
-        }
-    }
+    fun installBdsVersion(version: String) = bdsCoreUpdateDelegate.installBdsVersion(version)
 
     /**
      * 重新下载上次失败的版本。
@@ -412,26 +286,10 @@ class McViewModel(
      * 重来一次是安全的；如果失败原因是「服务器停不下来」或「备份失败」，
      * 重试同样会立刻失败，所以不额外拦截 —— 用户看到的还是同一条原因。
      */
-    fun retryBdsInstall() {
-        val version = lastBdsTarget ?: return
-        if (_bdsUpdateState.value is BdsUpdateProgress.Running) return
-        installBdsVersion(version)
-    }
-
-    /** 上次尝试安装的目标版本（失败卡片上的「重新下载」用） */
-    private var lastBdsTarget: String? = null
+    fun retryBdsInstall() = bdsCoreUpdateDelegate.retryBdsInstall()
 
     /** 关闭更新结果卡片（成功/失败提示） */
-    fun dismissBdsUpdateState() {
-        _bdsUpdateState.value = BdsUpdateProgress.Idle
-    }
-
-    private fun bdsPhaseLabel(phase: com.mineserve.mobile.server.BdsUpdater.Phase): String = when (phase) {
-        com.mineserve.mobile.server.BdsUpdater.Phase.BackingUp -> str(R.string.bds_update_phase_backup)
-        com.mineserve.mobile.server.BdsUpdater.Phase.Downloading -> str(R.string.bds_update_phase_download)
-        com.mineserve.mobile.server.BdsUpdater.Phase.Verifying -> str(R.string.bds_update_phase_verify)
-        com.mineserve.mobile.server.BdsUpdater.Phase.Installing -> str(R.string.bds_update_phase_install)
-    }
+    fun dismissBdsUpdateState() = bdsCoreUpdateDelegate.dismissBdsUpdateState()
 
     /** Termux 环境是否初始化完成 */
     val isBootstrapped: StateFlow<Boolean> = app.isBootstrapped
