@@ -5,10 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mineserve.mobile.R
-import com.mineserve.mobile.BootReceiver
-import com.mineserve.mobile.KeepAliveWorker
 import com.mineserve.mobile.McApplication
-import com.mineserve.mobile.service.McForegroundService
 import android.net.Uri
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.FileOps
@@ -91,6 +88,7 @@ import com.mineserve.mobile.ui.vm.AppUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
+import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
@@ -6894,17 +6892,18 @@ class McViewModel(
     private fun str(id: Int, vararg args: Any?): String =
         app.getString(id, *args)
 
-    private fun metaPrefs() =
-        app.getSharedPreferences(BootReceiver.META_PREFS, android.content.Context.MODE_PRIVATE)
+    private val keepAliveDelegate by lazy {
+        KeepAliveDelegate(
+            app = app,
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
     /** 开机自启动开关状态 */
-    fun isBootAutoStart(): Boolean = metaPrefs().getBoolean(BootReceiver.KEY_BOOT_AUTO_START, false)
+    fun isBootAutoStart(): Boolean = keepAliveDelegate.isBootAutoStart()
 
     /** 设置开机自启动：开启时立即拉起前台服务，关闭时停止 */
-    fun setBootAutoStart(v: Boolean) {
-        metaPrefs().edit().putBoolean(BootReceiver.KEY_BOOT_AUTO_START, v).apply()
-        if (v) startKeepAliveService() else stopKeepAliveService()
-    }
+    fun setBootAutoStart(v: Boolean) = keepAliveDelegate.setBootAutoStart(v)
 
     /** 设置服务器事件通知等级（0 关闭 / 1 仅重要 / 2 全部）。 */
     fun setEventNotifyLevel(value: Int) {
@@ -6913,56 +6912,16 @@ class McViewModel(
     }
 
     /** 后台周期保活开关状态（默认开启） */
-    fun isKeepAliveEnabled(): Boolean = metaPrefs().getBoolean(BootReceiver.KEY_KEEP_ALIVE, true)
+    fun isKeepAliveEnabled(): Boolean = keepAliveDelegate.isKeepAliveEnabled()
 
     /** 设置后台周期保活：开启时调度 WorkManager 周期任务，关闭时取消 */
-    fun setKeepAliveEnabled(v: Boolean) {
-        metaPrefs().edit().putBoolean(BootReceiver.KEY_KEEP_ALIVE, v).apply()
-        if (v) {
-            scheduleKeepAlive()
-            // 主心跳：AlarmManager 10 分钟一次（WorkManager 在 Doze/国产 ROM 下会被推迟）。
-            // 打开开关后立刻排一次并拉起服务，不必等下一次 15 分钟周期。
-            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.resetRestartGuard(app) }
-            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.schedule(app) }
-            startKeepAliveService()
-        } else {
-            cancelKeepAlive()
-            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.cancel(app) }
-        }
-    }
+    fun setKeepAliveEnabled(v: Boolean) = keepAliveDelegate.setKeepAliveEnabled(v)
 
     /** 拉起前台保活服务 */
-    fun startKeepAliveService() {
-        try {
-            val intent = android.content.Intent(app, McForegroundService::class.java)
-                .apply { action = McForegroundService.ACTION_START }
-            app.startForegroundService(intent)
-        } catch (e: Exception) {
-            _errorFlow.tryEmit(str(R.string.s314, e.message))
-        }
-    }
+    fun startKeepAliveService() = keepAliveDelegate.startKeepAliveService()
 
     /** 停止前台保活服务 */
-    fun stopKeepAliveService() {
-        try {
-            val intent = android.content.Intent(app, McForegroundService::class.java)
-                .apply { action = McForegroundService.ACTION_STOP }
-            app.startService(intent)
-        } catch (e: Exception) {
-            // 忽略
-        }
-    }
-
-    private fun scheduleKeepAlive() {
-        val request = androidx.work.PeriodicWorkRequestBuilder<KeepAliveWorker>(15, java.util.concurrent.TimeUnit.MINUTES).build()
-        androidx.work.WorkManager.getInstance(app).enqueueUniquePeriodicWork(
-            "keep_alive", androidx.work.ExistingPeriodicWorkPolicy.UPDATE, request
-        )
-    }
-
-    private fun cancelKeepAlive() {
-        androidx.work.WorkManager.getInstance(app).cancelUniqueWork("keep_alive")
-    }
+    fun stopKeepAliveService() = keepAliveDelegate.stopKeepAliveService()
 }
 
 /**
