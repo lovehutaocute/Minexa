@@ -102,6 +102,7 @@ import com.mineserve.mobile.ui.vm.modrinthLoader
 import com.mineserve.mobile.ui.vm.previewLayers as parsePreviewLayers
 import com.mineserve.mobile.ui.vm.WorldCreationDelegate
 import com.mineserve.mobile.ui.vm.WorldListDelegate
+import com.mineserve.mobile.ui.vm.WorldMaintenanceDelegate
 import com.mineserve.mobile.ui.vm.WorldTransferDelegate
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -2889,32 +2890,7 @@ class McViewModel(
     fun loadSnapshots() = snapshotsDelegate.loadSnapshots()
 
     /** 删除当前激活核心的世界文件夹（world / world_nether / world_the_end），不可恢复 */
-    fun deleteWorldDirs() {
-        // 必须拦住运行中的删除：服务端正持有 region 句柄持续写盘，目录被 unlink 后
-        // 进程会继续写已删除的 inode，停止/崩溃时世界直接消失（不可恢复）。
-        // createWorld / resetWorld / deleteCore 都有这道闸门，这里漏了。
-        if (!requireServerStopped("删除世界目录")) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s249))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val deleted = withContext(Dispatchers.IO) {
-                    val base = repo.termuxRuntime.serverDirFor(dirName)
-                    var count = 0
-                    for (name in listOf("world", "world_nether", "world_the_end")) {
-                        val dir = File(base, name)
-                        if (FileOps.existsNoFollow(dir) && FileOps.deleteRecursively(dir)) count++
-                    }
-                    count
-                }
-                _messageFlow.tryEmit(str(R.string.ui_world_deleted, deleted))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.ui_world_delete_failed))
-            }
-        }
-    }
+    fun deleteWorldDirs() = worldMaintenanceDelegate.deleteWorldDirs()
 
     /** 恢复快照（会先停止服务器） */
     fun restoreSnapshot(name: String) = snapshotsDelegate.restoreSnapshot(name)
@@ -3460,48 +3436,26 @@ class McViewModel(
         }
     }
 
-    /** 重命名世界（目录 + level.dat 的 LevelName 一起改）。 */
-    fun renameWorld(worldName: String, newName: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_rename))) return
-        viewModelScope.launch {
-            try {
-                val renamed = withContext(Dispatchers.IO) {
-                    worldManager.renameJavaWorld(dirName, worldName, newName)
-                }
-                if (renamed != null) {
-                    _messageFlow.tryEmit(str(R.string.wl_renamed, renamed))
-                    loadWorlds()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.wl_rename_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_rename_failed)}：${e.message}")
-            }
-        }
+    private val worldMaintenanceDelegate by lazy {
+        WorldMaintenanceDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManagerProvider = { worldManager },
+            serverDirFor = { repo.termuxRuntime.serverDirFor(it) },
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            loadWorlds = ::loadWorlds,
+            loadJavaAddons = ::loadJavaAddons,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
+    /** 重命名世界（目录 + level.dat 的 LevelName 一起改）。 */
+    fun renameWorld(worldName: String, newName: String) = worldMaintenanceDelegate.renameWorld(worldName, newName)
+
     /** 只重置一个维度（下界 / 末地），先备份。 */
-    fun resetDimension(worldName: String, key: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_reset_dim))) return
-        viewModelScope.launch {
-            try {
-                val result = worldManager.resetDimension(dirName, worldName, key)
-                when {
-                    result.backupFailed -> _errorFlow.tryEmit(str(R.string.wl_backup_failed))
-                    result.success -> {
-                        _messageFlow.tryEmit(str(R.string.wl_dim_reset_ok, key))
-                        loadWorlds()
-                        loadJavaAddons()
-                    }
-                    else -> _errorFlow.tryEmit(str(R.string.wl_dim_reset_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_dim_reset_failed)}：${e.message}")
-            }
-        }
-    }
+    fun resetDimension(worldName: String, key: String) = worldMaintenanceDelegate.resetDimension(worldName, key)
 
     // ── 附加包（行为包 / 资源包） ────────────────────────────────
 
@@ -3722,33 +3676,8 @@ class McViewModel(
     /** 从用户选择的压缩包导入世界。 */
     fun importWorldFromUri(uri: Uri, preferredName: String) = worldTransferDelegate.importWorldFromUri(uri, preferredName)
 
-    /**
-     * 重置世界：先自动导出一份安全备份，再删除目录，让服务端下次启动重新生成。
-     *
-     * 备份失败时不会删除任何文件（由 [WorldManager.resetWorld] 保证），这里按
-     * backupFailed -> success 的顺序判断，避免把「没删成」提示成「已重置」，
-     * 也避免把「已删除但没备份」提示成「已中止」。
-     */
-    fun resetWorld(worldName: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped("重置世界")) return
-        viewModelScope.launch {
-            try {
-                val result = worldManager.resetWorld(dirName, worldName, backupFirst = true)
-                val backupPath = result.backupPath
-                when {
-                    result.backupFailed -> _errorFlow.tryEmit("未能在删除前创建安全备份，已中止重置（存档未改动）")
-                    !result.success || backupPath == null -> _errorFlow.tryEmit("重置失败：世界目录不存在或无法删除")
-                    else -> _messageFlow.tryEmit(
-                        "世界「$worldName」已重置，备份保存在 ${java.io.File(backupPath).parentFile?.absolutePath ?: "导出目录"}"
-                    )
-                }
-                loadWorlds()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("重置失败：${e.message}")
-            }
-        }
-    }
+    /** 重置世界：先自动导出一份安全备份，再删除目录，让服务端下次启动重新生成。 */
+    fun resetWorld(worldName: String) = worldMaintenanceDelegate.resetWorld(worldName)
 
     // ── 崩溃报告 ────────────────────────────────────────────────────
 
