@@ -89,6 +89,7 @@ import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
+import com.mineserve.mobile.ui.vm.ModsDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
@@ -2945,12 +2946,22 @@ class McViewModel(
     private val _installedPlugins = MutableStateFlow<List<PluginManager.InstalledPlugin>>(emptyList())
     val installedPlugins: StateFlow<List<PluginManager.InstalledPlugin>> = _installedPlugins.asStateFlow()
 
-    /** 真实已安装模组列表 */
-    private val _mods = MutableStateFlow<List<PluginManager.ModEntry>>(emptyList())
-    val mods: StateFlow<List<PluginManager.ModEntry>> = _mods.asStateFlow()
+    private val modsDelegate by lazy {
+        ModsDelegate(
+            app = app,
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    val curatedMods: List<PluginManager.CuratedMod>
-        get() = pluginManager.curatedMods
+    /** 真实已安装模组列表 */
+    val mods: StateFlow<List<PluginManager.ModEntry>> get() = modsDelegate.mods
+
+    val curatedMods: List<PluginManager.CuratedMod> get() = modsDelegate.curatedMods
 
     /** 当前正在下载的插件 id → 进度 */
     private val _pluginDownloadProgress = MutableStateFlow<Map<String, PluginDownloadProgress>>(emptyMap())
@@ -2979,86 +2990,22 @@ class McViewModel(
     // ── 模组管理 ──────────────────────────────────────────────────
 
     /** 扫描当前核心的 mods 目录 */
-    fun refreshMods() {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                _mods.value = withContext(Dispatchers.IO) { pluginManager.readMods(dirName) }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s214, e.message))
-            }
-        }
-    }
+    fun refreshMods() = modsDelegate.refreshMods()
 
     /** 切换模组启用状态 */
-    fun toggleModEnabled(fileName: String) {
-        // VM 侧兜底：UI 前台虽已拦截，但其他调用入口不能绕过——运行中改 mods 目录会导致本轮加载状态错乱
-        if (!requireServerStopped("启用或停用模组")) return
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { pluginManager.toggleModEnabled(fileName, dirName) }
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s215, e.message))
-            }
-        }
-    }
+    fun toggleModEnabled(fileName: String) = modsDelegate.toggleModEnabled(fileName)
 
     /** 删除模组 */
-    fun deleteMod(fileName: String) {
-        if (!requireServerStopped("删除模组")) return
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { pluginManager.deleteMod(fileName, dirName) }
-                if (ok) _messageFlow.tryEmit(str(R.string.s216, fileName))
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s217, e.message))
-            }
-        }
-    }
+    fun deleteMod(fileName: String) = modsDelegate.deleteMod(fileName)
 
     /** 从本地 Uri 上传模组 */
-    fun installModFromUri(uri: Uri) {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val name = withContext(Dispatchers.IO) { pluginManager.installModFromUri(uri, dirName) }
-                _messageFlow.tryEmit(str(R.string.s218, name))
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s219, e.message))
-            }
-        }
-    }
+    fun installModFromUri(uri: Uri) = modsDelegate.installModFromUri(uri)
 
     /** 从精选库下载安装模组（GitHub 动态解析最新版本） */
-    fun installCuratedMod(mod: PluginManager.CuratedMod) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val url = withContext(Dispatchers.IO) {
-                    pluginManager.resolveLatestAsset(mod.repo, mod.githubAssetPattern)
-                } ?: throw RuntimeException(str(R.string.err_parse_latest_url))
-                withContext(Dispatchers.IO) { pluginManager.installModFromUrl(url, mod.targetFileName, dirName) }
-                _messageFlow.tryEmit(str(R.string.s221, mod.name))
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s222, mod.name, e.message))
-            }
-        }
-    }
+    fun installCuratedMod(mod: PluginManager.CuratedMod) = modsDelegate.installCuratedMod(mod)
 
     /** 当前核心的 mods 目录路径 */
-    fun currentModsPath(): String? {
-        val dirName = activeDirName() ?: return null
-        return pluginManager.currentModsPath(dirName)
-    }
+    fun currentModsPath(): String? = modsDelegate.currentModsPath()
 
     // ── Modrinth 模组获取 ────────────────────────────────────────
 
