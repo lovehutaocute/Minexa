@@ -5,18 +5,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.mineserve.mobile.R
-import com.mineserve.mobile.BuildConfig
-import com.mineserve.mobile.MainActivity
-import com.mineserve.mobile.BootReceiver
-import com.mineserve.mobile.KeepAliveWorker
 import com.mineserve.mobile.McApplication
-import com.mineserve.mobile.service.McForegroundService
 import android.net.Uri
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.FileOps
 import com.mineserve.mobile.data.VersionSelection
 import com.mineserve.mobile.data.AutomationTask
-import com.mineserve.mobile.data.AutomationScheduler
 import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.ProotDistro
@@ -28,11 +22,9 @@ import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.MinecraftVersionNormalizer
 import com.mineserve.mobile.data.ServerPort
 import com.mineserve.mobile.data.BdsEnvStatus
-import com.mineserve.mobile.data.BdsBuildCatalog
 import com.mineserve.mobile.data.BdsChannel
 import com.mineserve.mobile.data.BdsCoreStatus
 import com.mineserve.mobile.data.BdsUpdateProgress
-import com.mineserve.mobile.data.BdsVersionCatalogLoader
 import com.mineserve.mobile.data.BdsVersionEntry
 import com.mineserve.mobile.data.BdsVersionListState
 import com.mineserve.mobile.data.InstalledCore
@@ -43,32 +35,20 @@ import com.mineserve.mobile.data.LegacyPrivateStore
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.runtime.NativeLibraryBundler
-import com.mineserve.mobile.runtime.TrustStoreRepair
 import com.mineserve.mobile.data.TunnelState
-import com.mineserve.mobile.data.TunnelStatus
-import com.mineserve.mobile.data.TunnelType
 import com.mineserve.mobile.data.FrpProfile
-import com.mineserve.mobile.data.FrpProfileKind
-import com.mineserve.mobile.data.FrpLocalTarget
-import com.mineserve.mobile.data.FrpProfiles
 import com.mineserve.mobile.data.DiagnosticCheck
 import com.mineserve.mobile.data.DiagnosticReport
 import com.mineserve.mobile.data.DiagnosticStatus
 import com.mineserve.mobile.data.ServerResourceStats
 import com.mineserve.mobile.data.ServerEventNotifier
 import com.mineserve.mobile.data.AppRelease
-import com.mineserve.mobile.data.AppUpdateService
 import com.mineserve.mobile.server.BackupManager
 import com.mineserve.mobile.server.CrashReportManager
 import com.mineserve.mobile.server.CrashReportAnalyzer
-import com.mineserve.mobile.server.CrashCaseStore
 import com.mineserve.mobile.server.CrashInsight
-import com.mineserve.mobile.server.CrashInsightEngine
 import com.mineserve.mobile.server.CrashKnowledgeBase
 import com.mineserve.mobile.server.CrashLogView
-import com.mineserve.mobile.server.EnvInfo
-import com.mineserve.mobile.server.TriggerInfo
-import com.mineserve.mobile.server.SafeTextFile
 import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PlayerManager
 import com.mineserve.mobile.server.PlayerNames
@@ -82,44 +62,68 @@ import com.mineserve.mobile.server.WorldGenLedger
 import com.mineserve.mobile.server.PluginManager
 import com.mineserve.mobile.server.ServerPropertiesManager
 import com.mineserve.mobile.server.tunnel.StunDiagnostics
-import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
-import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngineStore
-import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
-import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntimeDownloader
 import com.mineserve.mobile.server.PowerNukkitXConfigManager
-import com.mineserve.mobile.server.PowerNukkitXLayout
 import com.mineserve.mobile.server.ServerImporter
 import com.mineserve.mobile.server.TunnelManager
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
+import com.mineserve.mobile.ui.vm.AppUpdateDelegate
+import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
+import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
+import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
+import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
+import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
+import com.mineserve.mobile.ui.vm.CrashDetailsDelegate
+import com.mineserve.mobile.ui.vm.CrashReportFilesDelegate
+import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
+import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
+import com.mineserve.mobile.ui.vm.ExternalBackupsDelegate
+import com.mineserve.mobile.ui.vm.FileBrowserDelegate
+import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
+import com.mineserve.mobile.ui.vm.JavaAddonsDelegate
+import com.mineserve.mobile.ui.vm.KeepAliveDelegate
+import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
+import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
+import com.mineserve.mobile.ui.vm.ModsDelegate
+import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
+import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
+import com.mineserve.mobile.ui.vm.PlayerListsDelegate
+import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
+import com.mineserve.mobile.ui.vm.ServerIconDelegate
+import com.mineserve.mobile.ui.vm.ServerImportDelegate
+import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
+import com.mineserve.mobile.ui.vm.SnapshotsDelegate
+import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
+import com.mineserve.mobile.ui.vm.TextEditorDelegate
+import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
+import com.mineserve.mobile.ui.vm.TunnelControlsDelegate
+import com.mineserve.mobile.ui.vm.formatCoreSize
+import com.mineserve.mobile.ui.vm.formatDiagnosticBytes
+import com.mineserve.mobile.ui.vm.modrinthLoader
+import com.mineserve.mobile.ui.vm.previewLayers as parsePreviewLayers
+import com.mineserve.mobile.ui.vm.WorldCreationDelegate
+import com.mineserve.mobile.ui.vm.WorldListDelegate
+import com.mineserve.mobile.ui.vm.WorldMaintenanceDelegate
+import com.mineserve.mobile.ui.vm.WorldTransferDelegate
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.collections.immutable.ImmutableList
-import kotlinx.collections.immutable.persistentListOf
-import kotlinx.collections.immutable.toImmutableList
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.decodeFromString
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.net.InetSocketAddress
@@ -128,13 +132,7 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import android.app.NotificationManager
-import android.app.PendingIntent
 import android.content.Context
-import android.content.ClipData
-import android.content.Intent
-import androidx.core.app.NotificationCompat
-import androidx.core.content.FileProvider
 import android.os.SystemClock
 import java.io.File
 
@@ -192,8 +190,19 @@ class McViewModel(
 
     // ── 在线模式（正版验证）出网自检 ───────────────────────────────
 
-    private val _bdsProbeRunning = MutableStateFlow(false)
-    val bdsProbeRunning: StateFlow<Boolean> = _bdsProbeRunning.asStateFlow()
+    private val bdsNetworkProbeDelegate by lazy {
+        BdsNetworkProbeDelegate(
+            context = app,
+            scope = viewModelScope,
+            activeDirName = ::activeDirName,
+            runProbe = repo.termuxRuntime::probeBdsNetwork,
+            emitLog = repo.termuxRuntime::emitLog,
+            reportError = { _errorFlow.tryEmit(it) },
+            reportMessage = { _messageFlow.tryEmit(it) }
+        )
+    }
+
+    val bdsProbeRunning: StateFlow<Boolean> get() = bdsNetworkProbeDelegate.bdsProbeRunning
 
     /**
      * 在容器里探一次 DNS / TCP / CA，把结论写进控制台。
@@ -202,50 +211,7 @@ class McViewModel(
      * 完全分不清是 DNS 污染、TCP 被墙、还是容器缺证书。这里替他把三段拆开测，
      * 并给出下一步该改哪里。
      */
-    fun probeBdsNetwork() {
-        if (_bdsProbeRunning.value) return
-        _bdsProbeRunning.value = true
-        viewModelScope.launch {
-            try {
-                repo.termuxRuntime.emitLog("[probe] 开始容器内网络自检（在线模式 / 正版验证用）")
-                val lines = repo.termuxRuntime.probeBdsNetwork(activeDirName())
-                lines.forEach { repo.termuxRuntime.emitLog("[probe] $it") }
-                if (lines.any { it.startsWith("CA 修复: 已从系统根证书补入") }) {
-                    repo.termuxRuntime.emitLog("[probe] 根证书已补好，请直接重新启动服务器验证")
-                }
-                _messageFlow.tryEmit(bdsProbeConclusion(lines))
-            } catch (e: Exception) {
-                repo.termuxRuntime.emitLog("[probe] 自检失败：${e.message}")
-                _errorFlow.tryEmit(str(R.string.bds_env_probe_failed, e.message ?: "?"))
-            } finally {
-                _bdsProbeRunning.value = false
-            }
-        }
-    }
-
-    /** 把自检输出压成一句人话（判据只有「哪一段先断」） */
-    private fun bdsProbeConclusion(lines: List<String>): String {
-        val dnsFail = lines.filter { it.startsWith("DNS 失败") }
-        val tcpFail = lines.filter { it.startsWith("TCP 失败") }
-        val tlsFail = lines.filter { it.startsWith("TLS 失败") }
-        val ok = lines.count { it.startsWith("TCP ok") }
-        return when {
-            lines.isEmpty() || lines.any { it.startsWith("容器未就绪") || it.startsWith("proot 不可用") } ->
-                str(R.string.bds_env_probe_need_env)
-            dnsFail.isNotEmpty() ->
-                str(R.string.bds_env_probe_dns_fail, dnsFail.size)
-            tcpFail.isNotEmpty() && ok > 0 ->
-                str(R.string.bds_env_probe_partial, ok, tcpFail.size)
-            tcpFail.isNotEmpty() ->
-                str(R.string.bds_env_probe_tcp_fail, tcpFail.size)
-            // TCP 通但 TLS 断：典型 SNI 拦截，必须让代理接管 TCP
-            tlsFail.isNotEmpty() ->
-                str(R.string.bds_env_probe_tls_fail, tlsFail.size)
-            lines.any { it.contains("CA 证书: 缺失") } ->
-                str(R.string.bds_env_probe_no_ca)
-            else -> str(R.string.bds_env_probe_ok)
-        }
-    }
+    fun probeBdsNetwork() = bdsNetworkProbeDelegate.probeBdsNetwork()
 
     // ── BDS 核心版本与在线更新 ───────────────────────────────────
     //
@@ -253,20 +219,26 @@ class McViewModel(
     // （决定**能不能跑**），这里是官方核心本体（决定**跑的是哪个版本**）。
     // 版本来自 Mojang 官方 links 接口，更新流程见 `BdsUpdater`。
 
-    private val _bdsCoreStatus = MutableStateFlow(BdsCoreStatus())
-    val bdsCoreStatus: StateFlow<BdsCoreStatus> = _bdsCoreStatus.asStateFlow()
+    private val bdsCoreUpdateDelegate by lazy {
+        BdsCoreUpdateDelegate(
+            app = app,
+            scope = viewModelScope,
+            controller = controller,
+            serverState = serverState,
+            activeBdsCore = ::activeBdsCore,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _bdsUpdateState = MutableStateFlow<BdsUpdateProgress>(BdsUpdateProgress.Idle)
-    val bdsUpdateState: StateFlow<BdsUpdateProgress> = _bdsUpdateState.asStateFlow()
+    val bdsCoreStatus: StateFlow<BdsCoreStatus> get() = bdsCoreUpdateDelegate.bdsCoreStatus
+
+    val bdsUpdateState: StateFlow<BdsUpdateProgress> get() = bdsCoreUpdateDelegate.bdsUpdateState
 
     /** 历史版本清单（「BDS 核心版本 → 历史版本」弹窗的数据源） */
-    private val _bdsVersions = MutableStateFlow<List<BdsVersionEntry>>(emptyList())
-    val bdsVersions: StateFlow<List<BdsVersionEntry>> = _bdsVersions.asStateFlow()
+    val bdsVersions: StateFlow<List<BdsVersionEntry>> get() = bdsCoreUpdateDelegate.bdsVersions
 
-    private val _bdsVersionsState = MutableStateFlow(BdsVersionListState())
-    val bdsVersionsState: StateFlow<BdsVersionListState> = _bdsVersionsState.asStateFlow()
-
-    private var bdsCheckJob: Job? = null
+    val bdsVersionsState: StateFlow<BdsVersionListState> get() = bdsCoreUpdateDelegate.bdsVersionsState
 
     /** 当前选中的服务器若为官方 BDS，返回它的登记信息 */
     private fun activeBdsCore(): InstalledCore? {
@@ -280,47 +252,7 @@ class McViewModel(
      *
      * @param force true 时绕过 10 分钟缓存（用户点「检查更新」）
      */
-    fun checkBdsCoreUpdate(force: Boolean = false) {
-        val core = activeBdsCore()
-        if (core == null) {
-            _bdsCoreStatus.value = BdsCoreStatus()
-            return
-        }
-        if (_bdsCoreStatus.value.checking) return
-        bdsCheckJob?.cancel()
-        bdsCheckJob = viewModelScope.launch {
-            // 版本以磁盘上的 bds-version.txt 为准：用户可能手动换过核心，
-            // 而配置里的 version 是下载时写下的，两者会不一致
-            val installed = withContext(Dispatchers.IO) {
-                controller.bdsInstalledVersion(core.dirName) ?: core.version
-            }
-            _bdsCoreStatus.update {
-                it.copy(dirName = core.dirName, installedVersion = installed, checking = true, error = null)
-            }
-            val result = BdsBuildCatalog.load(app, force)
-            _bdsCoreStatus.update { previous ->
-                result.fold(
-                    onSuccess = { catalog ->
-                        previous.copy(
-                            stable = catalog.stable,
-                            preview = catalog.preview,
-                            fromCache = catalog.fromCache,
-                            checked = true,
-                            checking = false,
-                            error = null
-                        )
-                    },
-                    onFailure = { e ->
-                        previous.copy(
-                            checked = true,
-                            checking = false,
-                            error = e.message ?: str(R.string.bds_update_check_failed)
-                        )
-                    }
-                )
-            }
-        }
-    }
+    fun checkBdsCoreUpdate(force: Boolean = false) = bdsCoreUpdateDelegate.checkBdsCoreUpdate(force)
 
     /**
      * 加载 BDS 历史版本清单（进「历史版本」弹窗时调）。
@@ -328,31 +260,7 @@ class McViewModel(
      * 失败不清空已有列表：用户可能只是想刷新一下，弱网下拉空一张白名单
      * 比保留上一次结果 + 一行错误更糟。
      */
-    fun loadBdsVersions(force: Boolean = false) {
-        if (_bdsVersionsState.value.loading) return
-        _bdsVersionsState.update { it.copy(loading = true, error = null) }
-        viewModelScope.launch {
-            val result = BdsVersionCatalogLoader.load(app, force)
-            result.fold(
-                onSuccess = { catalog ->
-                    _bdsVersions.value = catalog.entries
-                    _bdsVersionsState.value = BdsVersionListState(
-                        loading = false,
-                        loaded = true,
-                        fromCache = catalog.fromCache,
-                        notes = catalog.notes,
-                        error = if (catalog.entries.isEmpty()) str(R.string.bds_version_list_empty) else null
-                    )
-                },
-                onFailure = { e ->
-                    _bdsVersionsState.value = _bdsVersionsState.value.copy(
-                        loading = false,
-                        error = e.message ?: str(R.string.bds_version_list_failed)
-                    )
-                }
-            )
-        }
-    }
+    fun loadBdsVersions(force: Boolean = false) = bdsCoreUpdateDelegate.loadBdsVersions(force)
 
     /**
      * 把当前 BDS 服务器更新到 [channel] 上的官方最新构建。
@@ -360,14 +268,7 @@ class McViewModel(
      * 服务器在运行时先优雅停服（`stop` → 等待退出）；停不下来就放弃更新，
      * 绝不在运行中替换核心 —— 那样进程会继续用旧 inode，界面却显示已更新。
      */
-    fun updateBdsCore(channel: BdsChannel) {
-        val target = _bdsCoreStatus.value.build(channel)
-        if (target == null) {
-            _errorFlow.tryEmit(str(R.string.bds_update_no_build))
-            return
-        }
-        installBdsVersion(target.version)
-    }
+    fun updateBdsCore(channel: BdsChannel) = bdsCoreUpdateDelegate.updateBdsCore(channel)
 
     /**
      * 把当前 BDS 服务器换成 [version]（任意历史版本，可升可降）。
@@ -375,90 +276,7 @@ class McViewModel(
      * 版本清单里 1.21.62+ 的条目只有版本号，直链与 SHA-256 要按需取一次
      * metadata；这一步在弹窗里点「安装」后立刻发生，失败就只报错、不动磁盘。
      */
-    /**
-     * BDS 换版「在途」闸门。
-     *
-     * 不能只靠 `_bdsUpdateState is Running`：那个状态要等 [runBdsSwitch] 内部才置位，
-     * 而 [installBdsVersion] 之前还有一次远端元数据解析（可能数秒）。这期间第二次点击
-     * 看到的仍是 Idle 而放行，两条流程会同时停服、各自备份、各自下载并替换
-     * `bedrock_server` 与动态库，最终目录可能由两个版本的文件拼成。
-     */
-    @Volatile
-    private var bdsSwitchInFlight = false
-
-    fun installBdsVersion(version: String) {
-        val core = activeBdsCore()
-        if (core == null) {
-            _errorFlow.tryEmit(str(R.string.bds_update_need_core))
-            return
-        }
-        if (bdsSwitchInFlight || _bdsUpdateState.value is BdsUpdateProgress.Running) return
-        bdsSwitchInFlight = true
-        viewModelScope.launch {
-            try {
-                val entry = withContext(Dispatchers.IO) {
-                    BdsVersionCatalogLoader.resolve(app, version)
-                }.getOrElse { e ->
-                    _errorFlow.tryEmit(str(R.string.bds_version_resolve_failed, e.message ?: version))
-                    return@launch
-                }
-                runBdsSwitch(core, entry)
-            } finally {
-                bdsSwitchInFlight = false
-            }
-        }
-    }
-
-    /** 真正的换版流程：停服 → 备份 → 下载校验 → 兼容解压 → 落地复检 */
-    private suspend fun runBdsSwitch(
-        core: InstalledCore,
-        entry: BdsVersionEntry
-    ) {
-        val status = _bdsCoreStatus.value
-        lastBdsTarget = entry.version
-        try {
-            if (serverState.value.isRunning) {
-                _bdsUpdateState.value = BdsUpdateProgress.Running(
-                    channel = entry.channel,
-                    version = entry.version,
-                    phase = str(R.string.bds_update_stopping)
-                )
-                if (!controller.stopGracefully()) {
-                    _bdsUpdateState.value = BdsUpdateProgress.Failed(
-                        str(R.string.bds_update_stop_failed), false, entry.version
-                    )
-                    return
-                }
-            }
-            val current = status.installedVersion ?: core.version
-            val result = controller.updateBdsCore(core.dirName, current, entry) { event ->
-                _bdsUpdateState.value = BdsUpdateProgress.Running(
-                    channel = entry.channel,
-                    version = entry.version,
-                    phase = event.message.ifBlank { bdsPhaseLabel(event.phase) },
-                    progress = event.progress
-                )
-            }
-            _bdsUpdateState.value = BdsUpdateProgress.Done(
-                version = result.version,
-                backupName = java.io.File(result.backupPath).name,
-                keptOldEntry = result.keptOldEntry,
-                integrity = result.integrity
-            )
-            _bdsCoreStatus.update { it.copy(installedVersion = result.version, checked = true) }
-            _messageFlow.tryEmit(str(R.string.bds_update_done, result.version))
-        } catch (e: com.mineserve.mobile.server.BdsUpdater.UpdateFailed) {
-            _bdsUpdateState.value = BdsUpdateProgress.Failed(
-                e.message ?: str(R.string.bds_update_check_failed), e.rolledBack, entry.version
-            )
-            _errorFlow.tryEmit(e.message ?: str(R.string.bds_update_check_failed))
-        } catch (e: Exception) {
-            _bdsUpdateState.value = BdsUpdateProgress.Failed(
-                e.message ?: str(R.string.bds_update_check_failed), false, entry.version
-            )
-            _errorFlow.tryEmit(str(R.string.bds_update_failed, e.message ?: ""))
-        }
-    }
+    fun installBdsVersion(version: String) = bdsCoreUpdateDelegate.installBdsVersion(version)
 
     /**
      * 重新下载上次失败的版本。
@@ -467,26 +285,10 @@ class McViewModel(
      * 重来一次是安全的；如果失败原因是「服务器停不下来」或「备份失败」，
      * 重试同样会立刻失败，所以不额外拦截 —— 用户看到的还是同一条原因。
      */
-    fun retryBdsInstall() {
-        val version = lastBdsTarget ?: return
-        if (_bdsUpdateState.value is BdsUpdateProgress.Running) return
-        installBdsVersion(version)
-    }
-
-    /** 上次尝试安装的目标版本（失败卡片上的「重新下载」用） */
-    private var lastBdsTarget: String? = null
+    fun retryBdsInstall() = bdsCoreUpdateDelegate.retryBdsInstall()
 
     /** 关闭更新结果卡片（成功/失败提示） */
-    fun dismissBdsUpdateState() {
-        _bdsUpdateState.value = BdsUpdateProgress.Idle
-    }
-
-    private fun bdsPhaseLabel(phase: com.mineserve.mobile.server.BdsUpdater.Phase): String = when (phase) {
-        com.mineserve.mobile.server.BdsUpdater.Phase.BackingUp -> str(R.string.bds_update_phase_backup)
-        com.mineserve.mobile.server.BdsUpdater.Phase.Downloading -> str(R.string.bds_update_phase_download)
-        com.mineserve.mobile.server.BdsUpdater.Phase.Verifying -> str(R.string.bds_update_phase_verify)
-        com.mineserve.mobile.server.BdsUpdater.Phase.Installing -> str(R.string.bds_update_phase_install)
-    }
+    fun dismissBdsUpdateState() = bdsCoreUpdateDelegate.dismissBdsUpdateState()
 
     /** Termux 环境是否初始化完成 */
     val isBootstrapped: StateFlow<Boolean> = app.isBootstrapped
@@ -528,19 +330,27 @@ class McViewModel(
         app.forceDeleteBootstrap()
     }
 
-    private val _consoleLines = MutableStateFlow<ImmutableList<String>>(persistentListOf())
-    val consoleLines: StateFlow<ImmutableList<String>> = _consoleLines.asStateFlow()
+    private val consoleLogDelegate by lazy {
+        ConsoleLogDelegate(
+            app = app,
+            scope = viewModelScope,
+            termuxRuntime = repo.termuxRuntime,
+            activeDirName = ::activeDirName,
+            isUiVisible = { uiVisible },
+            maxLogLines = MAX_LOG_LINES,
+            idleLogFlushMs = IDLE_LOG_FLUSH_MS
+        )
+    }
+
+    val consoleLines: StateFlow<ImmutableList<String>> get() = consoleLogDelegate.consoleLines
 
     /** 终端专用的后台预处理日志，避免 Compose 主线程翻译和关键词扫描。 */
-    private val _terminalConsoleLines = MutableStateFlow<ImmutableList<TerminalDisplayLine>>(persistentListOf())
-    val terminalConsoleLines: StateFlow<ImmutableList<TerminalDisplayLine>> = _terminalConsoleLines.asStateFlow()
-    private val _logTranslationEnabled = MutableStateFlow(true)
-    val logTranslationEnabled: StateFlow<Boolean> = _logTranslationEnabled.asStateFlow()
+    val terminalConsoleLines: StateFlow<ImmutableList<TerminalDisplayLine>> get() = consoleLogDelegate.terminalConsoleLines
+    val logTranslationEnabled: StateFlow<Boolean> get() = consoleLogDelegate.logTranslationEnabled
 
     /** 服务端最近一次运行从启动到退出写入 latest.log 的完整内容。 */
     private val _lastRunLog = MutableStateFlow("")
     val lastRunLog: StateFlow<String> = _lastRunLog.asStateFlow()
-    @Volatile private var terminalHistoryLoading = false
 
     /**
      * 界面是否处于前台可见。
@@ -562,367 +372,79 @@ class McViewModel(
     val eventNotifyLevel: StateFlow<Int> = _eventNotifyLevel.asStateFlow()
 
     /** Small, stable preview for cards that only show the latest few server messages. */
-    private val _consolePreviewLines = MutableStateFlow<ImmutableList<String>>(persistentListOf())
-    val consolePreviewLines: StateFlow<ImmutableList<String>> = _consolePreviewLines.asStateFlow()
+    val consolePreviewLines: StateFlow<ImmutableList<String>> get() = consoleLogDelegate.consolePreviewLines
 
     // ── Termux 终端（会话面板） ─────────────────────────────
 
-    private val _termuxLines = MutableStateFlow<ImmutableList<String>>(persistentListOf())
-    val termuxLines: StateFlow<ImmutableList<String>> = _termuxLines.asStateFlow()
+    val termuxLines: StateFlow<ImmutableList<String>> get() = terminalSessionsDelegate.termuxLines
 
-    private val _termuxBusy = MutableStateFlow(false)
-    val termuxBusy: StateFlow<Boolean> = _termuxBusy.asStateFlow()
+    val termuxBusy: StateFlow<Boolean> get() = terminalSessionsDelegate.termuxBusy
 
-    private val terminalMutex = Mutex()
-    @Volatile private var interactiveTerminalSessionId: String? = null
-    private val _terminalSessions = MutableStateFlow(
-        listOf(
-            TerminalSession("minecraft", str(R.string.mc_console_label), TerminalSessionType.Minecraft),
-            TerminalSession("termux-1", "Termux 1", TerminalSessionType.Termux)
+    private val terminalSessionsDelegate by lazy {
+        TerminalSessionsDelegate(
+            app = app,
+            scope = viewModelScope,
+            termuxRuntime = repo.termuxRuntime,
+            isBootstrapped = isBootstrapped,
+            isUiVisible = { uiVisible },
+            maxLogLines = MAX_LOG_LINES,
+            logFlushMs = LOG_FLUSH_MS,
+            idleLogFlushMs = IDLE_LOG_FLUSH_MS
         )
-    )
-    val terminalSessions: StateFlow<List<TerminalSession>> = _terminalSessions.asStateFlow()
-    private val _activeTerminalSessionId = MutableStateFlow("minecraft")
-    val activeTerminalSessionId: StateFlow<String> = _activeTerminalSessionId.asStateFlow()
-
-    fun createTerminalSession() {
-        val next = (_terminalSessions.value.count { it.type == TerminalSessionType.Termux } + 1)
-        val id = "termux-${System.nanoTime()}"
-        _terminalSessions.update { it + TerminalSession(id, "Termux $next", TerminalSessionType.Termux) }
-        _activeTerminalSessionId.value = id
     }
 
-    fun selectTerminalSession(id: String) { _activeTerminalSessionId.value = id }
+    val terminalSessions: StateFlow<List<TerminalSession>> get() = terminalSessionsDelegate.terminalSessions
+    val activeTerminalSessionId: StateFlow<String> get() = terminalSessionsDelegate.activeTerminalSessionId
 
-    fun setLogTranslationEnabled(enabled: Boolean) {
-        _logTranslationEnabled.value = enabled
-        terminalDisplayDirty = true
-    }
+    fun createTerminalSession() = terminalSessionsDelegate.createTerminalSession()
 
-    fun closeTerminalSession(id: String) {
-        val session = _terminalSessions.value.firstOrNull { it.id == id } ?: return
-        if (session.type == TerminalSessionType.Minecraft) return
-        // 用 update 原子读改写：终端刷新协程（Dispatchers.Default）会对同一 StateFlow 做 map 写回，
-        // 原先「读 remaining → 整条写回」的跨线程读改写会互相覆盖，导致新建会话整条消失或本轮输出被丢。
-        var nextActive: String? = null
-        _terminalSessions.update { list ->
-            val remaining = list.filterNot { it.id == id }
-            if (remaining.none { it.type == TerminalSessionType.Termux }) {
-                val fallback = TerminalSession("termux-${System.nanoTime()}", "Termux 1", TerminalSessionType.Termux)
-                nextActive = fallback.id
-                remaining + fallback
-            } else {
-                if (_activeTerminalSessionId.value == id) nextActive = remaining.first().id
-                remaining
-            }
-        }
-        // 回收该会话的输出缓冲：此前只有 clearTerminalSession 会清，反复新建/关闭会让条目永久残留
-        synchronized(terminalOutputBuffers) { terminalOutputBuffers.remove(id) }
-        nextActive?.let { _activeTerminalSessionId.value = it }
-    }
+    fun selectTerminalSession(id: String) = terminalSessionsDelegate.selectTerminalSession(id)
 
-    fun executeTerminalCommand(id: String, command: String) {
-        if (command.isBlank()) return
-        val session = _terminalSessions.value.firstOrNull { it.id == id } ?: return
-        if (session.type != TerminalSessionType.Termux || !isBootstrapped.value) return
-        viewModelScope.launch {
-            terminalMutex.withLock {
-                updateTerminalSession(id) { it.copy(busy = true) }
-                enqueueTerminalLine(id, "$ $command")
-                interactiveTerminalSessionId = id
-                try {
-                    withContext(Dispatchers.IO) { repo.termuxRuntime.refreshTermux() }
-                    val exit = withContext(Dispatchers.IO) {
-                        repo.termuxRuntime.execTermux(command) { line -> enqueueTerminalLine(id, line) }
-                    }
-                    if (exit != 0) enqueueTerminalLine(id, str(R.string.term_exit_code, exit))
-                } catch (e: Exception) {
-                    enqueueTerminalLine(id, str(R.string.term_exec_error, e.message))
-                } finally {
-                    interactiveTerminalSessionId = null
-                    updateTerminalSession(id) { it.copy(busy = false) }
-                }
-            }
-        }
-    }
+    fun setLogTranslationEnabled(enabled: Boolean) = consoleLogDelegate.setLogTranslationEnabled(enabled)
+
+    fun closeTerminalSession(id: String) = terminalSessionsDelegate.closeTerminalSession(id)
+
+    fun executeTerminalCommand(id: String, command: String) = terminalSessionsDelegate.executeTerminalCommand(id, command)
 
     /** 向当前 Termux 会话中的命令发送一行 stdin。 */
-    fun sendTerminalInput(id: String, input: String) {
-        if (input.isBlank() || interactiveTerminalSessionId != id) return
-        if (repo.termuxRuntime.sendTermuxInput(input)) {
-            enqueueTerminalLine(id, "> $input")
-        }
-    }
+    fun sendTerminalInput(id: String, input: String) = terminalSessionsDelegate.sendTerminalInput(id, input)
 
     /** 清空指定终端会话的显示行（保留会话本身） */
-    fun clearTerminalSession(id: String) {
-        synchronized(terminalOutputBuffers) { terminalOutputBuffers.remove(id) }
-        updateTerminalSession(id) { it.copy(lines = kotlinx.collections.immutable.persistentListOf()) }
-    }
+    fun clearTerminalSession(id: String) = terminalSessionsDelegate.clearTerminalSession(id)
 
     /** 清空 MC 控制台缓冲 */
-    fun clearConsole() {
-        // 只清内存是不够的：[loadRecentTerminalLog] 每次进终端页都会从磁盘日志
-        // 补读几百行，刚清掉的内容会原样回到屏幕上 —— 用户看到的是「清除没生效」。
-        // 这里记下清除时刻的文件长度，下次只补读这之后的新增。
-        activeDirName()?.let { markConsoleCleared(it) }
-        consoleBuffer.clear()
-        pendingConsoleBuffer.clear()
-        terminalConsoleBuffer.clear()
-        consoleClearGeneration++
-        consoleGeneration++
-        terminalGeneration++
-        consoleUiGeneration = consoleGeneration
-        terminalUiGeneration = terminalGeneration
-        previewUiGeneration = consoleGeneration
-        _consoleLines.value = persistentListOf()
-        _consolePreviewLines.value = persistentListOf()
-        _terminalConsoleLines.value = persistentListOf()
-    }
-
-    /**
-     * 终端「清除」的落点：日志文件字节偏移，按服务器（dirName）记账。
-     *
-     * 内存一份给当前进程，SharedPreferences 一份给「杀进程重进」——
-     * 用户清完屏关掉 App 再打开，历史日志同样不该复活。
-     */
-    private val consoleClearMarks = java.util.concurrent.ConcurrentHashMap<String, Long>()
-
-    private fun terminalPrefs() = app.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
-
-    private fun clearMarkKey(dirName: String) = "mc_console_clear_$dirName"
-
-    private fun markConsoleCleared(dirName: String) {
-        val length = runCatching {
-            repo.termuxRuntime.mcLogFileFor(dirName)?.length() ?: 0L
-        }.getOrDefault(0L)
-        consoleClearMarks[dirName] = length
-        runCatching { terminalPrefs().edit().putLong(clearMarkKey(dirName), length).apply() }
-    }
-
-    private fun consoleClearMark(dirName: String): Long =
-        consoleClearMarks[dirName] ?: runCatching {
-            terminalPrefs().getLong(clearMarkKey(dirName), 0L)
-        }.getOrDefault(0L).also { consoleClearMarks[dirName] = it }
-
-    private fun dropConsoleClearMark(dirName: String) {
-        consoleClearMarks[dirName] = 0L
-        runCatching { terminalPrefs().edit().remove(clearMarkKey(dirName)).apply() }
-    }
+    fun clearConsole() = consoleLogDelegate.clearConsole()
 
     /** 进入 MC 终端时异步补读磁盘日志，实时输出仍由 consoleFlow 持续追加。 */
-    fun loadRecentTerminalLog() {
-        if (terminalHistoryLoading) return
-        val dirName = activeDirName() ?: return
-        terminalHistoryLoading = true
-        viewModelScope.launch {
-            try {
-                // 用「清除代际」而不是 consoleGeneration：后者每收到一批实时日志都会自增
-                // （见下方刷新循环），服务端在跑时历史补读一返回就必然命中 `!=` 被整段丢弃，
-                // 表现为「App 重启后进终端看不到历史，只有新追加的行」。
-                val clearGen = consoleClearGeneration
-                val mark = consoleClearMark(dirName)
-                val history = withContext(Dispatchers.IO) {
-                    val fileLength = runCatching {
-                        repo.termuxRuntime.mcLogFileFor(dirName)?.length() ?: 0L
-                    }.getOrDefault(0L)
-                    // 文件比清除落点还短：latest.log 已被新一轮运行覆盖，旧落点失效，
-                    // 此时整份读才符合「新的一轮日志」的预期。
-                    val offset = if (fileLength < mark) 0L else mark
-                    if (offset == 0L && mark != 0L) dropConsoleClearMark(dirName)
-                    repo.termuxRuntime.readRecentMcLog(dirName, fromOffset = offset)
-                }
-                // 读盘期间用户可能点了「清除」：此时写回历史等于把清除撤销掉。
-                if (consoleClearGeneration != clearGen) return@launch
-                if (history.isNotEmpty()) {
-                    val live = consoleBuffer.snapshot()
-                    val overlap = (minOf(history.size, live.size) downTo 1).firstOrNull { size ->
-                        history.takeLast(size) == live.take(size)
-                    } ?: 0
-                    val merged = (history + live.drop(overlap)).takeLast(MAX_LOG_LINES)
-                    consoleBuffer.replace(merged)
-                    terminalConsoleBuffer.replace(
-                        merged.map { TerminalLogProcessor.process(it, _logTranslationEnabled.value) }
-                    )
-                    consoleGeneration++
-                    terminalGeneration++
-                    _consoleLines.value = consoleBuffer.snapshot()
-                    _terminalConsoleLines.value = terminalConsoleBuffer.snapshot()
-                    consoleUiGeneration = consoleGeneration
-                    terminalUiGeneration = terminalGeneration
-                }
-            } finally {
-                terminalHistoryLoading = false
-            }
-        }
-    }
-
-    private fun updateTerminalSession(id: String, transform: (TerminalSession) -> TerminalSession) {
-        // update 原子读改写：调用方既有 Dispatchers.Default 的行刷新循环，也有主线程的会话增删，
-        // 直接 `value = value.map{}` 会跨线程丢更新（新建的会话整条消失 / 本轮终端输出被丢弃）。
-        _terminalSessions.update { list -> list.map { if (it.id == id) transform(it) else it } }
-    }
-
-    private val terminalOutputBuffers = mutableMapOf<String, LogBuffer<String>>()
-
-    private fun enqueueTerminalLine(id: String, line: String) {
-        synchronized(terminalOutputBuffers) {
-            terminalOutputBuffers.getOrPut(id) { LogBuffer(MAX_LOG_LINES) }.add(line)
-        }
-    }
+    fun loadRecentTerminalLog() = consoleLogDelegate.loadRecentTerminalLog()
 
     /** 执行 Termux shell 命令（IO 线程，输出实时追加到 termuxLines，命令回显 $ cmd） */
-    fun execTermuxCommand(command: String) {
-        if (command.isBlank() || _termuxBusy.value) return
-        // 环境未初始化完成时禁止输入（bootstrap 下载/解压/装依赖中，命令必然失败）
-        if (!isBootstrapped.value) {
-            appendTermux(str(R.string.termux_not_ready))
-            return
-        }
-        viewModelScope.launch {
-            _termuxBusy.value = true
-            try {
-                // 命令执行前快速自愈：apt/pkg 新装包命令立即可用，无需重启
-                withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.refreshTermux()
-                }
-                appendTermux("$ " + command)
-                val exit = withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.execTermux(command) { line ->
-                        appendTermux(line)
-                    }
-                }
-                if (exit != 0) {
-                    val hint = when (exit) {
-                        126 -> str(R.string.termux_hint_126)
-                        127 -> str(R.string.termux_hint_127)
-                        else -> ""
-                    }
-                    appendTermux(str(R.string.term_exit_code, exit) + hint)
-                    // 失败时输出环境诊断，便于定位根因
-                    appendTermux(repo.termuxRuntime.diagnoseCommand(command))
-                }
-            } catch (e: Exception) {
-                appendTermux(str(R.string.term_exec_error, e.message))
-            } finally {
-                _termuxBusy.value = false
-            }
-        }
-    }
-
-    private val legacyTermuxBuffer = LogBuffer<String>(MAX_LOG_LINES)
-
-    /** 追加到旧版日志缓冲，由后台批处理协程发布，避免逐行触发重组。 */
-    private fun appendTermux(line: String) {
-        legacyTermuxBuffer.add(line)
-    }
+    fun execTermuxCommand(command: String) = terminalSessionsDelegate.execTermuxCommand(command)
 
     // ── 服务器图标（server-icon.png） ────────────────────────
 
+    private val serverIconDelegate by lazy {
+        ServerIconDelegate(
+            context = app,
+            scope = viewModelScope,
+            activeDirName = ::activeDirName,
+            serverDirFor = { dirName -> repo.termuxRuntime.serverDirFor(dirName) },
+            reportError = { _errorFlow.tryEmit(it) },
+            reportMessage = { _messageFlow.tryEmit(it) }
+        )
+    }
+
     /** 图标变更信号（UI 用于重载预览） */
-    private val _serverIconVersion = MutableStateFlow(0)
-    val serverIconVersion: StateFlow<Int> = _serverIconVersion.asStateFlow()
+    val serverIconVersion: StateFlow<Int> get() = serverIconDelegate.serverIconVersion
 
     /** 当前核心的 server-icon.png 文件（不存在返回 null） */
-    fun serverIconFile(): File? {
-        val dirName = activeDirName() ?: return null
-        val dir = repo.termuxRuntime.serverDirFor(dirName)
-        return if (PowerNukkitXLayout.isPowerNukkitX(dir)) null
-        else File(dir, "server-icon.png")
-            .takeIf { it.exists() }
-    }
+    fun serverIconFile(): File? = serverIconDelegate.serverIconFile()
 
     /** 更换服务器图标：读取 Uri → 居中裁剪缩放 64×64 → PNG 写入 server-icon.png */
-    fun setServerIcon(uri: Uri) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (PowerNukkitXLayout.isPowerNukkitX(repo.termuxRuntime.serverDirFor(dirName))) {
-            _errorFlow.tryEmit(str(R.string.err_pnx_icon_full))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val input = app.contentResolver.openInputStream(uri)
-                        ?: throw RuntimeException(str(R.string.err_read_image))
-                    val src = input.use { android.graphics.BitmapFactory.decodeStream(it) }
-                        ?: throw RuntimeException(str(R.string.err_parse_image))
-                    try {
-                        // 居中裁剪为正方形后缩放到 64×64
-                        val size = minOf(src.width, src.height)
-                        val x = (src.width - size) / 2
-                        val y = (src.height - size) / 2
-                        val square = android.graphics.Bitmap.createBitmap(src, x, y, size, size)
-                        try {
-                            val icon = android.graphics.Bitmap.createScaledBitmap(square, 64, 64, true)
-                            try {
-                                val target = File(repo.termuxRuntime.serverDirFor(dirName), "server-icon.png")
-                                target.parentFile?.mkdirs()
-                                java.io.FileOutputStream(target).use { fos ->
-                                    icon.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, fos)
-                                }
-                            } finally {
-                                if (!icon.isRecycled) icon.recycle()
-                            }
-                        } finally {
-                            if (square !== src && !square.isRecycled) square.recycle()
-                        }
-                    } finally {
-                        if (!src.isRecycled) src.recycle()
-                    }
-                }
-                _messageFlow.tryEmit(str(R.string.ui_server_icon_updated))
-                _serverIconVersion.value++
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.ui_server_icon_fail, e.message))
-            }
-        }
-    }
+    fun setServerIcon(uri: Uri) = serverIconDelegate.setServerIcon(uri)
 
     /** 恢复默认：删除 server-icon.png */
-    fun removeServerIcon() {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (PowerNukkitXLayout.isPowerNukkitX(repo.termuxRuntime.serverDirFor(dirName))) {
-            _errorFlow.tryEmit(str(R.string.err_pnx_icon))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    File(repo.termuxRuntime.serverDirFor(dirName), "server-icon.png").delete()
-                }
-                _messageFlow.tryEmit(str(R.string.ui_server_icon_reset_done))
-                _serverIconVersion.value++
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.ui_server_icon_fail, e.message))
-            }
-        }
-    }
-
-    /** 控制台行环形缓冲，避免每行 O(n) 拷贝 */
-    private val consoleBuffer = LogBuffer<String>(MAX_LOG_LINES)
-    private val pendingConsoleBuffer = LogBuffer<String>(MAX_LOG_LINES)
-    private val terminalConsoleBuffer = LogBuffer<TerminalDisplayLine>(MAX_LOG_LINES)
-    @Volatile private var terminalDisplayDirty = false
-    private var consoleGeneration = 0L
-
-    /**
-     * 「用户点了清除」的代际，**只在 [clearConsole] 里自增**。
-     *
-     * 与 [consoleGeneration] 分开是必要的：后者每收到一批实时日志都会自增，
-     * 用它判定「读盘期间是否被清除」会让历史补读几乎每次都被丢弃。
-     */
-    @Volatile private var consoleClearGeneration = 0L
-    private var terminalGeneration = 0L
-    private var consoleUiGeneration = -1L
-    private var terminalUiGeneration = -1L
-    private var previewUiGeneration = -1L
-    private var lastPreviewPublishedAtMs = 0L
+    fun removeServerIcon() = serverIconDelegate.removeServerIcon()
 
     /** 错误消息流，UI 层收集后用 Snackbar 显示 */
     private val _errorFlow = MutableSharedFlow<String>(extraBufferCapacity = 16)
@@ -989,80 +511,32 @@ class McViewModel(
         val sha256: String? = null
     )
 
-    private val _easyTierEngine = MutableStateFlow(EasyTierEngineInfo())
-    val easyTierEngine: StateFlow<EasyTierEngineInfo> = _easyTierEngine.asStateFlow()
-
-    private val _easyTierEngineMessage = MutableStateFlow<String?>(null)
-    val easyTierEngineMessage: StateFlow<String?> = _easyTierEngineMessage.asStateFlow()
-
-    fun clearEasyTierEngineMessage() {
-        _easyTierEngineMessage.value = null
+    private val easyTierEngineDelegate by lazy {
+        EasyTierEngineDelegate(
+            context = app,
+            scope = viewModelScope,
+            stopEasyTier = tunnelManager::stopEasyTier
+        )
     }
+
+    val easyTierEngine: StateFlow<EasyTierEngineInfo> get() = easyTierEngineDelegate.easyTierEngine
+
+    val easyTierEngineMessage: StateFlow<String?> get() = easyTierEngineDelegate.easyTierEngineMessage
+
+    fun clearEasyTierEngineMessage() = easyTierEngineDelegate.clearEasyTierEngineMessage()
 
     /** 在线下载状态（与 frpc 引擎共用 [DownloadState]）。 */
-    private val _easyTierDownload = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val easyTierDownload: StateFlow<DownloadState> = _easyTierDownload.asStateFlow()
+    val easyTierDownload: StateFlow<DownloadState> get() = easyTierEngineDelegate.easyTierDownload
 
     /** 刷新 EasyTier 引擎状态（含 SHA-256 计算，走 IO 线程）。 */
-    fun refreshEasyTierEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val installed = EasyTierEngineStore.isInstalled()
-            _easyTierEngine.value = EasyTierEngineInfo(
-                installed = installed,
-                version = if (installed) EasyTierEngineStore.ENGINE_VERSION else null,
-                sizeBytes = if (installed) EasyTierEngineStore.engineFile().length() else 0,
-                sha256 = if (installed) EasyTierEngineStore.installedSha256() else null
-            )
-        }
-    }
+    fun refreshEasyTierEngine() = easyTierEngineDelegate.refreshEasyTierEngine()
 
-    fun downloadEasyTierEngine() {
-        if (_easyTierDownload.value is DownloadState.Downloading) return
-        viewModelScope.launch(Dispatchers.IO) {
-            _easyTierDownload.value = DownloadState.Downloading(-1f)
-            try {
-                val version = EasyTierEngineStore.download { fraction ->
-                    _easyTierDownload.value = DownloadState.Downloading(fraction)
-                }
-                _easyTierEngineMessage.value = str(R.string.vm_engine_downloaded) +
-                    str(R.string.vm_version_suffix, version)
-            } catch (e: Exception) {
-                _easyTierEngineMessage.value =
-                    str(R.string.vm_download_failed, e.message ?: str(R.string.vm_network_unavailable))
-            } finally {
-                _easyTierDownload.value = DownloadState.Idle
-                refreshEasyTierEngine()
-            }
-        }
-    }
+    fun downloadEasyTierEngine() = easyTierEngineDelegate.downloadEasyTierEngine()
 
     /** 从用户选中的文件导入 EasyTier 引擎（.so）。 */
-    fun importEasyTierEngine(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                app.contentResolver.openInputStream(uri)?.use { input ->
-                    EasyTierEngineStore.install(input)
-                } ?: throw IllegalStateException(str(R.string.vm_cannot_read_file))
-                _easyTierEngineMessage.value = str(R.string.vm_engine_imported) +
-                    str(R.string.vm_version_suffix, EasyTierEngineStore.ENGINE_VERSION)
-                refreshEasyTierEngine()
-            } catch (e: Exception) {
-                _easyTierEngineMessage.value = str(R.string.vm_import_failed, e.message ?: "")
-            }
-        }
-    }
+    fun importEasyTierEngine(uri: Uri) = easyTierEngineDelegate.importEasyTierEngine(uri)
 
-    fun uninstallEasyTierEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            // 先走完整的停止流程（会把组网卡片同步成「已停止」），再删文件。
-            // 直接删文件时实例和 TUN 都还在，正是用户报的「删了还有残留」。
-            runCatching { tunnelManager.stopEasyTier() }
-            val ok = EasyTierEngineStore.uninstall()
-            _easyTierEngineMessage.value =
-                if (ok) str(R.string.vm_engine_uninstalled) else str(R.string.vm_uninstall_failed)
-            refreshEasyTierEngine()
-        }
-    }
+    fun uninstallEasyTierEngine() = easyTierEngineDelegate.uninstallEasyTierEngine()
 
     // ── frpc 引擎（内置引擎，不依赖 Termux） ────────────────────────
 
@@ -1074,31 +548,23 @@ class McViewModel(
         val sha256: String? = null
     )
 
-    private val _frpcEngine = MutableStateFlow(FrpcEngineInfo())
-    val frpcEngine: StateFlow<FrpcEngineInfo> = _frpcEngine.asStateFlow()
+    private val frpcEngineDelegate by lazy {
+        FrpcEngineDelegate(
+            context = app,
+            scope = viewModelScope,
+            frpcRuntime = tunnelManager.frpcRuntime
+        )
+    }
+
+    val frpcEngine: StateFlow<FrpcEngineInfo> get() = frpcEngineDelegate.frpcEngine
 
     /** 引擎导入结果提示，一次性消费后清空。 */
-    private val _frpcEngineMessage = MutableStateFlow<String?>(null)
-    val frpcEngineMessage: StateFlow<String?> = _frpcEngineMessage.asStateFlow()
+    val frpcEngineMessage: StateFlow<String?> get() = frpcEngineDelegate.frpcEngineMessage
 
-    fun clearFrpcEngineMessage() {
-        _frpcEngineMessage.value = null
-    }
-
-    private val frpcRuntime get() = tunnelManager.frpcRuntime
+    fun clearFrpcEngineMessage() = frpcEngineDelegate.clearFrpcEngineMessage()
 
     /** 刷新 frpc 引擎状态（含 SHA-256 计算，走 IO 线程）。 */
-    fun refreshFrpcEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val installed = frpcRuntime.isInstalled()
-            _frpcEngine.value = FrpcEngineInfo(
-                installed = installed,
-                version = if (installed) frpcRuntime.installedVersion else null,
-                sizeBytes = if (installed) frpcRuntime.engineFile.length() else 0,
-                sha256 = if (installed) frpcRuntime.engineSha256() else null
-            )
-        }
-    }
+    fun refreshFrpcEngine() = frpcEngineDelegate.refreshFrpcEngine()
 
     /** 在线下载状态。未配置下载源时 UI 不显示下载入口，这个状态也就一直是 Idle。 */
     sealed interface DownloadState {
@@ -1106,78 +572,19 @@ class McViewModel(
         data class Downloading(val fraction: Float) : DownloadState
     }
 
-    private val _frpcDownload = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val frpcDownload: StateFlow<DownloadState> = _frpcDownload.asStateFlow()
+    val frpcDownload: StateFlow<DownloadState> get() = frpcEngineDelegate.frpcDownload
 
     /** 是否配置了在线下载源；没配置时 UI 只保留本地导入。 */
     val frpcOnlineAvailable: Boolean get() = FrpcEngineConfig.isConfigured
 
-    /**
-     * 在线下载并安装引擎。
-     *
-     * 下载失败**不动**已有引擎（[FrpcRuntimeDownloader] 保证）：用户可能只是想升级，
-     * 升级失败却把当前可用的版本弄没了，那是最糟的结果。所以这里失败只提示，不清理。
-     */
-    fun downloadFrpcEngine() {
-        if (_frpcDownload.value is DownloadState.Downloading) return
-        viewModelScope.launch(Dispatchers.IO) {
-            _frpcDownload.value = DownloadState.Downloading(-1f)
-            try {
-                val downloader = FrpcRuntimeDownloader(frpcRuntime)
-                val manifest = downloader.fetchManifest()
-                val result = downloader.downloadAndInstall(manifest) { fraction ->
-                    _frpcDownload.value = DownloadState.Downloading(fraction)
-                }
-                _frpcEngineMessage.value = str(R.string.vm_engine_downloaded) +
-                    (result.version?.let { str(R.string.vm_version_suffix, it) } ?: "")
-            } catch (e: Exception) {
-                _frpcEngineMessage.value = str(R.string.vm_download_failed, e.message ?: str(R.string.vm_network_unavailable))
-            } finally {
-                _frpcDownload.value = DownloadState.Idle
-                refreshFrpcEngine()
-            }
-        }
-    }
+    /** 在线下载并安装引擎。 */
+    fun downloadFrpcEngine() = frpcEngineDelegate.downloadFrpcEngine()
 
-    /**
-     * 从用户选中的文件导入 frpc 引擎（libfrpc.so）。
-     *
-     * 校验在 [com.mineserve.mobile.server.tunnel.frpc.FrpcRuntime.install] 内完成
-     * （体积 / ELF 魔数 / arm64 架构）。校验失败时**不覆盖**已装引擎 ——
-     * 用户手上未必还有第二份可用的引擎。
-     */
-    fun importFrpcEngine(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val name = queryDisplayName(uri)
-                app.contentResolver.openInputStream(uri)?.use { input ->
-                    frpcRuntime.install(input, name)
-                } ?: throw IllegalStateException(str(R.string.vm_cannot_read_file))
-                _frpcEngineMessage.value = str(R.string.vm_engine_imported) +
-                    (frpcRuntime.installedVersion?.let { str(R.string.vm_version_suffix, it) } ?: "")
-                refreshFrpcEngine()
-            } catch (e: Exception) {
-                _frpcEngineMessage.value = str(R.string.vm_import_failed, e.message ?: "")
-            }
-        }
-    }
+    /** 从用户选中的文件导入 frpc 引擎（libfrpc.so）。 */
+    fun importFrpcEngine(uri: Uri) = frpcEngineDelegate.importFrpcEngine(uri)
 
     /** 卸载 frpc 引擎。 */
-    fun uninstallFrpcEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val ok = frpcRuntime.uninstall()
-            _frpcEngineMessage.value = if (ok) str(R.string.vm_engine_uninstalled) else str(R.string.vm_uninstall_failed)
-            refreshFrpcEngine()
-        }
-    }
-
-    /** 取 SAF 文件的显示名，仅用于从文件名里认引擎版本号。 */
-    private fun queryDisplayName(uri: Uri): String? = runCatching {
-        app.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-            if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
-        }
-    }.getOrNull()
+    fun uninstallFrpcEngine() = frpcEngineDelegate.uninstallFrpcEngine()
 
     // ── 软件更新（GitHub Releases） ──────────────────────────────────
 
@@ -1191,184 +598,41 @@ class McViewModel(
         data class Failed(val message: String, val release: AppRelease? = null) : UpdateUiState
     }
 
-    private val _updateState = MutableStateFlow<UpdateUiState>(UpdateUiState.Idle)
-    val updateState: StateFlow<UpdateUiState> = _updateState.asStateFlow()
+    private val appUpdateDelegate by lazy {
+        AppUpdateDelegate(
+            app = app,
+            scope = viewModelScope,
+            reportMessage = { _messageFlow.tryEmit(it) }
+        )
+    }
+
+    val updateState: StateFlow<UpdateUiState> get() = appUpdateDelegate.updateState
 
     /** 更新对话框是否显示 */
-    private val _updateDialogVisible = MutableStateFlow(false)
-    val updateDialogVisible: StateFlow<Boolean> = _updateDialogVisible.asStateFlow()
+    val updateDialogVisible: StateFlow<Boolean> get() = appUpdateDelegate.updateDialogVisible
 
     /** 最近一次更新检查结果描述（设置页显示），如「已是最新版本 · 08:30」 */
-    private val _lastUpdateCheckResult = MutableStateFlow<String?>(null)
-    val lastUpdateCheckResult: StateFlow<String?> = _lastUpdateCheckResult.asStateFlow()
-    private var skippedReleaseTag: String? = null
+    val lastUpdateCheckResult: StateFlow<String?> get() = appUpdateDelegate.lastUpdateCheckResult
 
-    fun dismissUpdateDialog() { _updateDialogVisible.value = false }
+    fun dismissUpdateDialog() = appUpdateDelegate.dismissUpdateDialog()
 
     /** 检查更新：manual=true 来自设置页（显示检查进度 + 失败提示）；auto=true 启动检查（失败静默 + 有新版发通知） */
-    fun checkForUpdate(manual: Boolean = false) {
-        if (_updateState.value is UpdateUiState.Checking) return
-        _updateState.value = UpdateUiState.Checking
-        if (manual) _updateDialogVisible.value = true // 手动检查：立即显示检查中对话框
-        viewModelScope.launch {
-            try {
-                val release = AppUpdateService.latest(BuildConfig.VERSION_NAME)
-                if (release == null) {
-                    _updateState.value = UpdateUiState.Idle
-                    _lastUpdateCheckResult.value =
-                        "${app.getString(R.string.update_already_latest)} · ${nowTime()}"
-                    if (manual) {
-                        _updateDialogVisible.value = false
-                        _messageFlow.tryEmit(app.getString(R.string.update_already_latest))
-                    }
-                } else {
-                    _updateState.value = UpdateUiState.Available(release)
-                    _lastUpdateCheckResult.value =
-                        "${app.getString(R.string.update_available, release.tag)} · ${nowTime()}"
-                    if (manual || skippedReleaseTag != release.tag) {
-                        _updateDialogVisible.value = true
-                        if (!manual) showUpdateNotification(app, release)
-                    }
-                }
-            } catch (e: Exception) {
-                    _updateState.value = UpdateUiState.Failed(e.message ?: str(R.string.msg_update_check_failed))
-                    _lastUpdateCheckResult.value =
-                        "${app.getString(R.string.update_check_failed)} · ${nowTime()}"
-                    if (manual) {
-                        _updateDialogVisible.value = true
-                    }
-            }
-        }
-    }
+    fun checkForUpdate(manual: Boolean = false) = appUpdateDelegate.checkForUpdate(manual)
 
-    private fun nowTime(): String =
-        java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
-            .format(java.util.Date())
+    fun showUpdateDialog() = appUpdateDelegate.showUpdateDialog()
 
-    fun showUpdateDialog() {
-        if (_updateState.value is UpdateUiState.Available) _updateDialogVisible.value = true
-    }
-
-    fun skipCurrentUpdate() {
-        val state = _updateState.value as? UpdateUiState.Available ?: return
-        skippedReleaseTag = state.release.tag
-        dismissUpdateDialog()
-    }
+    fun skipCurrentUpdate() = appUpdateDelegate.skipCurrentUpdate()
 
     /** 打开浏览器跳到 GitHub Release 页面（供用户手动下载更新） */
-    fun openGithubUpdate() {
-        val url = (_updateState.value as? UpdateUiState.Available)?.release?.releaseUrl
-            ?: com.mineserve.mobile.data.AppUpdateService.PROJECT_URL
-        try {
-            val intent = android.content.Intent(
-                android.content.Intent.ACTION_VIEW,
-                android.net.Uri.parse(url)
-            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-            app.startActivity(intent)
-        } catch (e: Exception) {
-            _messageFlow.tryEmit(str(R.string.msg_open_browser_fail, e.message))
-        }
-    }
+    fun openGithubUpdate() = appUpdateDelegate.openGithubUpdate()
 
     /** 开始下载新版 APK（完成后自动调系统安装器） */
-    fun downloadUpdate() {
-        val state = _updateState.value
-        val release = when (state) {
-            is UpdateUiState.Available -> state.release
-            is UpdateUiState.Failed -> state.release
-            else -> null
-        } ?: return
-        _updateState.value = UpdateUiState.Downloading(0f, release)
-        viewModelScope.launch {
-            try {
-                val target = File(app.cacheDir, "update/MineServeMobile-latest.apk")
-                AppUpdateService.download(release.apkUrls, target) { p ->
-                    _updateState.value = UpdateUiState.Downloading(p, release)
-                }
-                _updateState.value = UpdateUiState.Downloaded(release, target.absolutePath)
-            } catch (e: Exception) {
-                _updateState.value = UpdateUiState.Failed(e.message ?: app.getString(R.string.update_download_failed), release)
-            }
-        }
-    }
+    fun downloadUpdate() = appUpdateDelegate.downloadUpdate()
 
     /** 调系统安装器安装 APK */
-    fun installApk(context: Context, file: File) {
-        try {
-            if (!AppUpdateService.isApk(file)) {
-                throw IllegalStateException(str(R.string.err_apk_corrupt))
-            }
-            val archive = context.packageManager.getPackageArchiveInfo(file.absolutePath, 0)
-                ?: throw IllegalStateException(str(R.string.err_apk_read_pkg))
-            if (archive.packageName != context.packageName) {
-                throw IllegalStateException(str(R.string.err_apk_pkg_mismatch))
-            }
-            // 签名要比对：下载源全是第三方 GitHub 反代，包名对了还不够。
-            // 同签名才是"我们自己发的那个更新"，不同签名一律拒绝。
-            if (!AppUpdateService.verifySignature(context, file)) {
-                throw IllegalStateException(str(R.string.err_apk_sig_mismatch))
-            }
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O &&
-                !context.packageManager.canRequestPackageInstalls()) {
-                context.startActivity(
-                    Intent(
-                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                        Uri.parse("package:${context.packageName}")
-                    ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                )
-                _messageFlow.tryEmit(str(R.string.msg_allow_unknown_install))
-                return
-            }
-            val uri = FileProvider.getUriForFile(
-                context, context.packageName + ".fileprovider", file
-            )
-            val intent = Intent(Intent.ACTION_VIEW).apply {
-                setDataAndType(uri, "application/vnd.android.package-archive")
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
-                clipData = ClipData.newRawUri("update-apk", uri)
-            }
-            val installers = context.packageManager.queryIntentActivities(
-                intent,
-                android.content.pm.PackageManager.MATCH_DEFAULT_ONLY
-            )
-            if (installers.isEmpty()) {
-                throw IllegalStateException(str(R.string.err_no_installer))
-            }
-            installers.forEach { handler ->
-                context.grantUriPermission(
-                    handler.activityInfo.packageName,
-                    uri,
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION
-                )
-            }
-            context.startActivity(intent)
-        } catch (e: Exception) {
-            _updateState.value = UpdateUiState.Failed(e.message ?: "install error")
-        }
-    }
+    fun installApk(context: Context, file: File) = appUpdateDelegate.installApk(context, file)
 
-    fun installDownloadedUpdate(path: String) = installApk(app, File(path))
-
-    /** 自动检查发现新版时发系统通知，点击进入更新对话框 */
-    private fun showUpdateNotification(app: Context, info: AppRelease) {
-        val nm = app.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        val contentIntent = PendingIntent.getActivity(
-            app, 1001,
-            Intent(app, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                putExtra("open_update", true)
-            },
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-        val notification = NotificationCompat.Builder(app, app.getString(R.string.notif_channel_id))
-            .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle(app.getString(R.string.update_notif_title, info.tag))
-            .setContentText(app.getString(R.string.update_notif_text))
-            .setContentIntent(contentIntent)
-            .setAutoCancel(true)
-            .build()
-        try { nm.notify(1001, notification) } catch (_: Exception) {}
-    }
+    fun installDownloadedUpdate(path: String) = appUpdateDelegate.installDownloadedUpdate(path)
 
     // ── 服务端资源状态 ───────────────────────────────────────────────
 
@@ -1762,7 +1026,7 @@ class McViewModel(
             val bedrock = active.core == ServerCore.PowerNukkitX
             // 端口取真源：配置文件里的 server-port（PNX 为 pnx.yml 的 settings.port），
             // 未生成时退回 localPort。与地址栏同源，避免「诊断说 19132、服务端其实在 25562」。
-            val port = ServerPort.resolve(_serverProperties.value["server-port"], active?.core, cfg.localPort)
+            val port = ServerPort.resolve(serverProperties.value["server-port"], active?.core, cfg.localPort)
             val portOk = if (running) {
                 if (bedrock) probeBedrockUdpPort(port) else probeLoopbackPort(port)
             } else false
@@ -1803,13 +1067,6 @@ class McViewModel(
             response.length > 0
         }
     } catch (_: Exception) { false }
-
-    private fun formatDiagnosticBytes(bytes: Long): String = when {
-        bytes >= 1_073_741_824L -> String.format(java.util.Locale.US, "%.1f GB", bytes / 1_073_741_824.0)
-        bytes >= 1_048_576L -> String.format(java.util.Locale.US, "%.1f MB", bytes / 1_048_576.0)
-        bytes >= 1_024L -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1_024.0)
-        else -> "$bytes B"
-    }
 
     /** 刷新局域网 IP：在 IO 线程遍历网络接口，取第一个非 loopback 的 IPv4 地址 */
     fun refreshLanIp() {
@@ -1864,7 +1121,6 @@ class McViewModel(
          * 让待机期间的 CPU 唤醒次数从每秒 10 次降到 0.5 次（与原主循环的降频策略一致）。
          */
         private const val IDLE_LOG_FLUSH_MS = 2000L
-        private const val CONSOLE_PREVIEW_FLUSH_MS = 750L
         // 阶段推进采用了"只增不减"策略，因此不再需要连续命中计数（PHASE_CONFIRM_HITS）
         // 与单步回退容差（DOUBLE_STEP_TOLERANCE）：前者会因为
         // "启动 Java / 启动网络"这类只出现一行的阶段被整段吞掉，
@@ -2304,41 +1560,30 @@ class McViewModel(
         val visible: Boolean get() = candidates.isNotEmpty() && !running
     }
 
-    private val _legacyMigration = MutableStateFlow(LegacyMigrationState())
-    val legacyMigration: StateFlow<LegacyMigrationState> = _legacyMigration.asStateFlow()
+    private val legacyMigrationDelegate by lazy {
+        LegacyMigrationDelegate(
+            context = app,
+            scope = viewModelScope,
+            currentConfigOrNull = repo::currentConfigOrNull,
+            updateAndSaveConfig = { transform -> repo.updateAndSaveConfig(transform) },
+            termux3Log = ::termux3Log,
+            reportError = { _errorFlow.tryEmit(it) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            refreshStoragePermission = ::refreshStoragePermission
+        )
+    }
+
+    val legacyMigration: StateFlow<LegacyMigrationState> get() = legacyMigrationDelegate.legacyMigration
 
     /**
      * 扫描旧版私有目录，发现可迁移的服务器就置为可见（由 McApp 在启动时调用）。
      *
      * 扫描本身只读不写：**绝不**因为「发现了旧文件」就自动搬，搬不搬由用户决定。
      */
-    fun checkLegacyMigration() {
-        viewModelScope.launch {
-            // 不用 currentConfig()：它可能 runBlocking 读盘。这里等一次内存态就绪再走，
-            // 拿不到（极端情况）就放弃本轮，下次启动仍会重新扫描。
-            val cfg = repo.currentConfigOrNull()
-                ?: run {
-                    kotlinx.coroutines.delay(600)
-                    repo.currentConfigOrNull()
-                }
-                ?: return@launch
-            val list = withContext(Dispatchers.IO) {
-                com.mineserve.mobile.server.LegacyServerMigration.scan(app, cfg)
-            }
-            _legacyMigration.value = LegacyMigrationState(
-                candidates = list,
-                scanned = true
-            )
-            if (list.isNotEmpty()) {
-                termux3Log("检测到 ${list.size} 个旧版服务器待迁移：${list.joinToString(", ") { it.dirName }}")
-            }
-        }
-    }
+    fun checkLegacyMigration() = legacyMigrationDelegate.checkLegacyMigration()
 
     /** 用户选择「以后再说」：只关闭本次提示，下次启动仍会扫描 */
-    fun dismissLegacyMigration() {
-        _legacyMigration.value = _legacyMigration.value.copy(candidates = emptyList())
-    }
+    fun dismissLegacyMigration() = legacyMigrationDelegate.dismissLegacyMigration()
 
     /**
      * 执行迁移：复制 → 校验 → 改名 → 删源，然后把结果写回配置。
@@ -2348,62 +1593,8 @@ class McViewModel(
      *
      * @param skipUnreadable 用户已确认「忽略无法读取的文件」后继续
      */
-    fun runLegacyMigration(skipUnreadable: Boolean = false) {
-        val state = _legacyMigration.value
-        if (state.running || state.candidates.isEmpty()) return
-        val candidates = state.candidates
-        _legacyMigration.value = state.copy(
-            running = true,
-            progressDone = 0,
-            progressTotal = candidates.size,
-            progressName = candidates.first().dirName,
-            canSkipFailed = false,
-            lastError = null
-        )
-        viewModelScope.launch {
-            val outcomes = com.mineserve.mobile.server.LegacyServerMigration.migrateAll(
-                app, candidates, allowSkipUnreadable = skipUnreadable
-            ) { done, total, name ->
-                _legacyMigration.value = _legacyMigration.value.copy(
-                    progressDone = done, progressTotal = total, progressName = name
-                )
-            }
-            val root = com.mineserve.mobile.data.ServerStorage.internalRoot(app)
-            repo.updateAndSaveConfig { current ->
-                com.mineserve.mobile.server.LegacyServerMigration.applyOutcomes(current, outcomes, root)
-            }
-            val ok = outcomes.count { it.success }
-            val failed = outcomes.filter { !it.success }
-            val skipped = outcomes.flatMap { it.skipped }
-            // 失败但「只因个别文件读不出来」时保留候选，让用户能当场选「忽略并继续」；
-            // 否则关掉对话框，等下次冷启动再问。
-            val canSkip = failed.isNotEmpty() && failed.all { it.canSkip }
-            val errorText = if (failed.isEmpty()) null else
-                failed.joinToString("; ") { "${it.dirName}: ${it.error ?: "未知错误"}" }
-            _legacyMigration.value = LegacyMigrationState(
-                candidates = if (canSkip) candidates else emptyList(),
-                scanned = true,
-                canSkipFailed = canSkip,
-                lastError = errorText
-            )
-            if (failed.isEmpty()) {
-                _messageFlow.tryEmit(str(R.string.legacy_migrate_done, ok))
-                if (skipped.isNotEmpty()) {
-                    _errorFlow.tryEmit(str(R.string.legacy_migrate_skipped, skipped.size, skipped.take(3).joinToString("、")))
-                }
-            } else {
-                _errorFlow.tryEmit(
-                    str(
-                        R.string.legacy_migrate_partial,
-                        ok,
-                        errorText ?: ""
-                    )
-                )
-            }
-            // 迁移进来的目录直接登记完成，不需要再走「扫描未登记目录」
-            refreshStoragePermission()
-        }
-    }
+    fun runLegacyMigration(skipUnreadable: Boolean = false) =
+        legacyMigrationDelegate.runLegacyMigration(skipUnreadable)
 
     fun refreshJava() {
         // 刻意不检查 isBootstrapped：FCL 来源的 JRE 与 Termux 环境无关，
@@ -2432,75 +1623,39 @@ class McViewModel(
     // PMMP 用 PHP 运行（不是 Java），首次启动时按需下载。
     // 依赖管理页的「PHP 版本选择」与启动控制卡片的运行环境列表共用这一份状态。
 
-    private val _installedPhp = MutableStateFlow<Set<PhpVersion>>(emptySet())
-    val installedPhp: StateFlow<Set<PhpVersion>> = _installedPhp.asStateFlow()
+    private val phpRuntimeDelegate by lazy {
+        PhpRuntimeDelegate(
+            app = app,
+            scope = viewModelScope,
+            termuxRuntime = repo.termuxRuntime,
+            config = config,
+            isBootstrapped = isBootstrapped,
+            isInstalling = isInstalling,
+            setInstalling = { _isInstalling.value = it },
+            setJavaOperation = { _javaOperation.value = it },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    val installedPhp: StateFlow<Set<PhpVersion>> = phpRuntimeDelegate.installedPhp
 
     /** 当前所选 PHP 版本（来自 config，配置未加载时回退默认） */
-    val selectedPhpVersion: StateFlow<PhpVersion> = config
-        .map { it.selectedPhpVersion }
-        .distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, PhpVersion.Default)
+    val selectedPhpVersion: StateFlow<PhpVersion> = phpRuntimeDelegate.selectedPhpVersion
 
     /** 当前 PHP 版本是否已安装 */
-    val phpInstalled: StateFlow<Boolean> = combine(_installedPhp, selectedPhpVersion) { installed, selected ->
-        selected in installed
-    }.stateIn(viewModelScope, SharingStarted.Eagerly, false)
+    val phpInstalled: StateFlow<Boolean> = phpRuntimeDelegate.phpInstalled
 
-    fun refreshPhp() {
-        if (!isBootstrapped.value) { _installedPhp.value = emptySet(); return }
-        viewModelScope.launch(Dispatchers.IO) {
-            _installedPhp.value = repo.termuxRuntime.installedPhpVersions()
-        }
-    }
+    fun refreshPhp() = phpRuntimeDelegate.refreshPhp()
 
     /** 选择 PHP 版本（依赖管理页与启动控制卡片共用） */
     fun setPhpVersion(version: PhpVersion) = updateConfig { it.copy(selectedPhpVersion = version) }
 
     /** 安装指定 PHP 运行环境（~10MB，含 PMMP 必需扩展） */
-    fun installPhp(version: PhpVersion = config.value.selectedPhpVersion) {
-        if (!isBootstrapped.value || _isInstalling.value) return
-        if (repo.termuxRuntime.isMcRunning()) {
-            _errorFlow.tryEmit(str(R.string.msg_php_running))
-            return
-        }
-        _isInstalling.value = true
-        _javaOperation.value = str(R.string.msg_php_op_installing)
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.installPhp(version) { line -> repo.termuxRuntime.emitLog(line) }
-                }
-                refreshPhp()
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_php_installed, version.displayName))
-                else _errorFlow.tryEmit(str(R.string.err_php_install_fail, version.displayName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(e.message ?: str(R.string.err_php_install_fail, version.displayName))
-            } finally {
-                _javaOperation.value = null
-                _isInstalling.value = false
-            }
-        }
-    }
+    fun installPhp(version: PhpVersion = config.value.selectedPhpVersion) = phpRuntimeDelegate.installPhp(version)
 
     /** 卸载指定 PHP 运行环境（直接删除对应目录，PocketMine 下次启动会重新下载） */
-    fun deletePhp(version: PhpVersion = config.value.selectedPhpVersion) {
-        if (!isBootstrapped.value || _isInstalling.value) return
-        _isInstalling.value = true
-        _javaOperation.value = str(R.string.msg_php_op_deleting)
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { repo.termuxRuntime.deletePhp(version) }
-                refreshPhp()
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_php_deleted, version.displayName))
-                else _errorFlow.tryEmit(str(R.string.err_php_delete_fail, version.displayName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(e.message ?: str(R.string.err_php_delete_fail, version.displayName))
-            } finally {
-                _javaOperation.value = null
-                _isInstalling.value = false
-            }
-        }
-    }
+    fun deletePhp(version: PhpVersion = config.value.selectedPhpVersion) = phpRuntimeDelegate.deletePhp(version)
 
     // ── 运行模式（Java / PHP）─────────────────────────────────────
     //
@@ -2919,46 +2074,27 @@ class McViewModel(
 
     // ── 自动化定时任务（更多 → 自动化） ──────────────────────────
 
-    /**
-     * 变更任务列表并落盘、重排下一次闹钟。
-     *
-     * 未排期的启用任务在此统一补上 [AutomationTask.nextRunMs]，保证调度器拿到的
-     * 就是落盘后的最终值（与 [updateScheduleConfig] 同样的读改写策略，避免陈旧快照覆盖）。
-     */
-    private fun updateAutomationTasks(transform: (List<AutomationTask>) -> List<AutomationTask>) {
-        val updated = try {
-            repo.updateAndSaveConfig { config ->
-                config.copy(
-                    automationTasks = AutomationScheduler.withNextRunsAssigned(transform(config.automationTasks))
-                )
-            }
-        } catch (e: Exception) {
-            _errorFlow.tryEmit(str(R.string.s191, e.message))
-            return
-        }
-        AutomationScheduler.register(app, updated.automationTasks)
+    private val automationTasksDelegate by lazy {
+        AutomationTasksDelegate(
+            app = app,
+            updateAndSaveConfig = repo::updateAndSaveConfig,
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
     /** 新增任务（重置排期，由更新逻辑重算）。 */
-    fun addAutomationTask(task: AutomationTask) =
-        updateAutomationTasks { it + task.copy(nextRunMs = 0L) }
+    fun addAutomationTask(task: AutomationTask) = automationTasksDelegate.addAutomationTask(task)
 
     /** 覆盖编辑一条任务（重置排期）。 */
-    fun updateAutomationTask(task: AutomationTask) = updateAutomationTasks { list ->
-        list.map { if (it.id == task.id) task.copy(nextRunMs = 0L) else it }
-    }
+    fun updateAutomationTask(task: AutomationTask) = automationTasksDelegate.updateAutomationTask(task)
 
-    fun deleteAutomationTask(id: String) = updateAutomationTasks { list -> list.filterNot { it.id == id } }
+    fun deleteAutomationTask(id: String) = automationTasksDelegate.deleteAutomationTask(id)
 
     /** 启用/停用任务；重新启用时重置排期。 */
-    fun setAutomationTaskEnabled(id: String, enabled: Boolean) = updateAutomationTasks { list ->
-        list.map { if (it.id == id) it.copy(enabled = enabled, nextRunMs = if (enabled) 0L else it.nextRunMs) else it }
-    }
+    fun setAutomationTaskEnabled(id: String, enabled: Boolean) = automationTasksDelegate.setAutomationTaskEnabled(id, enabled)
 
     /** 手动立即执行一次任务（交由前台服务在自身作用域内完成）。 */
-    fun runAutomationTaskNow(id: String) {
-        com.mineserve.mobile.service.McForegroundService.enqueueAutomationTask(app, id)
-    }
+    fun runAutomationTaskNow(id: String) = automationTasksDelegate.runAutomationTaskNow(id)
 
     /** 变更定时计划时同步保存并重注册下一次闹钟。 */
     private fun updateScheduleConfig(transform: (McConfig) -> McConfig) {
@@ -3217,146 +2353,42 @@ class McViewModel(
 
     // ── FRP 配置（可保存多份，同一平台也可存多个令牌） ────────
 
-    /** 新增或就地更新一份 FRP 配置（按 id 判定是新增还是编辑）。 */
-    fun saveFrpProfile(profile: FrpProfile) {
-        updateConfig { cfg ->
-            val exists = cfg.frpProfiles.any { it.id == profile.id }
-            val list = if (exists) {
-                cfg.frpProfiles.map { if (it.id == profile.id) profile else it }
-            } else {
-                cfg.frpProfiles + profile
-            }
-            cfg.copy(
-                frpProfiles = list,
-                // 第一份配置自动成为当前配置：省掉「存完还得自己再选一次」这一步。
-                activeFrpProfileId = cfg.activeFrpProfileId.ifBlank { profile.id }
-            )
-        }
+    private val tunnelControlsDelegate by lazy {
+        TunnelControlsDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            isBootstrapped = isBootstrapped,
+            tunnelManager = tunnelManager,
+            updateConfig = ::updateConfig,
+            refreshServerPropertiesNow = ::refreshServerPropertiesNow,
+            realServerPort = ::realServerPort,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
+
+    /** 新增或就地更新一份 FRP 配置（按 id 判定是新增还是编辑）。 */
+    fun saveFrpProfile(profile: FrpProfile) = tunnelControlsDelegate.saveFrpProfile(profile)
 
     /** 删除一份 FRP 配置；删的正好是当前配置时自动切到剩下的第一份。 */
-    fun deleteFrpProfile(id: String) {
-        updateConfig { cfg ->
-            val left = cfg.frpProfiles.filterNot { it.id == id }
-            cfg.copy(
-                frpProfiles = left,
-                activeFrpProfileId =
-                    if (cfg.activeFrpProfileId == id) left.firstOrNull()?.id.orEmpty()
-                    else cfg.activeFrpProfileId
-            )
-        }
-    }
+    fun deleteFrpProfile(id: String) = tunnelControlsDelegate.deleteFrpProfile(id)
 
     /** 切换当前 FRP 配置。 */
-    fun setActiveFrpProfile(id: String) = updateConfig { it.copy(activeFrpProfileId = id) }
+    fun setActiveFrpProfile(id: String) = tunnelControlsDelegate.setActiveFrpProfile(id)
 
     /** 当前生效的 FRP 配置；列表为空时返回 null。 */
-    fun activeFrpProfile(): FrpProfile? = FrpProfiles.active(config.value)
+    fun activeFrpProfile(): FrpProfile? = tunnelControlsDelegate.activeFrpProfile()
 
     // ── 启停 ─────────────────────────────────────────────────
 
-    fun startFrp() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
-        if (frpState.value.status == TunnelStatus.Starting) {
-            _errorFlow.tryEmit(str(R.string.s200))
-            return
-        }
-        val cfg = config.value
-        val profile = FrpProfiles.active(cfg)
-        if (profile == null) {
-            _errorFlow.tryEmit(str(R.string.msg_frp_profile_required))
-            return
-        }
-        FrpProfiles.validationError(profile)?.let {
-            _errorFlow.tryEmit(it)
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // 先把端口真源读回来：用户可能刚在配置文件里改了端口，
-                // 不重读的话下面拿到的还是上一次的值（隧道会打到旧端口）。
-                refreshServerPropertiesNow()
-                val realPort = realServerPort()
+    fun startFrp() = tunnelControlsDelegate.startFrp()
 
-                // 投影：把选中的配置摊进后端认识的老字段，后端一行都不用改。
-                var runtime = FrpProfiles.applyTo(profile, cfg)
-                if (profile.kind == FrpProfileKind.CustomToml) {
-                    // 自建 frp 的转发端口写在用户粘的那份文本里，多半还停在改端口之前的旧值。
-                    // 这里对齐**运行期副本**（保存的原文不动），否则隧道通了玩家也进不来。
-                    val aligned = FrpLocalTarget.align(runtime.frpConfigText, realPort)
-                    if (aligned.changed > 0) {
-                        runtime = runtime.copy(frpConfigText = aligned.text)
-                        tunnelManager.note(
-                            "配置里的转发端口 ${aligned.from} 不是游戏真实端口 $realPort，" +
-                                "本次已按 $realPort 启动（你的配置原文没有被改）"
-                        )
-                    }
-                }
-                tunnelManager.startFrp(runtime)
-                reportStart(frpState.value)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s206, e.message))
-            }
-        }
-    }
+    fun stopFrp() = tunnelControlsDelegate.stopFrp()
 
-    fun stopFrp() {
-        viewModelScope.launch {
-            try {
-                tunnelManager.stopFrp()
-                _messageFlow.tryEmit(str(R.string.s207))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s208, e.message))
-            }
-        }
-    }
+    fun startStun() = tunnelControlsDelegate.startStun()
 
-    fun startStun() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
-        if (stunState.value.status == TunnelStatus.Starting) {
-            _errorFlow.tryEmit(str(R.string.s200))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // 端口真源：StunTunnelBackend 默认取 config.localPort（镜像字段），
-                // 这里显式覆盖成真源 serverPort。否则配置文件被外部改动后，
-                // STUN 会把玩家流量转到服务端并未监听的旧端口。
-                //
-                // 真源必须在取用**之前**读回来，而且要现算（[realServerPort]）：
-                // 用户刚改完端口就来开穿透时，读与不读就是「能进」和「connection refused」的区别。
-                //
-                // tunnelType 也一并写成 Stun：界面上已经没有「穿透方式」单选了，
-                // 不写的话它会停在默认的 Frp，配置本身自相矛盾（虽然
-                // TunnelManager 现在按通道取后端、不再依赖这个字段）。
-                refreshServerPropertiesNow()
-                val targetPort = realServerPort()
-                tunnelManager.startStun(
-                    config.value.copy(localPort = targetPort, tunnelType = TunnelType.Stun)
-                )
-                reportStart(stunState.value)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s206, e.message))
-            }
-        }
-    }
-
-    fun stopStun() {
-        viewModelScope.launch {
-            try {
-                tunnelManager.stopStun()
-                _messageFlow.tryEmit(str(R.string.s207))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s208, e.message))
-            }
-        }
-    }
+    fun stopStun() = tunnelControlsDelegate.stopStun()
 
     // ── EasyTier 组网 ────────────────────────────────────────
     //
@@ -3372,167 +2404,35 @@ class McViewModel(
      * 引擎是否可用。未下载时为 false —— UI 据此禁用并给出下载指引。
      * 下载完成后再次调用即返回 true（引擎是延迟加载的）。
      */
-    val easyTierAvailable: Boolean get() = EasyTierEngine.available
+    val easyTierAvailable: Boolean get() = tunnelControlsDelegate.easyTierAvailable
 
     /** 引擎文件是否已下载到本地（与"能否加载"是两回事：加载还依赖首次使用）。 */
-    val easyTierEngineInstalled: Boolean get() = EasyTierEngineStore.isInstalled()
+    val easyTierEngineInstalled: Boolean get() = easyTierEngineDelegate.easyTierEngineInstalled
 
-    /**
-     * 补齐组网身份：网络名或密钥为空时自动生成一套。
-     *
-     * 「填个网络名就能分享给任何人」的前提是**用户不用自己想名字**。
-     * 名字生成成 `mc-xxxxxx` 这种带随机后缀的形式，两个人同时第一次用也不会撞名。
-     * 已有值的字段一律不覆盖 —— 用户改过的网络名不能被一次进入页面就冲掉。
-     */
-    fun ensureEasyTierIdentity() {
-        val cfg = config.value
-        if (cfg.easyTierNetworkName.isNotBlank() && cfg.easyTierNetworkSecret.isNotBlank()) return
-        updateConfig {
-            it.copy(
-                easyTierNetworkName = it.easyTierNetworkName.ifBlank {
-                    "mc-" + EasyTierSettings.generateSecret().take(6)
-                },
-                easyTierNetworkSecret = it.easyTierNetworkSecret.ifBlank {
-                    EasyTierSettings.generateSecret()
-                }
-            )
-        }
-    }
+    /** 补齐组网身份：已有网络名和密钥不覆盖。 */
+    fun ensureEasyTierIdentity() = tunnelControlsDelegate.ensureEasyTierIdentity()
 
-    /**
-     * 换一套网络密钥。
-     *
-     * 用途是「把之前那批人踢出去」：EasyTier 没有账号体系、没有 ACL，
-     * 密钥是**唯一**的访问控制手段，泄漏了只能换。
-     */
-    fun regenerateEasyTierSecret() {
-        updateConfig { it.copy(easyTierNetworkSecret = EasyTierSettings.generateSecret()) }
-        _messageFlow.tryEmit(str(R.string.easytier_secret_regenerated))
-    }
+    /** 换一套网络密钥。 */
+    fun regenerateEasyTierSecret() = tunnelControlsDelegate.regenerateEasyTierSecret()
 
-    /**
-     * 本机在虚拟网里的地址（`虚拟IP:转发端口`）。网络名为空时返回空串。
-     *
-     * 端口取的是**转发端口**而不是服务端端口：两个监听不能占同一个端口，
-     * 谁后绑谁失败（见 `EasyTierSettings.toToml`）。服务端端口一变，
-     * 转发目标跟着变，但玩家看到的端口固定是转发端口。
-     */
-    fun easyTierAddress(): String {
-        val cfg = config.value
-        val name = cfg.easyTierNetworkName.trim()
-        val ip = cfg.easyTierVirtualIp.trim()
-            .ifBlank { if (name.isBlank()) "" else EasyTierSettings.deriveVirtualIp(name) }
-        return EasyTierSettings.playerAddress(ip, realServerPort())
-    }
+    /** 本机在虚拟网里的地址（`虚拟IP:转发端口`）。网络名为空时返回空串。 */
+    fun easyTierAddress(): String = tunnelControlsDelegate.easyTierAddress()
 
-    /** 给玩家的整段说明。复制按钮与二维码用的是**同一份文本**，不允许各拼一套。 */
-    fun easyTierShareText(): String {
-        val cfg = config.value
-        return str(
-            R.string.easytier_share_text,
-            cfg.easyTierNetworkName.trim(),
-            cfg.easyTierNetworkSecret.trim(),
-            easyTierAddress()
-        )
-    }
+    /** 给玩家的整段说明。复制按钮与二维码用同一份文本。 */
+    fun easyTierShareText(): String = tunnelControlsDelegate.easyTierShareText()
 
-    fun startEasyTier() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
-        if (!EasyTierEngine.available) {
-            _errorFlow.tryEmit(str(R.string.easytier_engine_missing))
-            return
-        }
-        if (easyTierState.value.status == TunnelStatus.Starting) {
-            _errorFlow.tryEmit(str(R.string.s200))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // 端口真源，理由同 STUN：配置文件被外部改动过时，
-                // port_forward 会把虚拟网里的流量转到一个没人监听的端口上。
-                refreshServerPropertiesNow()
-                val targetPort = realServerPort()
-                val result = tunnelManager.startEasyTier(
-                    config.value.copy(localPort = targetPort, tunnelType = TunnelType.EasyTier)
-                )
-                val failure = result.exceptionOrNull()
-                if (failure != null) {
-                    _errorFlow.tryEmit(failure.message ?: str(R.string.s204, ""))
-                } else {
-                    reportStart(easyTierState.value)
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s206, e.message))
-            }
-        }
-    }
+    fun startEasyTier() = tunnelControlsDelegate.startEasyTier()
 
-    fun stopEasyTier() {
-        viewModelScope.launch {
-            try {
-                tunnelManager.stopEasyTier()
-                _messageFlow.tryEmit(str(R.string.s207))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s208, e.message))
-            }
-        }
-    }
+    fun stopEasyTier() = tunnelControlsDelegate.stopEasyTier()
 
-    /**
-     * 用户在系统 VPN 授权框上点了「拒绝」/直接返回。
-     *
-     * 必须单独提示：`establish()` 在无授权时只返回 null，日志里也只有一句
-     * 「系统拒绝」，从那条信息看不出是用户自己关掉的还是系统拦的。
-     */
-    fun notifyEasyTierVpnDenied() {
-        _errorFlow.tryEmit(str(R.string.easytier_vpn_denied))
-    }
+    /** 用户在系统 VPN 授权框上点了「拒绝」/直接返回。 */
+    fun notifyEasyTierVpnDenied() = tunnelControlsDelegate.notifyEasyTierVpnDenied()
 
     /** 复制给玩家的整段说明（组网卡片与引导页共用）。 */
-    fun copyEasyTierGuide(context: android.content.Context) {
-        val text = easyTierShareText()
-        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-            as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("EasyTier", text))
-        _messageFlow.tryEmit(str(R.string.easytier_copied))
-    }
-
-    /**
-     * 启动调用返回后的统一提示。
-     *
-     * 注意：STUN 后端的 start() 是**异步就绪**的 —— 它立即返回，实际探测在后台
-     * 进行，就绪/失败稍后经状态流反映。所以这里只能提示「正在启动」，
-     * 不能按 Running 判定成功，否则网络慢时会误报失败。结果由界面观察状态流得出。
-     */
-    private fun reportStart(st: TunnelState) {
-        when (st.status) {
-            TunnelStatus.Running -> {
-                val url = st.publicUrl
-                _messageFlow.tryEmit(
-                    if (url.isNotBlank()) str(R.string.msg_tunnel_started_url, url)
-                    else str(R.string.msg_tunnel_started)
-                )
-            }
-            TunnelStatus.Starting -> _messageFlow.tryEmit(str(R.string.s203))
-            TunnelStatus.Failed -> _errorFlow.tryEmit(str(R.string.s204, st.errorMessage))
-            else -> _messageFlow.tryEmit(str(R.string.s205))
-        }
-    }
+    fun copyEasyTierGuide(context: android.content.Context) = tunnelControlsDelegate.copyEasyTierGuide(context)
 
     /** 复制任意公网地址（FRP 与 STUN 卡片各自传入自己那条通道的地址）。 */
-    fun copyPublicUrl(context: android.content.Context, url: String) {
-        if (url.isBlank()) {
-            _errorFlow.tryEmit(str(R.string.s209))
-            return
-        }
-        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE)
-            as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("Tunnel URL", url))
-        _messageFlow.tryEmit(str(R.string.s210, url))
-    }
+    fun copyPublicUrl(context: android.content.Context, url: String) = tunnelControlsDelegate.copyPublicUrl(context, url)
 
     fun sendCommand(line: String) {
         try {
@@ -3591,21 +2491,42 @@ class McViewModel(
     private val _installedPlugins = MutableStateFlow<List<PluginManager.InstalledPlugin>>(emptyList())
     val installedPlugins: StateFlow<List<PluginManager.InstalledPlugin>> = _installedPlugins.asStateFlow()
 
-    /** 真实已安装模组列表 */
-    private val _mods = MutableStateFlow<List<PluginManager.ModEntry>>(emptyList())
-    val mods: StateFlow<List<PluginManager.ModEntry>> = _mods.asStateFlow()
+    private val modsDelegate by lazy {
+        ModsDelegate(
+            app = app,
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    val curatedMods: List<PluginManager.CuratedMod>
-        get() = pluginManager.curatedMods
+    /** 真实已安装模组列表 */
+    val mods: StateFlow<List<PluginManager.ModEntry>> get() = modsDelegate.mods
+
+    val curatedMods: List<PluginManager.CuratedMod> get() = modsDelegate.curatedMods
+
+    private val pluginDownloadsDelegate by lazy {
+        PluginDownloadsDelegate(
+            app = app,
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            activeDirName = ::activeDirName,
+            currentModrinthLoader = { modrinthLoader(config.value.selectedCore) },
+            refreshMods = ::refreshMods,
+            refreshInstalledPlugins = ::refreshInstalledPlugins,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
     /** 当前正在下载的插件 id → 进度 */
-    private val _pluginDownloadProgress = MutableStateFlow<Map<String, PluginDownloadProgress>>(emptyMap())
-    val pluginDownloadProgress: StateFlow<Map<String, PluginDownloadProgress>> = _pluginDownloadProgress.asStateFlow()
+    val pluginDownloadProgress: StateFlow<Map<String, PluginDownloadProgress>> get() = pluginDownloadsDelegate.pluginDownloadProgress
 
     /** 是否有任意插件正在下载 */
-    val isPluginDownloading: StateFlow<Boolean> = _pluginDownloadProgress
-        .map { it.isNotEmpty() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val isPluginDownloading: StateFlow<Boolean> get() = pluginDownloadsDelegate.isPluginDownloading
 
     /** 扫描当前核心的 plugins 目录 */
     fun refreshInstalledPlugins() {
@@ -3625,108 +2546,62 @@ class McViewModel(
     // ── 模组管理 ──────────────────────────────────────────────────
 
     /** 扫描当前核心的 mods 目录 */
-    fun refreshMods() {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                _mods.value = withContext(Dispatchers.IO) { pluginManager.readMods(dirName) }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s214, e.message))
-            }
-        }
-    }
+    fun refreshMods() = modsDelegate.refreshMods()
 
     /** 切换模组启用状态 */
-    fun toggleModEnabled(fileName: String) {
-        // VM 侧兜底：UI 前台虽已拦截，但其他调用入口不能绕过——运行中改 mods 目录会导致本轮加载状态错乱
-        if (!requireServerStopped("启用或停用模组")) return
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { pluginManager.toggleModEnabled(fileName, dirName) }
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s215, e.message))
-            }
-        }
-    }
+    fun toggleModEnabled(fileName: String) = modsDelegate.toggleModEnabled(fileName)
 
     /** 删除模组 */
-    fun deleteMod(fileName: String) {
-        if (!requireServerStopped("删除模组")) return
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { pluginManager.deleteMod(fileName, dirName) }
-                if (ok) _messageFlow.tryEmit(str(R.string.s216, fileName))
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s217, e.message))
-            }
-        }
-    }
+    fun deleteMod(fileName: String) = modsDelegate.deleteMod(fileName)
 
     /** 从本地 Uri 上传模组 */
-    fun installModFromUri(uri: Uri) {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val name = withContext(Dispatchers.IO) { pluginManager.installModFromUri(uri, dirName) }
-                _messageFlow.tryEmit(str(R.string.s218, name))
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s219, e.message))
-            }
-        }
-    }
+    fun installModFromUri(uri: Uri) = modsDelegate.installModFromUri(uri)
 
     /** 从精选库下载安装模组（GitHub 动态解析最新版本） */
-    fun installCuratedMod(mod: PluginManager.CuratedMod) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val url = withContext(Dispatchers.IO) {
-                    pluginManager.resolveLatestAsset(mod.repo, mod.githubAssetPattern)
-                } ?: throw RuntimeException(str(R.string.err_parse_latest_url))
-                withContext(Dispatchers.IO) { pluginManager.installModFromUrl(url, mod.targetFileName, dirName) }
-                _messageFlow.tryEmit(str(R.string.s221, mod.name))
-                refreshMods()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s222, mod.name, e.message))
-            }
-        }
-    }
+    fun installCuratedMod(mod: PluginManager.CuratedMod) = modsDelegate.installCuratedMod(mod)
 
     /** 当前核心的 mods 目录路径 */
-    fun currentModsPath(): String? {
-        val dirName = activeDirName() ?: return null
-        return pluginManager.currentModsPath(dirName)
-    }
+    fun currentModsPath(): String? = modsDelegate.currentModsPath()
 
     // ── Modrinth 模组获取 ────────────────────────────────────────
 
-    private val _modrinthResults = MutableStateFlow<List<PluginManager.ModrinthHit>>(emptyList())
-    val modrinthResults: StateFlow<List<PluginManager.ModrinthHit>> = _modrinthResults.asStateFlow()
+    private val modrinthDiscoveryDelegate by lazy {
+        ModrinthDiscoveryDelegate(
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            currentServerVersion = ::currentServerVersion,
+            reportMessage = { _messageFlow.tryEmit(str(it)) }
+        )
+    }
+
+    val modrinthResults: StateFlow<List<PluginManager.ModrinthHit>> get() = modrinthDiscoveryDelegate.modrinthResults
 
     /** Modrinth 全部可用加载器 */
-    private val _modrinthLoaders = MutableStateFlow<List<String>>(emptyList())
-    val modrinthLoaders: StateFlow<List<String>> = _modrinthLoaders.asStateFlow()
+    val modrinthLoaders: StateFlow<List<String>> get() = modrinthDiscoveryDelegate.modrinthLoaders
 
     /** Modrinth 支持的 MC 游戏版本（供版本筛选下拉） */
-    private val _modrinthGameVersions = MutableStateFlow<List<String>>(emptyList())
-    val modrinthGameVersions: StateFlow<List<String>> = _modrinthGameVersions.asStateFlow()
+    val modrinthGameVersions: StateFlow<List<String>> get() = modrinthDiscoveryDelegate.modrinthGameVersions
 
     /** 模组筛选选中的游戏版本（默认当前服务器版本） */
-    private val _selectedModVersion = MutableStateFlow("")
-    val selectedModVersion: StateFlow<String> = _selectedModVersion.asStateFlow()
+    val selectedModVersion: StateFlow<String> get() = modrinthDiscoveryDelegate.selectedModVersion
 
-    /** 当前核心对应的 Modrinth 加载器名 */
-    private fun modrinthLoader(core: com.mineserve.mobile.data.ServerCore): String =
-        if (core == com.mineserve.mobile.data.ServerCore.Fabric || core == com.mineserve.mobile.data.ServerCore.Quilt) "fabric"
-        else "forge"
+    /** 加载 Modrinth 可用加载器列表（仅保留模组专用加载器，与插件池完全隔离） */
+    fun loadModrinthLoaders() = modrinthDiscoveryDelegate.loadModrinthLoaders()
+
+    /** 加载 Modrinth 游戏版本列表；默认选中当前服务器版本 */
+    fun loadModrinthGameVersions() = modrinthDiscoveryDelegate.loadModrinthGameVersions()
+
+    /** 切换模组筛选的 MC 版本 */
+    fun setSelectedModVersion(v: String) = modrinthDiscoveryDelegate.setSelectedModVersion(v)
+
+    val isLoadingMoreMods: StateFlow<Boolean> get() = modrinthDiscoveryDelegate.isLoadingMoreMods
+
+    /** 搜索 Modrinth 模组（多加载器 + 版本筛选 + 排序） */
+    fun searchModrinthMods(query: String, loaders: List<String>, sort: String, mcVersion: String) =
+        modrinthDiscoveryDelegate.searchModrinthMods(query, loaders, sort, mcVersion)
+
+    /** 分页加载更多 Modrinth 模组（追加到现有结果） */
+    fun loadMoreModrinthMods() = modrinthDiscoveryDelegate.loadMoreModrinthMods()
 
     /** 当前激活核心的 MC 版本（用于版本匹配判断） */
     private fun currentServerVersion(): String {
@@ -3735,298 +2610,43 @@ class McViewModel(
             ?: cfg.mcVersion
     }
 
-    /** 加载 Modrinth 可用加载器列表（仅保留模组专用加载器，与插件池完全隔离） */
-    fun loadModrinthLoaders() {
-        viewModelScope.launch {
-            val all = withContext(Dispatchers.IO) { pluginManager.fetchModrinthLoaders() }
-            _modrinthLoaders.value = pluginManager.filterModLoaders(all)
-        }
-    }
-
-    /** 加载 Modrinth 游戏版本列表；默认选中当前服务器版本 */
-    fun loadModrinthGameVersions() {
-        viewModelScope.launch {
-            val versions = withContext(Dispatchers.IO) { pluginManager.fetchModrinthGameVersions() }
-            _modrinthGameVersions.value = versions
-            val serverVer = currentServerVersion()
-            _selectedModVersion.value = serverVer.takeIf { it.isNotBlank() && it in versions } ?: versions.firstOrNull().orEmpty()
-        }
-    }
-
-    /** 切换模组筛选的 MC 版本 */
-    fun setSelectedModVersion(v: String) {
-        _selectedModVersion.value = v
-    }
-
-    /** Modrinth 搜索参数（用于分页加载更多） */
-    private data class ModrinthQueryArgs(
-        val query: String,
-        val loaders: List<String>,
-        val sort: String,
-        val mcVersion: String
-    )
-
-    private var lastModrinthModQuery: ModrinthQueryArgs? = null
-    private val _isLoadingMoreMods = MutableStateFlow(false)
-    val isLoadingMoreMods: StateFlow<Boolean> = _isLoadingMoreMods.asStateFlow()
-
-    /**
-     * 模组搜索的代际号。
-     *
-     * 搜索请求是异步的，用户快速改关键字/加载器时会发出多次请求，而**响应到达顺序
-     * 不保证与发出顺序一致**（网络抖动、后一次请求更小更先返回）。没有代际校验时，
-     * 晚到的旧响应会覆盖新结果——列表显示的内容与实际筛选条件不符。
-     * 每次新搜索/加载更多都递增，回写前比对，只有最新一代才允许写入。
-     */
-    private var modrinthModSearchToken = 0L
-
-    /** 搜索 Modrinth 模组（多加载器 + 版本筛选 + 排序） */
-    fun searchModrinthMods(query: String, loaders: List<String>, sort: String, mcVersion: String) {
-        lastModrinthModQuery = ModrinthQueryArgs(query, loaders, sort, mcVersion)
-        val token = ++modrinthModSearchToken
-        viewModelScope.launch {
-            val hits = withContext(Dispatchers.IO) {
-                pluginManager.searchModrinth(query, loaders, sort, projectType = "mod", mcVersion = mcVersion)
-            }
-            // 已被更新的一次搜索取代：本次结果整体丢弃，不覆盖新列表。
-            if (token != modrinthModSearchToken) return@launch
-            _modrinthResults.value = hits
-            if (hits.isEmpty()) {
-                _messageFlow.tryEmit(str(R.string.s223))
-            }
-        }
-    }
-
-    /** 分页加载更多 Modrinth 模组（追加到现有结果） */
-    fun loadMoreModrinthMods() {
-        val args = lastModrinthModQuery ?: run {
-            _messageFlow.tryEmit(str(R.string.vm_search_first))
-            return
-        }
-        if (_isLoadingMoreMods.value) return
-        val token = ++modrinthModSearchToken
-        viewModelScope.launch {
-            _isLoadingMoreMods.value = true
-            try {
-                val offset = _modrinthResults.value.size
-                val more = withContext(Dispatchers.IO) {
-                    pluginManager.searchModrinth(args.query, args.loaders, args.sort, projectType = "mod", mcVersion = args.mcVersion, offset = offset)
-                }
-                // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
-                if (token != modrinthModSearchToken) return@launch
-                if (more.isEmpty()) {
-                    _messageFlow.tryEmit(str(R.string.vm_no_more_results))
-                } else {
-                    _modrinthResults.value = (_modrinthResults.value + more).distinctBy { it.slug }
-                }
-            } finally {
-                _isLoadingMoreMods.value = false
-            }
-        }
-    }
-
     /** 检测已安装插件冲突（同名 / 同主类） */
     fun detectPluginConflicts(plugins: List<PluginManager.InstalledPlugin>): List<String> =
         pluginManager.detectPluginConflicts(plugins)
 
     /** 一键安装 Modrinth 模组（解析指定版本 release 直链并下载到 mods/） */
-    fun installModrinthMod(hit: PluginManager.ModrinthHit, mcVersion: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        val loader = modrinthLoader(config.value.selectedCore)
-        viewModelScope.launch {
-            try {
-                val url = withContext(Dispatchers.IO) {
-                    pluginManager.resolveModrinthDownload(hit.slug, mcVersion, loader)
-                } ?: throw RuntimeException(str(R.string.err_mod_incompatible))
-                val fileName = "${hit.slug}.jar"
-                withContext(Dispatchers.IO) {
-                    // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                    _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                        pluginId = hit.slug, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                    )) }
-                    pluginManager.installModFromUrl(url, fileName, dirName) { d, t, s ->
-                        _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                            pluginId = hit.slug, downloadedBytes = d, totalBytes = t, speedBytesPerSec = s
-                        )) }
-                    }
-                }
-                _pluginDownloadProgress.update { it - hit.slug }
-                _messageFlow.tryEmit(str(R.string.s225, hit.title))
-                refreshMods()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - hit.slug }
-                _errorFlow.tryEmit(str(R.string.s226, hit.title, e.message))
-            }
-        }
-    }
+    fun installModrinthMod(hit: PluginManager.ModrinthHit, mcVersion: String) =
+        pluginDownloadsDelegate.installModrinthMod(hit, mcVersion)
 
     // ── Modrinth 插件获取（插件页复用同一下载模块） ───────────────
 
-    private val _pluginModrinthResults = MutableStateFlow<List<PluginManager.ModrinthHit>>(emptyList())
-    val pluginModrinthResults: StateFlow<List<PluginManager.ModrinthHit>> = _pluginModrinthResults.asStateFlow()
+    val pluginModrinthResults: StateFlow<List<PluginManager.ModrinthHit>> get() = modrinthDiscoveryDelegate.pluginModrinthResults
 
-    private val _pluginModrinthLoaders = MutableStateFlow<List<String>>(emptyList())
-    val pluginModrinthLoaders: StateFlow<List<String>> = _pluginModrinthLoaders.asStateFlow()
+    val pluginModrinthLoaders: StateFlow<List<String>> get() = modrinthDiscoveryDelegate.pluginModrinthLoaders
 
-    private val _selectedPluginVersion = MutableStateFlow("")
-    val selectedPluginVersion: StateFlow<String> = _selectedPluginVersion.asStateFlow()
+    val selectedPluginVersion: StateFlow<String> get() = modrinthDiscoveryDelegate.selectedPluginVersion
 
-    fun loadPluginModrinthLoaders() {
-        viewModelScope.launch {
-            val all = withContext(Dispatchers.IO) { pluginManager.fetchModrinthLoaders() }
-            _pluginModrinthLoaders.value = pluginManager.filterPluginLoaders(all)
-        }
-    }
+    fun loadPluginModrinthLoaders() = modrinthDiscoveryDelegate.loadPluginModrinthLoaders()
 
-    fun loadPluginModrinthVersions() {
-        viewModelScope.launch {
-            val versions = withContext(Dispatchers.IO) { pluginManager.fetchModrinthGameVersions() }
-            if (_pluginModrinthResults.value.isEmpty()) {
-                val serverVer = currentServerVersion()
-                _selectedPluginVersion.value = serverVer.takeIf { it.isNotBlank() && it in versions } ?: versions.firstOrNull().orEmpty()
-            }
-        }
-    }
+    fun loadPluginModrinthVersions() = modrinthDiscoveryDelegate.loadPluginModrinthVersions()
 
-    fun setSelectedPluginVersion(v: String) {
-        _selectedPluginVersion.value = v
-    }
+    fun setSelectedPluginVersion(v: String) = modrinthDiscoveryDelegate.setSelectedPluginVersion(v)
 
-    private var lastModrinthPluginQuery: ModrinthQueryArgs? = null
-    private val _isLoadingMorePlugins = MutableStateFlow(false)
-    val isLoadingMorePlugins: StateFlow<Boolean> = _isLoadingMorePlugins.asStateFlow()
-
-    /** 插件搜索的代际号；理由同 [modrinthModSearchToken]。 */
-    private var modrinthPluginSearchToken = 0L
+    val isLoadingMorePlugins: StateFlow<Boolean> get() = modrinthDiscoveryDelegate.isLoadingMorePlugins
 
     /** 插件页搜索 Modrinth 插件（project_type=plugin，布局与模组页统一） */
-    fun searchModrinthPlugin(query: String, loaders: List<String>, sort: String, mcVersion: String) {
-        lastModrinthPluginQuery = ModrinthQueryArgs(query, loaders, sort, mcVersion)
-        val token = ++modrinthPluginSearchToken
-        viewModelScope.launch {
-            val hits = withContext(Dispatchers.IO) {
-                pluginManager.searchModrinth(query, loaders, sort, projectType = "plugin", mcVersion = mcVersion)
-            }
-            // 已被更新的一次搜索取代：丢弃本次结果，避免旧响应覆盖新列表。
-            if (token != modrinthPluginSearchToken) return@launch
-            _pluginModrinthResults.value = hits
-            if (hits.isEmpty()) {
-                _messageFlow.tryEmit(str(R.string.s223))
-            }
-        }
-    }
+    fun searchModrinthPlugin(query: String, loaders: List<String>, sort: String, mcVersion: String) =
+        modrinthDiscoveryDelegate.searchModrinthPlugin(query, loaders, sort, mcVersion)
 
     /** 分页加载更多 Modrinth 插件（追加到现有结果） */
-    fun loadMoreModrinthPlugin() {
-        val args = lastModrinthPluginQuery ?: run {
-            _messageFlow.tryEmit(str(R.string.vm_search_first))
-            return
-        }
-        if (_isLoadingMorePlugins.value) return
-        val token = ++modrinthPluginSearchToken
-        viewModelScope.launch {
-            _isLoadingMorePlugins.value = true
-            try {
-                val offset = _pluginModrinthResults.value.size
-                val more = withContext(Dispatchers.IO) {
-                    pluginManager.searchModrinth(args.query, args.loaders, args.sort, projectType = "plugin", mcVersion = args.mcVersion, offset = offset)
-                }
-                // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
-                if (token != modrinthPluginSearchToken) return@launch
-                if (more.isEmpty()) {
-                    _messageFlow.tryEmit(str(R.string.vm_no_more_results))
-                } else {
-                    _pluginModrinthResults.value = (_pluginModrinthResults.value + more).distinctBy { it.slug }
-                }
-            } finally {
-                _isLoadingMorePlugins.value = false
-            }
-        }
-    }
+    fun loadMoreModrinthPlugin() = modrinthDiscoveryDelegate.loadMoreModrinthPlugin()
 
     /** 安装 Modrinth 插件到 plugins/ 目录 */
-    fun installModrinthPlugin(hit: PluginManager.ModrinthHit, mcVersion: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        val loader = "bukkit"
-        viewModelScope.launch {
-            try {
-                val url = withContext(Dispatchers.IO) {
-                    pluginManager.resolveModrinthDownload(hit.slug, mcVersion, loader)
-                } ?: throw RuntimeException(str(R.string.err_plugin_incompatible))
-                val fileName = "${hit.slug}.jar"
-                withContext(Dispatchers.IO) {
-                    // 下载开始前先放占位进度，保证进度弹窗一定显示
-                    _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                        pluginId = hit.slug, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                    )) }
-                    pluginManager.installFromUrl(url, fileName, dirName) { d, t, s ->
-                        _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                            pluginId = hit.slug, downloadedBytes = d, totalBytes = t, speedBytesPerSec = s
-                        )) }
-                    }
-                }
-                _pluginDownloadProgress.update { it - hit.slug }
-                _messageFlow.tryEmit(str(R.string.s229, hit.title))
-                refreshInstalledPlugins()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - hit.slug }
-                _errorFlow.tryEmit(str(R.string.s230, hit.title, e.message))
-            }
-        }
-    }
+    fun installModrinthPlugin(hit: PluginManager.ModrinthHit, mcVersion: String) =
+        pluginDownloadsDelegate.installModrinthPlugin(hit, mcVersion)
 
     /** 从精选库下载安装插件 */
-    fun installCuratedPlugin(curated: PluginManager.CuratedPlugin) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (_pluginDownloadProgress.value.containsKey(curated.id)) {
-            _errorFlow.tryEmit(str(R.string.s227, curated.name))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // asset 文件名带版本号的精选资源（如 ViaVersion），先经 GitHub API 解析最新直链；
-                // 解析失败直接报错，不静默回退到 HTML 页面
-                val resolvedUrl = if (curated.githubAssetPattern != null) {
-                    withContext(Dispatchers.IO) {
-                        pluginManager.resolveLatestAsset(curated.repo, curated.githubAssetPattern)
-                    } ?: throw RuntimeException(str(R.string.err_parse_curated_url, curated.name))
-                } else {
-                    curated.downloadUrl
-                }
-                // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                _pluginDownloadProgress.update { it + (curated.id to PluginDownloadProgress(
-                    pluginId = curated.id, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                )) }
-                pluginManager.installFromUrl(
-                    resolvedUrl,
-                    curated.targetFileName,
-                    dirName
-                ) { downloaded, total, speed ->
-                    _pluginDownloadProgress.update { it + (curated.id to PluginDownloadProgress(
-                        pluginId = curated.id,
-                        downloadedBytes = downloaded,
-                        totalBytes = total,
-                        speedBytesPerSec = speed
-                    )) }
-                }
-                _messageFlow.tryEmit(str(R.string.s229, curated.name))
-                _pluginDownloadProgress.update { it - curated.id }
-                refreshInstalledPlugins()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - curated.id }
-                _errorFlow.tryEmit(str(R.string.s230, curated.name, e.message))
-            }
-        }
-    }
+    fun installCuratedPlugin(curated: PluginManager.CuratedPlugin) = pluginDownloadsDelegate.installCuratedPlugin(curated)
 
     /** 从本地 Uri 上传插件 */
     fun installPluginFromUri(uri: Uri) {
@@ -4100,94 +2720,40 @@ class McViewModel(
 
     // ── 精选插件更新检测 ──
 
+    private val curatedPluginUpdatesDelegate by lazy {
+        CuratedPluginUpdatesDelegate(
+            app = app,
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            activeDirName = ::activeDirName,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     /** 更新检测结果（key = curated.id） */
-    private val _curatedUpdates = MutableStateFlow<Map<String, PluginManager.CuratedUpdateInfo>>(emptyMap())
-    val curatedUpdates: StateFlow<Map<String, PluginManager.CuratedUpdateInfo>> = _curatedUpdates.asStateFlow()
+    val curatedUpdates: StateFlow<Map<String, PluginManager.CuratedUpdateInfo>> get() = curatedPluginUpdatesDelegate.curatedUpdates
 
     /** 是否正在检测更新 */
-    private val _isCheckingUpdates = MutableStateFlow(false)
-    val isCheckingUpdates: StateFlow<Boolean> = _isCheckingUpdates.asStateFlow()
+    val isCheckingUpdates: StateFlow<Boolean> get() = curatedPluginUpdatesDelegate.isCheckingUpdates
 
     /** 检测精选插件更新（5 分钟内有缓存不重复请求） */
-    fun checkCuratedUpdates() {
-        if (_isCheckingUpdates.value) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            _isCheckingUpdates.value = true
-            try {
-                val installed = pluginManager.scan(dirName)
-                val updates = pluginManager.checkCuratedUpdates(installed)
-                _curatedUpdates.value = updates.associateBy { it.curated.id }
-                val updateCount = updates.count { it.hasUpdate }
-                _messageFlow.tryEmit(
-                    if (updateCount > 0) str(R.string.msg_updates_found, updateCount)
-                    else str(R.string.msg_updates_all_latest)
-                )
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s243, e.message))
-            } finally {
-                _isCheckingUpdates.value = false
-            }
-        }
-    }
+    fun checkCuratedUpdates() = curatedPluginUpdatesDelegate.checkCuratedUpdates()
 
     /** 强制重新检测（清空缓存） */
-    fun forceRecheckUpdates() {
-        pluginManager.invalidateUpdateCache()
-        checkCuratedUpdates()
-    }
+    fun forceRecheckUpdates() = curatedPluginUpdatesDelegate.forceRecheckUpdates()
 
     // ── 自定义 URL 下载 ──
 
-    private val URL_DOWNLOAD_ID = "__custom_url__"
-
     /** 从自定义 URL 下载插件 */
-    fun installPluginFromUrl(url: String, customFileName: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (url.isBlank() || customFileName.isBlank()) {
-            _errorFlow.tryEmit(str(R.string.s244))
-            return
-        }
-        if (_pluginDownloadProgress.value.containsKey(URL_DOWNLOAD_ID)) {
-            _errorFlow.tryEmit(str(R.string.s245))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                _pluginDownloadProgress.update { it + (URL_DOWNLOAD_ID to PluginDownloadProgress(
-                    pluginId = URL_DOWNLOAD_ID, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                )) }
-                pluginManager.installFromUrl(url, customFileName, dirName) { downloaded, total, speed ->
-                    _pluginDownloadProgress.update { it + (URL_DOWNLOAD_ID to PluginDownloadProgress(
-                        pluginId = URL_DOWNLOAD_ID,
-                        downloadedBytes = downloaded,
-                        totalBytes = total,
-                        speedBytesPerSec = speed
-                    )) }
-                }
-                _messageFlow.tryEmit(str(R.string.s246, customFileName))
-                _pluginDownloadProgress.update { it - URL_DOWNLOAD_ID }
-                refreshInstalledPlugins()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - URL_DOWNLOAD_ID }
-                _errorFlow.tryEmit(str(R.string.s247, e.message))
-            }
-        }
-    }
+    fun installPluginFromUrl(url: String, customFileName: String) =
+        pluginDownloadsDelegate.installPluginFromUrl(url, customFileName)
 
     /** 判断自定义 URL 是否正在下载 */
-    fun isCustomUrlDownloading(): Boolean = _pluginDownloadProgress.value.containsKey(URL_DOWNLOAD_ID)
+    fun isCustomUrlDownloading(): Boolean = pluginDownloadsDelegate.isCustomUrlDownloading()
 
     /** 获取自定义 URL 下载进度（无则 null） */
-    fun customUrlDownloadProgress(): PluginDownloadProgress? =
-        _pluginDownloadProgress.value[URL_DOWNLOAD_ID]
+    fun customUrlDownloadProgress(): PluginDownloadProgress? = pluginDownloadsDelegate.customUrlDownloadProgress()
 
     /** 获取当前核心的 plugins 目录路径（用于 UI 显示） */
     fun currentPluginsPath(): String? {
@@ -4207,499 +2773,162 @@ class McViewModel(
             .firstOrNull { it.name == config.value.activeCoreName }
             ?.core == ServerCore.Paper
 
-    /** 创建 world 目录快照（zip 打包），返回快照文件路径或 null */
-    suspend fun createSnapshot(): String? {
-        val dirName = activeDirName() ?: return null
-        return withContext(Dispatchers.IO) {
-            backupManager.backupWorldToExternal(dirName, BackupManager.BackupOrigin.Manual)
-        }
+    private val externalBackupsDelegate by lazy {
+        ExternalBackupsDelegate(
+            app = app,
+            scope = viewModelScope,
+            backupManager = backupManager,
+            config = config,
+            activeDirName = ::activeDirName,
+            serversDir = { repo.termuxRuntime.serversDir },
+            updateConfig = ::updateConfig,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
+
+    /** 创建 world 目录快照（zip 打包），返回快照文件路径或 null */
+    suspend fun createSnapshot(): String? = externalBackupsDelegate.createSnapshot()
 
     /** 更新前备份存档（更新对话框「先备份存档」入口） */
-    fun backupBeforeUpdate() {
-        viewModelScope.launch {
-            try {
-                val path = createSnapshot()
-                if (path != null) {
-                    _messageFlow.tryEmit(str(R.string.update_backup_done, java.io.File(path).name))
-                } else {
-                    _messageFlow.tryEmit(str(R.string.update_backup_empty))
-                }
-            } catch (e: Exception) {
-                _messageFlow.tryEmit(str(R.string.err_backup_fail, e.message))
-            }
-        }
-    }
+    fun backupBeforeUpdate() = externalBackupsDelegate.backupBeforeUpdate()
 
     /** 外部备份整个世界（world+nether+end → 外部目录） */
-    fun backupWorldToExternal() {
-        val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
-        viewModelScope.launch {
-            try {
-                val path = withContext(Dispatchers.IO) {
-                    backupManager.backupWorldToExternal(dirName, BackupManager.BackupOrigin.Manual)
-                }
-                if (path != null) {
-                    _messageFlow.tryEmit(str(R.string.msg_world_backup_done, java.io.File(path).name))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.err_world_backup_empty))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_world_backup_fail, e.message))
-            }
-        }
-    }
+    fun backupWorldToExternal() = externalBackupsDelegate.backupWorldToExternal()
 
     /** 外部备份整个服务器（world+核心+配置+插件 → 外部目录，文件名带核心类型） */
-    fun backupServerToExternal() {
-        val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
-        // 当前服务器核心类型写入文件名（还原时据此识别核心）
-        val coreTag = config.value.installedCores
-            .firstOrNull { it.dirName == dirName }?.core?.displayName
-        viewModelScope.launch {
-            try {
-                val path = withContext(Dispatchers.IO) {
-                    backupManager.backupServerToExternal(dirName, coreTag, BackupManager.BackupOrigin.Manual)
-                }
-                if (path != null) {
-                    _messageFlow.tryEmit(str(R.string.msg_server_backup_done, java.io.File(path).name))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.err_server_backup_fail))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_server_backup_fail_msg, e.message))
-            }
-        }
-    }
+    fun backupServerToExternal() = externalBackupsDelegate.backupServerToExternal()
 
     // ── 外部备份导入/还原（含重名检测） ─────────────────────────────
 
     /** 服务器还原重名冲突（UI 弹框询问） */
     data class RestoreConflict(val zipName: String, val dirName: String)
 
-    private val _restoreConflict = kotlinx.coroutines.flow.MutableStateFlow<RestoreConflict?>(null)
-    val restoreConflict: kotlinx.coroutines.flow.StateFlow<RestoreConflict?> = _restoreConflict.asStateFlow()
+    val restoreConflict: kotlinx.coroutines.flow.StateFlow<RestoreConflict?> get() = externalBackupsDelegate.restoreConflict
 
     /** 列出外部备份 zip（供备份页展示） */
-    fun externalBackups(): List<java.io.File> = com.mineserve.mobile.server.ExternalBackupStore.listBackups()
+    fun externalBackups(): List<java.io.File> = externalBackupsDelegate.externalBackups()
 
     fun externalBackupInfo(file: java.io.File): BackupManager.ExternalBackupInfo =
-        backupManager.parseExternalBackup(file.name, file.lastModified())
+        externalBackupsDelegate.externalBackupInfo(file)
 
     /** 删除外部备份文件 */
-    fun deleteExternalBackup(name: String) {
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    backupManager.deleteExternalBackup(name)
-                }
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_backup_deleted, name))
-                else _errorFlow.tryEmit(str(R.string.err_backup_delete_fail, name))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_backup_delete_fail, e.message))
-            }
-        }
-    }
+    fun deleteExternalBackup(name: String) = externalBackupsDelegate.deleteExternalBackup(name)
 
     /** 从手机其他位置导入备份 zip 到外部备份目录（SAF 选择） */
-    fun importBackupToExternal(uri: android.net.Uri) {        viewModelScope.launch {
-            try {
-                if (!com.mineserve.mobile.server.ExternalBackupStore.ensure()) {
-                    _errorFlow.tryEmit(str(R.string.err_ext_dir_unavailable))
-                    return@launch
-                }
-                val fileName = withContext(Dispatchers.IO) {
-                    app.contentResolver.query(
-                        uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
-                    )?.use { c ->
-                        if (c.moveToFirst()) c.getString(0) else null
-                    } ?: "backup_${System.currentTimeMillis()}.zip"
-                }
-                val safeName = fileName?.takeIf { it.endsWith(".zip") } ?: "backup_${System.currentTimeMillis()}.zip"
-                val target = java.io.File(com.mineserve.mobile.server.ExternalBackupStore.rootDir, safeName)
-                withContext(Dispatchers.IO) {
-                    app.contentResolver.openInputStream(uri)?.use { input ->
-                        target.outputStream().use { output -> input.copyTo(output) }
-                    }
-                }
-                _messageFlow.tryEmit(str(R.string.msg_backup_imported, safeName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_backup_import_fail, e.message))
-            }
-        }
-    }
+    fun importBackupToExternal(uri: android.net.Uri) = externalBackupsDelegate.importBackupToExternal(uri)
 
     /** 重命名外部备份文件 */
-    fun renameExternalBackup(oldName: String, newName: String) {
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { backupManager.renameExternalBackup(oldName, newName) }
-                if (ok) _messageFlow.tryEmit(str(R.string.bk_rename_done, newName))
-                else _errorFlow.tryEmit(str(R.string.bk_rename_fail))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.bk_rename_fail))
-            }
-        }
-    }
+    fun renameExternalBackup(oldName: String, newName: String) = externalBackupsDelegate.renameExternalBackup(oldName, newName)
 
     /** 校验外部备份 zip 完整性 */
-    fun validateExternalBackup(name: String) {
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { backupManager.validateZip(name) }
-                if (ok) _messageFlow.tryEmit(str(R.string.bk_validate_done, name))
-                else _errorFlow.tryEmit(str(R.string.bk_validate_fail, name))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.bk_validate_fail, name))
-            }
-        }
-    }
+    fun validateExternalBackup(name: String) = externalBackupsDelegate.validateExternalBackup(name)
 
     /** 从外部 zip 还原世界（zip 内 world/ 前缀） */
-    fun restoreWorldFromExternal(zipName: String) {
-        val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
-        val file = java.io.File(com.mineserve.mobile.server.ExternalBackupStore.rootDir, zipName)
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { backupManager.restoreWorldFromExternal(file, dirName) }
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_world_restored, zipName))
-                else _errorFlow.tryEmit(str(R.string.err_world_restore_fail))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_world_restore_fail_msg, e.message))
-            }
-        }
-    }
+    fun restoreWorldFromExternal(zipName: String) = externalBackupsDelegate.restoreWorldFromExternal(zipName)
 
     /** 请求还原服务器：解析目标目录名与核心类型，存在同名则发冲突事件（UI 弹框） */
-    fun requestRestoreServer(zipName: String) {
-        val (dirName, coreTag) = backupManager.parseServerZipInfo(zipName)
-        val target = java.io.File(repo.termuxRuntime.serversDir, dirName)
-        if (target.exists()) {
-            _restoreConflict.value = RestoreConflict(zipName, dirName)
-        } else {
-            performRestoreServer(zipName, dirName, overwrite = false, coreTag = coreTag)
-        }
-    }
+    fun requestRestoreServer(zipName: String) = externalBackupsDelegate.requestRestoreServer(zipName)
 
     /** 确认还原服务器（overwrite=true 覆盖同名） */
-    fun confirmRestoreServer(overwrite: Boolean) {
-        val conflict = _restoreConflict.value ?: return
-        _restoreConflict.value = null
-        val coreTag = backupManager.parseServerZipInfo(conflict.zipName).second
-        performRestoreServer(conflict.zipName, conflict.dirName, overwrite, coreTag)
-    }
+    fun confirmRestoreServer(overwrite: Boolean) = externalBackupsDelegate.confirmRestoreServer(overwrite)
 
-    fun dismissRestoreConflict() { _restoreConflict.value = null }
-
-    private fun performRestoreServer(zipName: String, dirName: String, overwrite: Boolean, coreTag: String? = null) {
-        val file = java.io.File(com.mineserve.mobile.server.ExternalBackupStore.rootDir, zipName)
-        viewModelScope.launch {
-            try {
-                // 静默失败会让用户以为「点了没反应」。这两步是 restoreServerFromExternal
-                // 内部最常见的两个 early-return，先在这里判一次并给出明确原因。
-                if (!file.isFile) {
-                    _errorFlow.tryEmit(str(R.string.err_restore_zip_missing, zipName))
-                    return@launch
-                }
-                if (!withContext(Dispatchers.IO) { backupManager.validateZipFile(file) }) {
-                    _errorFlow.tryEmit(str(R.string.err_restore_zip_corrupt, zipName))
-                    return@launch
-                }
-                val ok = withContext(Dispatchers.IO) {
-                    backupManager.restoreServerFromExternal(file, dirName, overwrite)
-                }
-                if (ok) {
-                    // 注册到已安装核心列表并设为当前选中（否则概览/核心列表不显示）
-                    registerRestoredCore(dirName, coreTag)
-                    _messageFlow.tryEmit(str(R.string.msg_server_restored, zipName))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.err_server_restore_fail))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_server_restore_fail_msg, e.message))
-            }
-        }
-    }
-
-    /**
-     * 把还原的服务器注册进已安装核心列表（config.installedCores）并设为当前选中。
-     * 核心类型从备份文件名识别（coreTag），无法识别时标记 Unknown。
-     */
-    private fun registerRestoredCore(dirName: String, coreTag: String? = null) {
-        val cfg = config.value
-        cfg.installedCores.firstOrNull { it.dirName == dirName }?.let { existing ->
-            // 已存在：确保设为当前选中。
-            // activeCoreName 对应的是 InstalledCore.**name**（全项目都按
-            // `find { it.name == activeCoreName }` 取，见 WidgetUpdater / McpServers），
-            // 而改名只改 name 不改 dirName —— 这里写成 dirName 会让改过名的核心
-            // 变成一个查不到的值，启动时报「未选择要启动的服务端核心」。
-            if (cfg.activeCoreName != existing.name) {
-                updateConfig { it.copy(activeCoreName = existing.name) }
-            }
-            return
-        }
-        // 从 coreTag（核心 displayName）匹配枚举，未知则 Unknown
-        val core = com.mineserve.mobile.data.ServerCore.entries
-            .firstOrNull { it.displayName == coreTag }
-            ?: com.mineserve.mobile.data.ServerCore.Unknown
-        updateConfig {
-            it.copy(
-                installedCores = it.installedCores + com.mineserve.mobile.data.InstalledCore(
-                    name = dirName,
-                    core = core,
-                    version = str(R.string.ver_restored),
-                    dirName = dirName,
-                    location = StorageLocation.Internal
-                ),
-                activeCoreName = dirName
-            )
-        }
-    }
+    fun dismissRestoreConflict() = externalBackupsDelegate.dismissRestoreConflict()
 
     // ── 导入服务器（文件夹 / 压缩包 / JAR） ────────────────────────
 
-    private val serverImporter = ServerImporter(app, repo.termuxRuntime)
+    private val serverImportDelegate by lazy {
+        ServerImportDelegate(
+            app = app,
+            scope = viewModelScope,
+            serverImporter = ServerImporter(app, repo.termuxRuntime),
+            updateConfig = ::updateConfig,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _isImportingServer = MutableStateFlow(false)
-    val isImportingServer: StateFlow<Boolean> = _isImportingServer.asStateFlow()
+    val isImportingServer: StateFlow<Boolean> get() = serverImportDelegate.isImportingServer
 
-    private val _importProgress = MutableStateFlow<Float?>(null)
-    val importProgress: StateFlow<Float?> = _importProgress.asStateFlow()
+    val importProgress: StateFlow<Float?> get() = serverImportDelegate.importProgress
 
     /** 从外部存储文件夹（SAF tree）导入为新的服务器；displayName 为空时自动解析文件夹名 */
-    fun importServerFromFolder(uri: android.net.Uri, displayName: String? = null) {
-        viewModelScope.launch {
-            _isImportingServer.value = true
-            _importProgress.value = null
-            try {
-                val imported = withContext(Dispatchers.IO) {
-                    serverImporter.importFromFolder(uri, displayName) { done, total ->
-                        _importProgress.value = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else null
-                    }
-                }
-                registerImportedServer(imported)
-                _messageFlow.tryEmit(importServerMessage(imported))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.import_server_failed, e.message))
-            } finally {
-                _isImportingServer.value = false
-                _importProgress.value = null
-            }
-        }
-    }
+    fun importServerFromFolder(uri: android.net.Uri, displayName: String? = null) =
+        serverImportDelegate.importServerFromFolder(uri, displayName)
 
     /** 从外部存储压缩包（zip/tar/tar.gz/tar.xz/tar.bz2/7z）导入为新的服务器；displayName 为空时自动解析 */
-    fun importServerFromArchive(uri: android.net.Uri, displayName: String? = null) {
-        viewModelScope.launch {
-            _isImportingServer.value = true
-            _importProgress.value = null
-            try {
-                val imported = withContext(Dispatchers.IO) {
-                    serverImporter.importFromArchive(uri, displayName) { done, total ->
-                        _importProgress.value = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else null
-                    }
-                }
-                registerImportedServer(imported)
-                _messageFlow.tryEmit(importServerMessage(imported))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.import_server_failed, e.message))
-            } finally {
-                _isImportingServer.value = false
-                _importProgress.value = null
-            }
-        }
-    }
+    fun importServerFromArchive(uri: android.net.Uri, displayName: String? = null) =
+        serverImportDelegate.importServerFromArchive(uri, displayName)
 
     /** 从单个服务端 JAR 创建标准服务器目录后导入。 */
-    fun importServerFromJar(uri: android.net.Uri, displayName: String? = null) {
-        viewModelScope.launch {
-            _isImportingServer.value = true
-            _importProgress.value = null
-            try {
-                val imported = withContext(Dispatchers.IO) {
-                    serverImporter.importFromJar(uri, displayName) { done, total ->
-                        _importProgress.value = if (total > 0) (done.toFloat() / total).coerceIn(0f, 1f) else null
-                    }
-                }
-                registerImportedServer(imported)
-                _messageFlow.tryEmit(importServerMessage(imported))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.import_server_failed, e.message))
-            } finally {
-                _isImportingServer.value = false
-                _importProgress.value = null
-            }
-        }
-    }
+    fun importServerFromJar(uri: android.net.Uri, displayName: String? = null) =
+        serverImportDelegate.importServerFromJar(uri, displayName)
 
     /** 为导入确认对话框预填名称：kind 为 folder / archive / jar */
-    suspend fun proposeImportName(kind: String, uri: android.net.Uri): String? = withContext(Dispatchers.IO) {
-        runCatching {
-            when (kind) {
-            "folder" -> serverImporter.proposeFolderName(uri)
-            "jar" -> serverImporter.proposeJarName(uri)
-            "modpack" -> serverImporter.proposeArchiveName(uri)
-            else -> serverImporter.proposeArchiveName(uri)
-            }
-        }.getOrNull()
-    }
-
-    /** 把导入的服务器注册进已安装核心列表并设为当前选中（核心/版本为自动识别结果） */
-    private fun registerImportedServer(imported: ServerImporter.ImportedServer) {
-        // 导入的服务器一律在统一存储目录（导入器保证），因此位置固定为 Internal。
-        updateConfig {
-            val core = imported.core ?: com.mineserve.mobile.data.ServerCore.Unknown
-            it.copy(
-                installedCores = it.installedCores.filter { c -> c.dirName != imported.dirName } +
-                    com.mineserve.mobile.data.InstalledCore(
-                        name = imported.displayName,
-                        core = core,
-                        version = imported.version ?: str(R.string.ver_imported),
-                        dirName = imported.dirName,
-                        serverFile = imported.serverFile,
-                        location = StorageLocation.Internal
-                    ),
-                activeCoreName = imported.displayName
-            )
-        }
-    }
-
-    /** 导入完成提示（含自动识别的核心与版本） */
-    private fun importServerMessage(imported: ServerImporter.ImportedServer): String {
-        val coreLabel = if (imported.core != null && imported.core != com.mineserve.mobile.data.ServerCore.Unknown) {
-            listOf(imported.core.displayName, imported.version).filter { !it.isNullOrBlank() }.joinToString(" ")
-        } else null
-        val suffix = if (coreLabel != null) {
-            str(R.string.import_server_core, coreLabel)
-        } else {
-            str(R.string.import_server_core_unknown)
-        }
-        return str(R.string.import_server_done, imported.displayName) + "（" + suffix + "）"
-    }
+    suspend fun proposeImportName(kind: String, uri: android.net.Uri): String? =
+        serverImportDelegate.proposeImportName(kind, uri)
 
 
     // ── 备份恢复管理 ────────────────────────────────────────────────
 
     private val backupManager = BackupManager(repo.termuxRuntime)
 
-    private val _snapshots = MutableStateFlow<List<BackupManager.SnapshotInfo>>(emptyList())
-    val snapshots: StateFlow<List<BackupManager.SnapshotInfo>> = _snapshots.asStateFlow()
+    private val snapshotsDelegate by lazy {
+        SnapshotsDelegate(
+            app = app,
+            scope = viewModelScope,
+            backupManager = backupManager,
+            activeDirName = ::activeDirName,
+            runtimeRoot = { repo.termuxRuntime.installer.rootDir },
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    val snapshots: StateFlow<List<BackupManager.SnapshotInfo>> get() = snapshotsDelegate.snapshots
 
     /** 加载快照列表 */
-    fun loadSnapshots() {
-        viewModelScope.launch {
-            try {
-                _snapshots.value = withContext(Dispatchers.IO) { backupManager.listSnapshots() }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s248, e.message))
-            }
-        }
-    }
+    fun loadSnapshots() = snapshotsDelegate.loadSnapshots()
 
     /** 删除当前激活核心的世界文件夹（world / world_nether / world_the_end），不可恢复 */
-    fun deleteWorldDirs() {
-        // 必须拦住运行中的删除：服务端正持有 region 句柄持续写盘，目录被 unlink 后
-        // 进程会继续写已删除的 inode，停止/崩溃时世界直接消失（不可恢复）。
-        // createWorld / resetWorld / deleteCore 都有这道闸门，这里漏了。
-        if (!requireServerStopped("删除世界目录")) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s249))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val deleted = withContext(Dispatchers.IO) {
-                    val base = repo.termuxRuntime.serverDirFor(dirName)
-                    var count = 0
-                    for (name in listOf("world", "world_nether", "world_the_end")) {
-                        val dir = File(base, name)
-                        if (FileOps.existsNoFollow(dir) && FileOps.deleteRecursively(dir)) count++
-                    }
-                    count
-                }
-                _messageFlow.tryEmit(str(R.string.ui_world_deleted, deleted))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.ui_world_delete_failed))
-            }
-        }
-    }
+    fun deleteWorldDirs() = worldMaintenanceDelegate.deleteWorldDirs()
 
     /** 恢复快照（会先停止服务器） */
-    fun restoreSnapshot(name: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s249))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                _messageFlow.tryEmit(str(R.string.s250))
-                val ok = withContext(Dispatchers.IO) { backupManager.restoreSnapshot(name, dirName) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s251))
-                    loadSnapshots()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s252))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s253, e.message))
-            }
-        }
-    }
+    fun restoreSnapshot(name: String) = snapshotsDelegate.restoreSnapshot(name)
 
     /** 导出快照 zip 到用户选择的 Uri（自定义导出路径） */
-    fun exportSnapshotToUri(snapshotName: String, uri: android.net.Uri) {
-        val src = java.io.File(repo.termuxRuntime.installer.rootDir, "home/snapshots/$snapshotName")
-        if (!src.exists()) {
-            _errorFlow.tryEmit(str(R.string.s254))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val output = app.contentResolver.openOutputStream(uri)
-                        ?: throw RuntimeException(str(R.string.err_open_export))
-                    output.use { os -> src.inputStream().use { it.copyTo(os) } }
-                }
-                _messageFlow.tryEmit(str(R.string.s256, snapshotName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s257, e.message))
-            }
-        }
-    }
+    fun exportSnapshotToUri(snapshotName: String, uri: android.net.Uri) = snapshotsDelegate.exportSnapshotToUri(snapshotName, uri)
 
     /** 删除快照 */
-    fun deleteSnapshot(name: String) {
-        // 兜底：运行中删除快照会毁掉「出事可回滚」的备份，与服务端活动期解耦更安全
-        if (!requireServerStopped("删除快照")) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { backupManager.deleteSnapshot(name) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s258, name))
-                    loadSnapshots()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s259))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s260, e.message))
-            }
-        }
-    }
+    fun deleteSnapshot(name: String) = snapshotsDelegate.deleteSnapshot(name)
 
     // ── server.properties 编辑 ─────────────────────────────────────
 
     private val propertiesManager = ServerPropertiesManager(repo.termuxRuntime)
     private val powerNukkitXConfigManager = PowerNukkitXConfigManager(repo.termuxRuntime)
 
-    fun isPowerNukkitXActive(): Boolean = config.value.installedCores
-        .firstOrNull { it.name == config.value.activeCoreName }?.core == ServerCore.PowerNukkitX
+    private val serverPropertiesDelegate by lazy {
+        ServerPropertiesDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            propertiesManager = propertiesManager,
+            powerNukkitXConfigManager = powerNukkitXConfigManager,
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            updateLocalPort = { port -> updateConfig { it.copy(localPort = port) } },
+            refreshLanIp = ::refreshLanIp,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    fun supportedServerPropertyKeys(): Set<String> =
-        if (isPowerNukkitXActive()) powerNukkitXConfigManager.supportedKeys()
-        else emptySet()
+    fun isPowerNukkitXActive(): Boolean = serverPropertiesDelegate.isPowerNukkitXActive()
 
-    private val _serverProperties = MutableStateFlow<Map<String, String>>(emptyMap())
-    val serverProperties: StateFlow<Map<String, String>> = _serverProperties.asStateFlow()
+    fun supportedServerPropertyKeys(): Set<String> = serverPropertiesDelegate.supportedServerPropertyKeys()
+
+    val serverProperties: StateFlow<Map<String, String>> get() = serverPropertiesDelegate.serverProperties
 
     /**
      * 服务端真正监听的端口（端口真源）。
@@ -4711,137 +2940,28 @@ class McViewModel(
      * 地址栏、复制地址、诊断检查都读这里，不再直接读 [McConfig.localPort] ——
      * 后者可能停在旧值（历史上「配置 25562、显示 19132」就是这么来的）。
      */
-    val serverPort: StateFlow<Int> = combine(_serverProperties, config) { props, cfg ->
-        ServerPort.resolve(props["server-port"], activeCoreType() ?: cfg.selectedCore, cfg.localPort)
-    }.distinctUntilChanged().stateIn(
-        viewModelScope, SharingStarted.WhileSubscribed(5_000),
-        ServerPort.DEFAULT_JAVA
-    )
+    val serverPort: StateFlow<Int> = serverPropertiesDelegate.serverPort
 
-    /** 当前激活核心的类型；未选择时返回 null。 */
-    private fun activeCoreType(): ServerCore? = config.value.installedCores
-        .firstOrNull { it.name == config.value.activeCoreName }?.core
-
-    /**
-     * **此刻**服务端真正在监听的端口。
-     *
-     * 与 [serverPort] 的区别：那个是 `WhileSubscribed(5s)` 的 StateFlow，没有订阅者时
-     * `.value` 会退化成初始值，拿去启动穿透就会打到错误的端口上。启动链路上的调用方
-     * 一律用这个函数 —— 它每次现算，不经过任何缓存。
-     */
-    private fun realServerPort(): Int = ServerPort.resolve(
-        _serverProperties.value["server-port"],
-        activeCoreType() ?: config.value.selectedCore,
-        config.value.localPort
-    )
+    private fun realServerPort(): Int = serverPropertiesDelegate.realServerPort()
 
     /**
      * 配置文件当前是否已生成（服务端首次启动后才会由服务端写出）。
      *
      * null 表示尚未检测完成，UI 应展示加载态而非误判为"未生成"。
      */
-    private val _serverPropertiesExist = MutableStateFlow<Boolean?>(null)
-    val serverPropertiesExist: StateFlow<Boolean?> = _serverPropertiesExist.asStateFlow()
+    val serverPropertiesExist: StateFlow<Boolean?> get() = serverPropertiesDelegate.serverPropertiesExist
 
     /**
      * 加载 server.properties，并同步更新配置文件是否已生成的状态。
      *
      * 「发出去就不管」；需要**读完再取端口**的调用方用 [refreshServerPropertiesNow]。
      */
-    fun loadServerProperties() {
-        viewModelScope.launch { refreshServerPropertiesNow() }
-    }
+    fun loadServerProperties() = serverPropertiesDelegate.loadServerProperties()
 
-    /**
-     * 重新读一遍服务端配置文件，并**等它读完**。
-     *
-     * 为什么必须能「等」：端口真源历史上只在进入「服务器配置」页时才被读一次。
-     * 用户在配置文件里把端口从 25565 改成别的，然后直接去开穿透 —— 隧道拿到的还是
-     * 上一次的值，于是把玩家送到 25565，一个没人监听的端口。界面上隧道「已就绪」，
-     * 日志里只有一句 `connect: connection refused`，从字面完全看不出是端口对不上。
-     * 启动前先把真源读回来，这条坑就不存在了。
-     */
-    private suspend fun refreshServerPropertiesNow() {
-        val dirName = activeDirName() ?: return
-        try {
-            val pnx = isPowerNukkitXActive()
-            // PNX 的真实配置是 pnx.yml，Java 系是 server.properties，两者要分别判定，
-            // 否则 PNX 下永远看 server.properties 的存在性，导致 pnx.yml 还没生成就放行表单。
-            val exists = withContext(Dispatchers.IO) {
-                if (pnx) powerNukkitXConfigManager.exists(dirName)
-                else propertiesManager.exists(dirName)
-            }
-            _serverPropertiesExist.value = exists
-            val loaded = withContext(Dispatchers.IO) {
-                if (pnx) powerNukkitXConfigManager.read(dirName)
-                else propertiesManager.readProperties(dirName)
-            }
-            _serverProperties.value = loaded
-            // 端口真源镜像：配置文件已生成且含合法端口时，把它同步回 [McConfig.localPort]。
-            // 「服务器配置」页是端口唯一编辑入口（网络页的输入框已在 1.2.8 移除），
-            // 不同步的话地址栏会一直停在旧值 —— 这正是「配置 25562、显示 19132」的成因。
-            // 只在 exists 为真时同步：文件不存在时 loaded 是空 Map，会把 localPort 误覆盖成默认值。
-            if (exists) ServerPort.parse(loaded["server-port"])?.let { port ->
-                if (config.value.localPort != port) updateConfig { it.copy(localPort = port) }
-            }
-        } catch (e: Exception) {
-            _errorFlow.tryEmit(str(R.string.s261, e.message))
-        }
-    }
+    private suspend fun refreshServerPropertiesNow() = serverPropertiesDelegate.refreshServerPropertiesNow()
 
     /** 保存 server.properties */
-    fun saveServerProperties(props: Map<String, String>) {
-        // PowerNukkitX 的配置落在 pnx.yml，而服务端退出时会整份回写该文件，
-        // 运行期间的修改必然被覆盖；PowerNukkitXConfigManager.write 也会主动拒绝运行中写入。
-        // 在这里提前拦截是为了给出明确原因，而不是让用户看到笼统的「保存失败」。
-        if (isPowerNukkitXActive() && !requireServerStopped("修改 PowerNukkitX 配置")) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s249))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // 返回值第二个元素是「本次实际生效的端口」：Java 系取提交值，缺省时退回
-                // 文件原值再退回核心默认端口；PNX 系还要同时写 server.properties，
-                // 那里的端口就是最终生效值。保存成功后据此回写 [McConfig.localPort]。
-                val result = withContext(Dispatchers.IO) {
-                    val current = propertiesManager.readProperties(dirName)
-                    if (isPowerNukkitXActive()) {
-                        val supported = props.filterKeys { it in powerNukkitXConfigManager.supportedKeys() }
-                        val yamlOk = powerNukkitXConfigManager.write(dirName, supported)
-                        val effectivePort = props["server-port"] ?: current["server-port"]
-                            ?: ServerPort.defaultFor(ServerCore.PowerNukkitX).toString()
-                        val serverProps = current.toMutableMap()
-                        serverProps["server-port"] = effectivePort
-                        (yamlOk && propertiesManager.writeProperties(serverProps, dirName)) to effectivePort
-                    } else {
-                        val core = activeCoreType() ?: config.value.selectedCore
-                        val effectivePort = props["server-port"] ?: current["server-port"]
-                            ?: ServerPort.defaultFor(core).toString()
-                        propertiesManager.writeProperties(props, dirName) to effectivePort
-                    }
-                }
-                if (result.first) {
-                    _messageFlow.tryEmit(str(R.string.s262))
-                    // 合并而不是替换：属性页现在只提交「值变过的键」（无损保存），
-                    // 直接赋值会把页面上没碰过的键从内存镜像里抹掉 —— 端口真源、
-                    // 白名单提示都读这份镜像，抹掉后界面会显示回默认值。
-                    _serverProperties.value = _serverProperties.value + props
-                    // 端口真源回写：「服务器配置」页是端口唯一编辑入口（网络页的输入框已在
-                    // 1.2.8 移除）。不回写的话地址栏/穿透默认端口会停在旧值 ——
-                    // 用户改了 25562 而界面仍显示 19132 就是这么来的。
-                    ServerPort.parse(result.second)?.let { port ->
-                        if (config.value.localPort != port) updateConfig { it.copy(localPort = port) }
-                    }
-                    refreshLanIp()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s263))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s264, e.message))
-            }
-        }
-    }
+    fun saveServerProperties(props: Map<String, String>) = serverPropertiesDelegate.saveServerProperties(props)
 
     // ── 玩家管理 ────────────────────────────────────────────────────
 
@@ -4849,22 +2969,35 @@ class McViewModel(
     // 声明位置在 init 之后，必须用 lazy 延迟初始化，避免构造函数未完成时读到 null
     private val playerManager: PlayerManager by lazy { PlayerManager(repo.termuxRuntime) }
 
-    private val _ops = MutableStateFlow<List<PlayerManager.OpEntry>>(emptyList())
-    val ops: StateFlow<List<PlayerManager.OpEntry>> = _ops.asStateFlow()
+    private val playerListsDelegate by lazy {
+        PlayerListsDelegate(
+            app = app,
+            scope = viewModelScope,
+            playerManager = playerManager,
+            propertiesManager = propertiesManager,
+            powerNukkitXConfigManager = powerNukkitXConfigManager,
+            activeDirName = ::activeDirName,
+            isBdsActive = { activeBdsCore() != null },
+            isPowerNukkitXActive = ::isPowerNukkitXActive,
+            onlinePlayerNames = { _onlinePlayerNames.value },
+            serverProperties = { serverProperties.value },
+            setWhitelistProperty = { key, enabled -> serverPropertiesDelegate.setWhitelistProperty(key, enabled) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _whitelist = MutableStateFlow<List<PlayerManager.WhitelistEntry>>(emptyList())
-    val whitelist: StateFlow<List<PlayerManager.WhitelistEntry>> = _whitelist.asStateFlow()
+    val ops: StateFlow<List<PlayerManager.OpEntry>> get() = playerListsDelegate.ops
 
-    private val _bannedPlayers = MutableStateFlow<List<PlayerManager.BannedEntry>>(emptyList())
-    val bannedPlayers: StateFlow<List<PlayerManager.BannedEntry>> = _bannedPlayers.asStateFlow()
+    val whitelist: StateFlow<List<PlayerManager.WhitelistEntry>> get() = playerListsDelegate.whitelist
+
+    val bannedPlayers: StateFlow<List<PlayerManager.BannedEntry>> get() = playerListsDelegate.bannedPlayers
 
     /** 白名单开关状态（由 server.properties 的 white-list 控制） */
-    private val _whitelistEnabled = MutableStateFlow(false)
-    val whitelistEnabled: StateFlow<Boolean> = _whitelistEnabled.asStateFlow()
+    val whitelistEnabled: StateFlow<Boolean> get() = playerListsDelegate.whitelistEnabled
 
     /** 当前 server.properties 配置的默认 OP 等级（null 表示未配置，使用 MC 默认 4） */
-    private val _defaultOpLevel = MutableStateFlow<Int?>(null)
-    val defaultOpLevel: StateFlow<Int?> = _defaultOpLevel.asStateFlow()
+    val defaultOpLevel: StateFlow<Int?> get() = playerListsDelegate.defaultOpLevel
 
     /** 在线玩家名列表（从日志解析） */
     private val _onlinePlayerNames: MutableStateFlow<List<String>> by lazy { MutableStateFlow(emptyList()) }
@@ -4890,133 +3023,30 @@ class McViewModel(
         val lastExitReason: String? = null
     )
 
-    private val _playerHistory: MutableStateFlow<List<PlayerHistoryEntry>> by lazy { MutableStateFlow(emptyList()) }
-    val playerHistory: StateFlow<List<PlayerHistoryEntry>> by lazy { _playerHistory.asStateFlow() }
-
-    private val legacyPlayerHistoryFile: java.io.File get() = java.io.File(app.filesDir, "player_history.json")
-    private fun playerHistoryFile() = java.io.File(app.filesDir, "player-history/${activeDirName() ?: "unselected"}.json")
-
-    private val historyJson: Json by lazy { Json { ignoreUnknownKeys = true } }
-
-    /** 历史记录文件读写互斥，避免多人进出服时并发写导致 JSON 损坏 */
-    private val historyMutex: Mutex by lazy { Mutex() }
-
-    /** 启动时异步加载历史记录文件（文件缺失/损坏时从空历史开始） */
-    private fun loadPlayerHistory() {
-        // Activity data is isolated by active server. Do not merge a previous server's snapshot.
-        _playerHistory.value = emptyList()
-        viewModelScope.launch(Dispatchers.IO) {
-            historyMutex.withLock {
-                try {
-                    val f = playerHistoryFile()
-                    if (!f.exists() && legacyPlayerHistoryFile.exists()) {
-                        f.parentFile?.mkdirs()
-                        legacyPlayerHistoryFile.copyTo(f, overwrite = false)
-                    }
-                    if (f.exists()) {
-                        val fileList = historyJson.decodeFromString<List<PlayerHistoryEntry>>(f.readText())
-                        val merged = fileList.distinct().sortedByDescending { it.time }
-                        _playerHistory.value = merged
-                        // A process restart has no trustworthy leave timestamp. Preserve it as interrupted.
-                        val interrupted = merged.map { if (it.event == "进服" && it.sessionEnd == null) it.copy(interrupted = true) else it }
-                        _playerHistory.value = interrupted
-                        f.writeText(historyJson.encodeToString(interrupted))
-                    }
-                } catch (e: Exception) {
-                    // 忽略损坏文件
-                }
-            }
-        }
+    private val playerHistoryDelegate by lazy {
+        PlayerHistoryDelegate(
+            app = app,
+            scope = viewModelScope,
+            activeDirName = ::activeDirName,
+            timeNow = ::timeNow,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
-    /** 追加一条进服/离服事件并异步持久化（保留最近 500 条） */
-    private fun recordPlayerEvent(player: String, event: String) {
-        val now = System.currentTimeMillis()
-        val previous = _playerHistory.value
-        val open = previous.firstOrNull { it.player.equals(player, true) && it.event == "进服" && it.sessionEnd == null && !it.interrupted }
-        val entry = if (event == "离服" && open != null) {
-            PlayerHistoryEntry(player, event, timeNow(), open.sessionStart ?: now, now)
-        } else {
-            PlayerHistoryEntry(player, event, timeNow(), if (event == "进服") now else null, null)
-        }
-        _playerHistory.value = listOf(entry) + previous.map {
-            if (event == "离服" && it == open) it.copy(sessionEnd = now) else it
-        }
-        val snapshot = _playerHistory.value
-        viewModelScope.launch(Dispatchers.IO) {
-            historyMutex.withLock {
-                try {
-                    val file = playerHistoryFile(); file.parentFile?.mkdirs()
-                    file.writeText(historyJson.encodeToString(snapshot))
-                } catch (e: Exception) {
-                    // 写入失败不阻断运行
-                }
-            }
-        }
-    }
+    val playerHistory: StateFlow<List<PlayerHistoryEntry>> get() = playerHistoryDelegate.playerHistory
 
-    fun playerActivitySummaries(): List<PlayerActivitySummary> {
-        val entries = _playerHistory.value
-        return entries.groupBy { it.player }.map { (player, rows) ->
-            val seconds = rows.filter { it.event == "离服" && !it.interrupted }.sumOf { ((it.sessionEnd ?: 0L) - (it.sessionStart ?: 0L)).coerceAtLeast(0L) / 1000 }
-            val lastJoin = rows.filter { it.event == "进服" }.maxByOrNull { it.time }
-            val lastLeave = rows.filter { it.event == "离服" }.maxByOrNull { it.time }
-            PlayerActivitySummary(
-                player = player,
-                sessions = rows.count { it.event == "离服" },
-                totalSeconds = seconds,
-                active = rows.any { it.event == "进服" && it.sessionEnd == null },
-                lastJoinTime = lastJoin?.time,
-                lastLeaveTime = lastLeave?.time,
-                lastExitReason = lastLeave?.let {
-                    if (it.interrupted) str(R.string.vm_exit_interrupted) else str(R.string.vm_exit_unknown)
-                }
-            )
-        }.sortedByDescending { it.totalSeconds }
-    }
+    private fun loadPlayerHistory() = playerHistoryDelegate.loadPlayerHistory()
 
-    fun interruptPlayerSessions() {
-        val open = _playerHistory.value.filter { it.event == "进服" && it.sessionEnd == null }
-        if (open.isEmpty()) return
-        val replacements = open.associateWith { it.copy(interrupted = true) }
-        _playerHistory.value = _playerHistory.value.map { replacements[it] ?: it }
-        val snapshot = _playerHistory.value
-        viewModelScope.launch(Dispatchers.IO) { historyMutex.withLock {
-            try {
-                val file = playerHistoryFile(); file.parentFile?.mkdirs(); file.writeText(historyJson.encodeToString(snapshot))
-            } catch (e: Exception) {
-                // 写入失败不阻断运行（与 recordPlayerEvent 一致）：viewModelScope 无 CoroutineExceptionHandler，
-                // 磁盘满/目录不可写时异常逸出协程会直接崩溃 App。
-            }
-        } }
-    }
+    private fun recordPlayerEvent(player: String, event: String) = playerHistoryDelegate.recordPlayerEvent(player, event)
 
-    fun clearPlayerHistory() {
-        _playerHistory.value = emptyList()
-        viewModelScope.launch(Dispatchers.IO) { historyMutex.withLock {
-            try {
-                playerHistoryFile().delete()
-            } catch (e: Exception) {
-                // 删除失败不阻断运行
-            }
-        } }
-    }
+    fun playerActivitySummaries(): List<PlayerActivitySummary> = playerHistoryDelegate.playerActivitySummaries()
 
-    fun exportPlayerHistory(uri: android.net.Uri) = viewModelScope.launch {
-        try {
-            withContext(Dispatchers.IO) {
-                app.contentResolver.openOutputStream(uri)?.bufferedWriter()?.use { out ->
-                    out.appendLine("player,event,time,session_start,session_end,duration_seconds,interrupted")
-                    _playerHistory.value.forEach { row ->
-                        fun csv(v: String) = "\"${v.replace("\"", "\"\"")}\""
-                        val duration = if (row.sessionStart != null && row.sessionEnd != null && !row.interrupted) ((row.sessionEnd - row.sessionStart) / 1000).toString() else ""
-                        out.appendLine(listOf(csv(row.player), csv(row.event), csv(row.time), row.sessionStart ?: "", row.sessionEnd ?: "", duration, row.interrupted).joinToString(","))
-                    }
-                } ?: error(str(R.string.err_open_export))
-            }
-            _messageFlow.tryEmit(str(R.string.msg_history_exported))
-        } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.err_export_fail)) }
-    }
+    fun interruptPlayerSessions() = playerHistoryDelegate.interruptPlayerSessions()
+
+    fun clearPlayerHistory() = playerHistoryDelegate.clearPlayerHistory()
+
+    fun exportPlayerHistory(uri: android.net.Uri) = playerHistoryDelegate.exportPlayerHistory(uri)
 
     private fun timeNow(): String =
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
@@ -5044,25 +3074,22 @@ class McViewModel(
     }
 
     data class TextEditorFile(val path: String, val name: String, val content: String)
-    private val _textEditorFile = MutableStateFlow<TextEditorFile?>(null)
-    val textEditorFile: StateFlow<TextEditorFile?> = _textEditorFile.asStateFlow()
+    private val textEditorDelegate by lazy {
+        TextEditorDelegate(
+            app = app,
+            scope = viewModelScope,
+            fileManagerRoot = { fileManagerRoot },
+            refreshFiles = ::refreshFiles,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+    val textEditorFile: StateFlow<TextEditorFile?> get() = textEditorDelegate.textEditorFile
 
-    fun openTextFile(file: java.io.File) = viewModelScope.launch {
-        try {
-            val content = withContext(Dispatchers.IO) { SafeTextFile.read(fileManagerRoot, file) }
-            _textEditorFile.value = TextEditorFile(content.file.absolutePath, content.file.name, content.text)
-        } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.err_open_text)) }
-    }
-    fun closeTextFile() { _textEditorFile.value = null }
-    fun saveTextFile(path: String, text: String) = viewModelScope.launch {
-        try {
-            withContext(Dispatchers.IO) { SafeTextFile.write(fileManagerRoot, java.io.File(path), text) }
-            _textEditorFile.value = TextEditorFile(path, java.io.File(path).name, text)
-            _messageFlow.tryEmit(str(R.string.msg_file_saved))
-            refreshFiles()
-        } catch (e: Exception) { _errorFlow.tryEmit(e.message ?: str(R.string.err_save_text)) }
-    }
-    fun canEditTextFile(file: java.io.File) = file.isFile && SafeTextFile.isSupported(file)
+    fun openTextFile(file: java.io.File) = textEditorDelegate.openTextFile(file)
+    fun closeTextFile() = textEditorDelegate.closeTextFile()
+    fun saveTextFile(path: String, text: String) = textEditorDelegate.saveTextFile(path, text)
+    fun canEditTextFile(file: java.io.File) = textEditorDelegate.canEditTextFile(file)
 
     /** 请求在线玩家列表（发送 list 命令，结果通过日志解析全量校正名单） */
     fun refreshOnlinePlayers() {
@@ -5071,220 +3098,57 @@ class McViewModel(
     }
 
     /** 刷新玩家数据（OP/白名单/封禁列表） */
-    fun refreshPlayers() {
-        val dirName = activeDirName() ?: return
-        // 官方 BDS 的玩家数据文件与 Java 版完全不同：
-        //  - OP → permissions.json（permission=operator，只有 xuid）
-        //  - 白名单 → allowlist.json
-        //  - 没有封禁文件
-        // 所以整条读取链都要按核心分别走，否则 BDS 下三个列表永远为空。
-        val bds = activeBdsCore() != null
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    if (bds) playerManager.loadBedrockXuidNames(dirName)
-                    _ops.value = playerManager.readOps(dirName, bds)
-                    _whitelist.value = playerManager.readWhitelist(dirName, bds)
-                    _bannedPlayers.value = playerManager.readBanned(dirName, bds)
-                    if (bds) playerManager.saveBedrockXuidNames(dirName)
-                    // 同步白名单开关状态（从 server.properties 读取；BDS 的键名是 allow-list）
-                    val props = if (isPowerNukkitXActive()) powerNukkitXConfigManager.read(dirName)
-                    else propertiesManager.readProperties(dirName)
-                    _whitelistEnabled.value =
-                        props[if (bds) "allow-list" else "white-list"]?.equals("true", ignoreCase = true) == true
-                    // 同步默认 OP 等级（op-permission-level）；BDS 没有等级概念
-                    _defaultOpLevel.value = if (bds) null else props["op-permission-level"]?.toIntOrNull()
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s265, e.message))
-            }
-        }
-    }
+    fun refreshPlayers() = playerListsDelegate.refreshPlayers()
 
-    /**
-     * 命令发送后延迟刷新，等待 MC 完成回写 JSON 文件
-     * @param msg 操作成功消息
-     * @param refresh 是否需要刷新列表（kick 不改列表无需刷新）
-     */
-    private fun afterCmd(sent: Boolean, msg: String, refresh: Boolean = true) {
-        if (!sent) {
-            _errorFlow.tryEmit(str(R.string.s266))
-            return
-        }
-        _messageFlow.tryEmit(msg)
-        if (refresh) {
-            viewModelScope.launch {
-                delay(600)  // 等待 MC 处理命令并回写 JSON
-                refreshPlayers()
-            }
-        }
-    }
-
-    fun opPlayer(name: String) {
-        if (name.isBlank()) return
-        val sent = playerManager.opPlayer(name, activeBdsCore() != null)
-        afterCmd(sent, str(R.string.s1055, name))
-    }
+    fun opPlayer(name: String) = playerListsDelegate.opPlayer(name)
 
     /** 设置 OP 并指定等级（1-4）。手动指定等级需重启服务器才生效到权限系统。 */
-    fun opPlayerWithLevel(name: String, level: Int) {
-        if (name.isBlank()) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s266))
-            return
-        }
-        val bds = activeBdsCore() != null
-        viewModelScope.launch {
-            val sent = withContext(Dispatchers.IO) {
-                playerManager.opPlayerWithLevel(name, level, dirName, bds)
-            }
-            afterCmd(sent, str(R.string.s1056, name, level))
-        }
-    }
+    fun opPlayerWithLevel(name: String, level: Int) = playerListsDelegate.opPlayerWithLevel(name, level)
 
-    fun deopPlayer(name: String) {
-        if (name.isBlank()) return
-        val bds = activeBdsCore() != null
-        val dirName = activeDirName()
-        // BDS 分支会同步读写 permissions.json（PlayerManager.removeBedrockOperator）；
-        // 公共存储是 FUSE，主线程做文件 IO 会卡顿，慢盘上甚至掉帧。
-        // 与 opPlayerWithLevel 一致，放到 IO 线程。
-        viewModelScope.launch {
-            val sent = withContext(Dispatchers.IO) { playerManager.deopPlayer(name, dirName, bds) }
-            afterCmd(sent, str(R.string.msg_op_cancelled, name))
-        }
-    }
+    fun deopPlayer(name: String) = playerListsDelegate.deopPlayer(name)
 
-    fun whitelistAdd(name: String) {
-        if (name.isBlank()) return
-        val sent = playerManager.whitelistAdd(name, activeBdsCore() != null)
-        afterCmd(sent, str(R.string.msg_whitelist_added, name))
-    }
+    fun whitelistAdd(name: String) = playerListsDelegate.whitelistAdd(name)
 
-    fun whitelistRemove(name: String) {
-        if (name.isBlank()) return
-        val sent = playerManager.whitelistRemove(name, activeBdsCore() != null)
-        afterCmd(sent, str(R.string.msg_whitelist_removed, name))
-    }
+    fun whitelistRemove(name: String) = playerListsDelegate.whitelistRemove(name)
 
     /** 切换白名单开关 */
-    fun toggleWhitelist(enabled: Boolean) {
-        val bds = activeBdsCore() != null
-        val dirName = activeDirName()
-        viewModelScope.launch {
-            // 官方 BDS 的硬约束：关闭正版验证（online-mode=false）时不允许开白名单，
-            // 服务端启动时会直接报错并退出。这里先读盘确认，别让用户把服务器按死。
-            if (bds && enabled) {
-                val onlineMode = withContext(Dispatchers.IO) {
-                    dirName?.let { propertiesManager.readProperties(it)["online-mode"] }?.equals("true", true)
-                } ?: (_serverProperties.value["online-mode"]?.equals("true", true) == true)
-                if (!onlineMode) {
-                    _whitelistEnabled.value = false
-                    _errorFlow.tryEmit(str(R.string.bds_players_allowlist_needs_online_mode))
-                    return@launch
-                }
-            }
-            val sent = if (enabled) playerManager.whitelistOn(bds) else playerManager.whitelistOff(bds)
-            if (sent) {
-                _whitelistEnabled.value = enabled
-                // 同步镜像：概览页的白名单提示读的是 [serverProperties]，只改 _whitelistEnabled
-                // 的话要等下一次读配置文件才会更新，提示会慢半拍。
-                val key = if (bds) "allow-list" else "white-list"
-                _serverProperties.value = _serverProperties.value.toMutableMap()
-                    .apply { put(key, enabled.toString()) }
-                _messageFlow.tryEmit(if (enabled) str(R.string.msg_whitelist_toggled_on) else str(R.string.msg_whitelist_toggled_off))
-            } else {
-                _errorFlow.tryEmit(str(R.string.s274))
-            }
-        }
-    }
+    fun toggleWhitelist(enabled: Boolean) = playerListsDelegate.toggleWhitelist(enabled)
 
-    fun kickPlayer(name: String, reason: String = "") {
-        if (name.isBlank()) return
-        val sent = playerManager.kickPlayer(name, reason)
-        afterCmd(sent, str(R.string.msg_kicked, name), refresh = false)
-    }
+    fun kickPlayer(name: String, reason: String = "") = playerListsDelegate.kickPlayer(name, reason)
 
-    fun banPlayer(name: String, reason: String = "Banned by admin") {
-        if (name.isBlank()) return
-        // 官方 BDS 没有封禁命令，也不维护封禁列表，只能靠白名单 + 踢出
-        if (activeBdsCore() != null) {
-            _errorFlow.tryEmit(str(R.string.bds_players_ban_unsupported))
-            return
-        }
-        val sent = playerManager.banPlayer(name, reason)
-        afterCmd(sent, str(R.string.msg_banned, name))
-    }
+    fun banPlayer(name: String, reason: String = "Banned by admin") = playerListsDelegate.banPlayer(name, reason)
 
     /** 限时封禁 */
-    fun tempBanPlayer(name: String, duration: String, reason: String = "") {
-        if (name.isBlank() || duration.isBlank()) return
-        if (activeBdsCore() != null) {
-            _errorFlow.tryEmit(str(R.string.bds_players_ban_unsupported))
-            return
-        }
-        val sent = playerManager.tempBanPlayer(name, duration, reason)
-        afterCmd(sent, str(R.string.msg_banned_temp, name, duration))
-    }
+    fun tempBanPlayer(name: String, duration: String, reason: String = "") = playerListsDelegate.tempBanPlayer(name, duration, reason)
 
-    fun pardonPlayer(name: String) {
-        if (name.isBlank()) return
-        if (activeBdsCore() != null) {
-            _errorFlow.tryEmit(str(R.string.bds_players_ban_unsupported))
-            return
-        }
-        val sent = playerManager.pardonPlayer(name)
-        afterCmd(sent, str(R.string.msg_pardoned, name))
-    }
+    fun pardonPlayer(name: String) = playerListsDelegate.pardonPlayer(name)
 
     /** 请求在线玩家列表（发送 list 命令） */
-    fun requestOnlinePlayers() {
-        val sent = playerManager.requestOnlineList()
-        if (sent) {
-            _messageFlow.tryEmit(str(R.string.s279))
-        } else {
-            _errorFlow.tryEmit(str(R.string.s280))
-        }
-    }
+    fun requestOnlinePlayers() = playerListsDelegate.requestOnlinePlayers()
 
     /** 设置玩家游戏模式 */
-    fun setGameMode(name: String, mode: Int) {
-        if (name.isBlank()) return
-        // 基岩版只能给**在线**玩家改模式：BDS 没有离线玩家数据文件，
-        // 目标不在线时命令会被丢弃（控制台只回 No targets matched selector），
-        // 用户点完就是"没反应"。提前说清楚，别让人以为是按钮坏了。
-        if (activeBdsCore() != null &&
-            _onlinePlayerNames.value.none { it.equals(name, ignoreCase = true) }
-        ) {
-            _errorFlow.tryEmit(str(R.string.bds_gamemode_needs_online, name))
-            return
-        }
-        val sent = playerManager.setGameMode(name, mode)
-        val modeNameRes = when (mode.coerceIn(0, 3)) {
-            0 -> R.string.s281; 1 -> R.string.s282; 2 -> R.string.s283; 3 -> R.string.s284; else -> R.string.s281
-        }
-        afterCmd(sent, str(R.string.s285, name, str(modeNameRes)), refresh = false)
-    }
+    fun setGameMode(name: String, mode: Int) = playerListsDelegate.setGameMode(name, mode)
 
     /** 给玩家经验 */
-    fun giveXp(name: String, amount: Int) {
-        if (name.isBlank() || amount <= 0) return
-        val bds = activeBdsCore() != null
-        // 同 setGameMode：BDS 的经验命令只能作用于在线玩家
-        if (bds && _onlinePlayerNames.value.none { it.equals(name, ignoreCase = true) }) {
-            _errorFlow.tryEmit(str(R.string.bds_gamemode_needs_online, name))
-            return
-        }
-        val sent = playerManager.giveXp(name, amount, bds)
-        afterCmd(sent, str(R.string.msg_xp_given, name, amount), refresh = false)
-    }
+    fun giveXp(name: String, amount: Int) = playerListsDelegate.giveXp(name, amount)
 
     // ── 世界（存档）管理 ────────────────────────────────────────────
 
     private val worldManager: WorldManager by lazy { WorldManager(repo.termuxRuntime) }
 
-    /** 世界导入包体积上限。导入会先整体落到 cacheDir，不设上限会把设备存储填满。 */
-    private val maxWorldImportBytes = 2L * 1024 * 1024 * 1024
+    private val worldTransferDelegate by lazy {
+        WorldTransferDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManager = worldManager,
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            exportPathToUri = ::exportPathToUri,
+            loadWorlds = ::loadWorlds,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
     /**
      * 世界目录相关操作的前置校验：服务端运行中时不允许碰存档目录。
@@ -5300,23 +3164,32 @@ class McViewModel(
         return false
     }
 
-    private val _worlds = MutableStateFlow<List<Worlds.WorldInfo>>(emptyList())
-    val worlds: StateFlow<List<Worlds.WorldInfo>> = _worlds.asStateFlow()
+    private val worldListDelegate by lazy {
+        WorldListDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            serverState = repo.serverState,
+            worldManagerProvider = { worldManager },
+            activeDirName = ::activeDirName,
+            isMcRunningIn = { repo.termuxRuntime.isMcRunningIn(it) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _worldsLoading = MutableStateFlow(false)
-    val worldsLoading: StateFlow<Boolean> = _worldsLoading.asStateFlow()
+    val worlds: StateFlow<List<Worlds.WorldInfo>> get() = worldListDelegate.worlds
+
+    val worldsLoading: StateFlow<Boolean> get() = worldListDelegate.worldsLoading
 
     /** 当前 level-name 指向的世界名（可能尚未生成对应目录）。 */
-    private val _activeWorldName = MutableStateFlow("")
-    val activeWorldName: StateFlow<String> = _activeWorldName.asStateFlow()
+    val activeWorldName: StateFlow<String> get() = worldListDelegate.activeWorldName
 
     /** 当前世界的基岩版元信息（种子 / 生成类型）；Java 系或还没生成时为 null。 */
-    private val _activeWorldMeta = MutableStateFlow<WorldManager.BedrockMeta?>(null)
-    val activeWorldMeta: StateFlow<WorldManager.BedrockMeta?> = _activeWorldMeta.asStateFlow()
+    val activeWorldMeta: StateFlow<WorldManager.BedrockMeta?> get() = worldListDelegate.activeWorldMeta
 
     /** 当前世界的 Java 版元信息（种子 / 生成类型 / 难度 / 数据包数）；基岩系为 null。 */
-    private val _activeJavaWorldMeta = MutableStateFlow<JavaWorlds.Meta?>(null)
-    val activeJavaWorldMeta: StateFlow<JavaWorlds.Meta?> = _activeJavaWorldMeta.asStateFlow()
+    val activeJavaWorldMeta: StateFlow<JavaWorlds.Meta?> get() = worldListDelegate.activeJavaWorldMeta
 
     /**
      * 当前世界的「建世界时的要求」（种子原文 + 生成方式）。
@@ -5325,232 +3198,81 @@ class McViewModel(
      * 这个是**用户当时的选择**。世界还没生成时只有后者有值，UI 必须分开展示，
      * 否则就会出现「种子：尚未生成 / 生成类型：未知」这种什么都没说的组合。
      */
-    private val _activeWorldPlan = MutableStateFlow<WorldGenLedger.Record?>(null)
-    val activeWorldPlan: StateFlow<WorldGenLedger.Record?> = _activeWorldPlan.asStateFlow()
+    val activeWorldPlan: StateFlow<WorldGenLedger.Record?> get() = worldListDelegate.activeWorldPlan
 
     /** 当前核心类型（UI 靠它决定显示基岩版还是 Java 版的世界/附加包界面）。 */
-    private val _activeCore = MutableStateFlow<ServerCore?>(null)
-    val activeCore: StateFlow<ServerCore?> = _activeCore.asStateFlow()
+    val activeCore: StateFlow<ServerCore?> get() = worldListDelegate.activeCore
 
-    private fun refreshActiveCore() {
-        _activeCore.value = config.value.installedCores
-            .firstOrNull { it.name == config.value.activeCoreName }?.core
-    }
+    private fun refreshActiveCore() = worldListDelegate.refreshActiveCore()
 
     /** 当前核心是否 Java 版（非 BDS / PNX / PocketMine / Allay）。 */
-    fun isJavaCore(): Boolean {
-        val core = _activeCore.value ?: return false
-        return !core.isBedrock
-    }
+    fun isJavaCore(): Boolean = worldListDelegate.isJavaCore()
 
     /** 加载世界列表（含各世界占用大小）。大小统计较慢，放在 IO 线程。 */
-    fun loadWorlds() {
-        val dirName = activeDirName() ?: return
-        refreshActiveCore()
-        viewModelScope.launch {
-            _worldsLoading.value = true
-            try {
-                val list = withContext(Dispatchers.IO) { worldManager.listWorlds(dirName) }
-                val active = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
-                // 已建但还没生成的世界（目录不存在）也要列出来：Java 新建世界只写
-                // properties，不建目录，只列真实目录会让用户「建完什么也看不到」。
-                val planned = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val root = worldManager.worldsRoot(dirName)
-                        val existing = list.map { it.name }.toHashSet()
-                        WorldGenLedger.read(worldManager.serverDir(dirName))
-                            .filterKeys { it !in existing && it.isNotBlank() }
-                            .map { (name, record) ->
-                                Worlds.WorldInfo(
-                                    name = name,
-                                    dir = java.io.File(root, name),
-                                    kind = if (record.kind == WorldGenLedger.Kind.JAVA) Worlds.Kind.Java
-                                    else Worlds.Kind.Bedrock,
-                                    sizeBytes = 0L,
-                                    sizeTruncated = false,
-                                    isActive = name == active,
-                                    planned = true
-                                )
-                            }
-                    }.getOrDefault(emptyList())
-                }
-                _worlds.value = (list + planned).sortedWith(
-                    compareByDescending<Worlds.WorldInfo> { it.isActive }.thenBy { it.name }
-                )
-                _activeWorldName.value = active
-                // 两套 level.dat 格式完全不同（基岩小端 / Java gzip 大端），按核心类型只读一套
-                val javaCore = isJavaCore()
-                _activeWorldMeta.value = withContext(Dispatchers.IO) {
-                    if (javaCore) null
-                    else runCatching { worldManager.readBedrockMeta(dirName, active) }.getOrNull()
-                }
-                _activeJavaWorldMeta.value = withContext(Dispatchers.IO) {
-                    if (!javaCore) null
-                    else runCatching { worldManager.readJavaMeta(dirName, active) }.getOrNull()
-                }
-                // 「用户当时要的」单独一份：世界没生成时只有它有值
-                _activeWorldPlan.value = withContext(Dispatchers.IO) {
-                    runCatching { WorldGenLedger.get(worldManager.serverDir(dirName), active) }.getOrNull()
-                }
-                // 维度也要跟着当前世界刷新，否则切到未生成的世界后仍显示上一个世界的维度
-                if (javaCore) {
-                    _javaDimensions.value = withContext(Dispatchers.IO) {
-                        runCatching { worldManager.javaDimensionDirs(dirName, active) }
-                            .getOrDefault(emptyList())
-                    }
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("读取世界列表失败：${e.message}")
-            } finally {
-                _worldsLoading.value = false
-            }
-        }
-    }
+    fun loadWorlds() = worldListDelegate.loadWorlds()
 
-    /**
-     * 切换当前使用的世界（写入 level-name）。
-     *
-     * 服务端运行中时改动不会立刻生效，需要重启，这里明确提示而不是静默写入。
-     */
-    fun setActiveWorld(name: String) {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { worldManager.setLevelName(dirName, name) }
-                if (ok) {
-                    _activeWorldName.value = name
-                    _messageFlow.tryEmit(
-                        if (repo.serverState.value.isRunning) "已切换到世界「$name」，重启服务端后生效"
-                        else "已切换到世界「$name」"
-                    )
-                    loadWorlds()
-                } else {
-                    // setLevelName 现在能区分「写不进去」与「目标实例正在运行」，别再一律
-                    // 报成配置不可写——用户会去翻存储权限，而真正原因可能只是要停服。
-                    _errorFlow.tryEmit(
-                        if (repo.termuxRuntime.isMcRunningIn(dirName)) {
-                            str(R.string.world_switch_blocked_running)
-                        } else {
-                            str(R.string.world_switch_failed)
-                        }
-                    )
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("切换世界失败：${e.message}")
-            }
-        }
+    /** 切换当前使用的世界（写入 level-name）。 */
+    fun setActiveWorld(name: String) = worldListDelegate.setActiveWorld(name)
+
+    private val worldCreationDelegate by lazy {
+        WorldCreationDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManagerProvider = { worldManager },
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            loadWorlds = ::loadWorlds,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
     /** 清空 level-seed，让服务端下次生成地图时使用随机种子。 */
-    fun clearWorldSeed() {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { worldManager.clearLevelSeed(dirName) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.wl_seed_cleared))
-                    // 必须重载：卡片上的种子来自 level.dat / properties 的快照，
-                    // 不清空这个快照的话界面上还挂着清空前的旧种子（真机实测）。
-                    loadWorlds()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.wl_seed_clear_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_seed_clear_failed)}：${e.message}")
-            }
-        }
-    }
+    fun clearWorldSeed() = worldCreationDelegate.clearWorldSeed()
 
-    /**
-     * 新建一个世界（基岩版）。
-     *
-     * 生成方式（普通/超平坦/虚空）写在**新世界目录的 `level.dat`** 里，不经过
-     * `server.properties`（BDS 没有 `level-type`）。[BdsWorldGen] 只写 5 个字段，
-     * BDS 首次启动就会按它生成地形——实测把原来的"两段式"省掉了。
-     *
-     * 种子允许数字或文本；文本会被 BDS 按 Java `String.hashCode` 转成 int64（实测 1.19~1.26
-     * 一致），这里直接按同一规则算好写进 `level.dat`，UI 也能提前展示"将被保存为 xxx"。
-     */
+    /** 新建一个世界（基岩版）。 */
     fun createWorld(
         name: String,
         seed: String,
         generator: BdsWorldGen.Generator = BdsWorldGen.Generator.NORMAL,
         layers: List<BdsWorldGen.Layer> = BdsWorldGen.DEFAULT_FLAT
-    ) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_create))) return
-        // 超平坦层里的方块名先对一遍原版清单：BDS 遇到不认识的方块不会报错，
-        // 只会把那一层当成空气，世界生成出来缺层，而生成参数写过就改不了了。
-        if (generator == BdsWorldGen.Generator.FLAT) {
-            val unknown = com.mineserve.mobile.data.BlockIds
-                .unknownVanilla(app, layers.map { it.block })
-            if (unknown.isNotEmpty()) {
-                _errorFlow.tryEmit(
-                    str(R.string.wl_create_fail_unknown_block, unknown.take(3).joinToString(", "))
-                )
-                return
-            }
-        }
-        viewModelScope.launch {
-            try {
-                val failure = withContext(Dispatchers.IO) {
-                    worldManager.createBedrockWorld(dirName, name, seed, generator, layers)
-                }
-                when (failure) {
-                    null -> {
-                        _messageFlow.tryEmit(str(R.string.wl_created, Worlds.sanitize(name)))
-                        loadWorlds()
-                    }
-                    WorldManager.CreateFailure.BadName ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_name))
-                    WorldManager.CreateFailure.NameTaken ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_taken))
-                    WorldManager.CreateFailure.ServerRunning ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_running))
-                    WorldManager.CreateFailure.WriteFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_write))
-                    WorldManager.CreateFailure.NotBedrock ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_bedrock))
-                    WorldManager.CreateFailure.NotJava ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_java))
-                    WorldManager.CreateFailure.LevelDatFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_leveldat))
-                    WorldManager.CreateFailure.BadBiome ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_biome))
-                    WorldManager.CreateFailure.BadLayer ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_layer))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_create_fail_write)}：${e.message}")
-            }
-        }
-    }
+    ) = worldCreationDelegate.createWorld(name, seed, generator, layers)
 
     /** 文本种子会被 BDS 存成这个整数；空输入返回 null（随机）。 */
     fun previewSeed(raw: String): Long? = worldManager.resolveSeed(raw)
 
     /** 把用户输入的层配置解析成层列表；格式错误返回 null。 */
-    fun previewLayers(text: String): List<BdsWorldGen.Layer>? = BdsWorldGen.parseLayers(text)
+    fun previewLayers(text: String): List<BdsWorldGen.Layer>? = parsePreviewLayers(text)
 
     // ── Java 版：世界 / 数据包 / 资源包 ─────────────────────────
 
-    private val _javaDataPacks = MutableStateFlow<List<JavaWorlds.DataPack>>(emptyList())
-    val javaDataPacks: StateFlow<List<JavaWorlds.DataPack>> = _javaDataPacks.asStateFlow()
+    private val javaAddonsDelegate by lazy {
+        JavaAddonsDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManagerProvider = { worldManager },
+            activeDirName = ::activeDirName,
+            refreshActiveCore = ::refreshActiveCore,
+            isJavaCore = ::isJavaCore,
+            setJavaDimensions = { worldListDelegate.setJavaDimensions(it) },
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _javaAddonsLoading = MutableStateFlow(false)
-    val javaAddonsLoading: StateFlow<Boolean> = _javaAddonsLoading.asStateFlow()
+    val javaDataPacks: StateFlow<List<JavaWorlds.DataPack>> get() = javaAddonsDelegate.javaDataPacks
+
+    val javaAddonsLoading: StateFlow<Boolean> get() = javaAddonsDelegate.javaAddonsLoading
 
     /** 资源包配置（Java 侧单包模型）；基岩系或读不到时为 null。 */
-    private val _resourcePack = MutableStateFlow<JavaResourcePack.Config?>(null)
-    val resourcePack: StateFlow<JavaResourcePack.Config?> = _resourcePack.asStateFlow()
+    val resourcePack: StateFlow<JavaResourcePack.Config?> get() = javaAddonsDelegate.resourcePack
 
     /** 资源包配置的静态校验问题（空 = 没有明显问题）。 */
-    private val _resourcePackIssues = MutableStateFlow<List<String>>(emptyList())
-    val resourcePackIssues: StateFlow<List<String>> = _resourcePackIssues.asStateFlow()
+    val resourcePackIssues: StateFlow<List<String>> get() = javaAddonsDelegate.resourcePackIssues
 
     /** 当前世界可单独重置的维度。 */
-    private val _javaDimensions = MutableStateFlow<List<JavaWorlds.DimensionDir>>(emptyList())
-    val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> = _javaDimensions.asStateFlow()
+    val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> get() = worldListDelegate.javaDimensions
 
     /**
      * 只刷新「维度」这一块（数据包 / 资源包不动）。
@@ -5565,39 +3287,14 @@ class McViewModel(
         viewModelScope.launch {
             val world = withContext(Dispatchers.IO) { runCatching { worldManager.readLevelName(dirName) }.getOrNull() }
                 ?: return@launch
-            _javaDimensions.value = withContext(Dispatchers.IO) {
+            worldListDelegate.setJavaDimensions(withContext(Dispatchers.IO) {
                 runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
-            }
+            })
         }
     }
 
     /** 读 Java 侧的世界附加内容（数据包 + 资源包 + 维度）。 */
-    fun loadJavaAddons() {
-        refreshActiveCore()
-        val dirName = activeDirName() ?: return
-        if (!isJavaCore()) return
-        viewModelScope.launch {
-            _javaAddonsLoading.value = true
-            try {
-                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
-                _javaDataPacks.value = withContext(Dispatchers.IO) {
-                    runCatching { worldManager.scanJavaDataPacks(dirName, world) }.getOrDefault(emptyList())
-                }
-                _javaDimensions.value = withContext(Dispatchers.IO) {
-                    runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
-                }
-                val cfg = withContext(Dispatchers.IO) {
-                    runCatching { worldManager.readResourcePack(dirName) }.getOrNull()
-                }
-                _resourcePack.value = cfg
-                _resourcePackIssues.value = cfg?.let { JavaResourcePack.issues(it) }.orEmpty()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_load_failed)}：${e.message}")
-            } finally {
-                _javaAddonsLoading.value = false
-            }
-        }
-    }
+    fun loadJavaAddons() = javaAddonsDelegate.loadJavaAddons()
 
     /**
      * 新建 Java 版世界：只写 `server.properties` 的四个键，服务端下次启动生成。
@@ -5610,209 +3307,61 @@ class McViewModel(
         type: JavaWorldGen.LevelType,
         layers: List<BdsWorldGen.Layer>,
         biome: String
-    ) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_create))) return
-        viewModelScope.launch {
-            try {
-                val failure = withContext(Dispatchers.IO) {
-                    worldManager.createJavaWorld(dirName, name, seed, type, layers, biome)
-                }
-                when (failure) {
-                    null -> {
-                        _messageFlow.tryEmit(str(R.string.wl_jv_created, Worlds.sanitize(name)))
-                        loadWorlds()
-                    }
-                    WorldManager.CreateFailure.BadName ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_name))
-                    WorldManager.CreateFailure.NameTaken ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_taken))
-                    WorldManager.CreateFailure.ServerRunning ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_running))
-                    WorldManager.CreateFailure.WriteFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_write))
-                    WorldManager.CreateFailure.NotJava ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_java))
-                    WorldManager.CreateFailure.NotBedrock ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_bedrock))
-                    WorldManager.CreateFailure.LevelDatFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_leveldat))
-                    WorldManager.CreateFailure.BadBiome ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_biome))
-                    WorldManager.CreateFailure.BadLayer ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_layer))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_create_fail_write)}：${e.message}")
-            }
-        }
-    }
+    ) = worldCreationDelegate.createJavaWorld(name, seed, type, layers, biome)
 
     /** 启用 / 停用一个世界级数据包（改 `level.dat:DataPacks`）。 */
-    fun setJavaDataPackEnabled(pack: JavaWorlds.DataPack, enabled: Boolean) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(if (enabled) R.string.jv_enable else R.string.jv_disable))) return
-        viewModelScope.launch {
-            try {
-                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
-                val ok = withContext(Dispatchers.IO) {
-                    worldManager.setJavaDataPackEnabled(dirName, world, pack, enabled)
-                }
-                if (ok) {
-                    _messageFlow.tryEmit(
-                        str(if (enabled) R.string.jv_enabled else R.string.jv_disabled, pack.name)
-                    )
-                    loadJavaAddons()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.jv_write_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_write_failed)}：${e.message}")
-            }
-        }
-    }
+    fun setJavaDataPackEnabled(pack: JavaWorlds.DataPack, enabled: Boolean) =
+        javaAddonsDelegate.setJavaDataPackEnabled(pack, enabled)
 
     /** 从系统选择器导入数据包 zip（拷进 `world/datapacks/`）。 */
-    fun importJavaDataPackFromUri(uri: Uri, displayName: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.jv_import))) return
-        viewModelScope.launch {
-            var temp: java.io.File? = null
-            try {
-                temp = withContext(Dispatchers.IO) {
-                    val f = java.io.File(app.cacheDir, "datapack_${System.currentTimeMillis()}.zip")
-                    app.contentResolver.openInputStream(uri)?.use { input ->
-                        f.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    f.takeIf { it.isFile && it.length() > 0 }
-                }
-                if (temp == null) {
-                    _errorFlow.tryEmit(str(R.string.jv_import_failed))
-                    return@launch
-                }
-                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
-                val name = withContext(Dispatchers.IO) {
-                    worldManager.installJavaDataPack(dirName, world, temp)
-                }
-                if (name != null) {
-                    _messageFlow.tryEmit(str(R.string.jv_import_ok, name))
-                    loadJavaAddons()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.jv_import_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_import_failed)}：${e.message}")
-            } finally {
-                runCatching { temp?.delete() }
-            }
-        }
-    }
+    fun importJavaDataPackFromUri(uri: Uri, displayName: String) =
+        javaAddonsDelegate.importJavaDataPackFromUri(uri, displayName)
 
     /** 保存资源包配置（URL / SHA-1 / ID / 提示语 / 是否强制）。 */
-    fun saveResourcePack(config: JavaResourcePack.Config) {
-        val dirName = activeDirName() ?: return
-        val url = JavaResourcePack.normalizeUrl(config.url)
-        if (url == null) { _errorFlow.tryEmit(str(R.string.jv_rp_bad_url)); return }
-        val sha1 = JavaResourcePack.normalizeSha1(config.sha1)
-        if (sha1 == null) { _errorFlow.tryEmit(str(R.string.jv_rp_bad_sha1)); return }
-        if (!requireServerStopped(str(R.string.jv_rp_title))) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    worldManager.writeResourcePack(dirName, config.copy(url = url, sha1 = sha1))
-                }
-                if (ok) {
-                    _resourcePack.value = config.copy(url = url, sha1 = sha1)
-                    _resourcePackIssues.value = JavaResourcePack.issues(config.copy(url = url, sha1 = sha1))
-                    _messageFlow.tryEmit(str(R.string.jv_rp_saved))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.jv_write_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_write_failed)}：${e.message}")
-            }
-        }
-    }
+    fun saveResourcePack(config: JavaResourcePack.Config) = javaAddonsDelegate.saveResourcePack(config)
 
     /** 从用户选的文件算 SHA-1 并填进资源包配置。 */
-    fun fillResourcePackSha1(uri: Uri) {
-        viewModelScope.launch {
-            try {
-                val hash = withContext(Dispatchers.IO) {
-                    val f = java.io.File(app.cacheDir, "rp_${System.currentTimeMillis()}.zip")
-                    app.contentResolver.openInputStream(uri)?.use { input ->
-                        f.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    try {
-                        JavaResourcePack.sha1(f)
-                    } finally {
-                        f.delete()
-                    }
-                }
-                val current = _resourcePack.value ?: JavaResourcePack.Config()
-                if (hash == null) {
-                    _errorFlow.tryEmit(str(R.string.jv_rp_sha1_failed))
-                } else {
-                    _resourcePack.value = current.copy(sha1 = hash)
-                    _resourcePackIssues.value = JavaResourcePack.issues(current.copy(sha1 = hash))
-                    _messageFlow.tryEmit(str(R.string.jv_rp_sha1_filled))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.jv_rp_sha1_failed)}：${e.message}")
-            }
-        }
+    fun fillResourcePackSha1(uri: Uri) = javaAddonsDelegate.fillResourcePackSha1(uri)
+
+    private val worldMaintenanceDelegate by lazy {
+        WorldMaintenanceDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManagerProvider = { worldManager },
+            serverDirFor = { repo.termuxRuntime.serverDirFor(it) },
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            loadWorlds = ::loadWorlds,
+            loadJavaAddons = ::loadJavaAddons,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
     /** 重命名世界（目录 + level.dat 的 LevelName 一起改）。 */
-    fun renameWorld(worldName: String, newName: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_rename))) return
-        viewModelScope.launch {
-            try {
-                val renamed = withContext(Dispatchers.IO) {
-                    worldManager.renameJavaWorld(dirName, worldName, newName)
-                }
-                if (renamed != null) {
-                    _messageFlow.tryEmit(str(R.string.wl_renamed, renamed))
-                    loadWorlds()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.wl_rename_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_rename_failed)}：${e.message}")
-            }
-        }
-    }
+    fun renameWorld(worldName: String, newName: String) = worldMaintenanceDelegate.renameWorld(worldName, newName)
 
     /** 只重置一个维度（下界 / 末地），先备份。 */
-    fun resetDimension(worldName: String, key: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_reset_dim))) return
-        viewModelScope.launch {
-            try {
-                val result = worldManager.resetDimension(dirName, worldName, key)
-                when {
-                    result.backupFailed -> _errorFlow.tryEmit(str(R.string.wl_backup_failed))
-                    result.success -> {
-                        _messageFlow.tryEmit(str(R.string.wl_dim_reset_ok, key))
-                        loadWorlds()
-                        loadJavaAddons()
-                    }
-                    else -> _errorFlow.tryEmit(str(R.string.wl_dim_reset_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_dim_reset_failed)}：${e.message}")
-            }
-        }
-    }
+    fun resetDimension(worldName: String, key: String) = worldMaintenanceDelegate.resetDimension(worldName, key)
 
     // ── 附加包（行为包 / 资源包） ────────────────────────────────
 
-    private val _addons = MutableStateFlow<BdsPacks.Scan?>(null)
-    val addons: StateFlow<BdsPacks.Scan?> = _addons.asStateFlow()
+    private val bdsAddonsDelegate by lazy {
+        BdsAddonsDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManagerProvider = { worldManager },
+            activeDirName = ::activeDirName,
+            refreshActiveCore = ::refreshActiveCore,
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _addonsLoading = MutableStateFlow(false)
-    val addonsLoading: StateFlow<Boolean> = _addonsLoading.asStateFlow()
+    val addons: StateFlow<BdsPacks.Scan?> get() = bdsAddonsDelegate.addons
+
+    val addonsLoading: StateFlow<Boolean> get() = bdsAddonsDelegate.addonsLoading
 
     /**
      * `texturepack-required` 的当前值；null = 当前核心不支持（PNX 走 pnx.yml）。
@@ -5820,195 +3369,22 @@ class McViewModel(
      * 它是 `server.properties` 里唯一与资源包有关的键，语义是"进服前必须下载本服登记的
      * 全部资源包"。UI 上必须与资源包清单一起看：开着它却一个资源包都没登记，等于什么都没做。
      */
-    private val _texturePackRequired = MutableStateFlow<Boolean?>(null)
-    val texturePackRequired: StateFlow<Boolean?> = _texturePackRequired.asStateFlow()
+    val texturePackRequired: StateFlow<Boolean?> get() = bdsAddonsDelegate.texturePackRequired
 
-    /**
-     * 重新扫描附加包。
-     *
-     * 扫描范围包含全服目录与世界目录：BDS 对两处都会加载，且**世界目录里的同名包优先**
-     * （实测，见 `docs/BDS-ADDONS-WORLDS-VERIFICATION.md` §11.3）。
-     */
-    fun loadAddons() {
-        refreshActiveCore()
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            _addonsLoading.value = true
-            try {
-                val scan = withContext(Dispatchers.IO) {
-                    val world = worldManager.readLevelName(dirName)
-                    BdsPacks.scan(
-                        serverDir = worldManager.serverDir(dirName),
-                        worldName = world,
-                        builtinUuids = BdsPacks.readBuiltinUuids(worldManager.serverDir(dirName))
-                    )
-                }
-                _addons.value = scan
-                _texturePackRequired.value = withContext(Dispatchers.IO) {
-                    runCatching { worldManager.readTexturePackRequired(dirName) }.getOrNull()
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.ad_load_failed)}：${e.message}")
-            } finally {
-                _addonsLoading.value = false
-            }
-        }
-    }
+    /** 重新扫描附加包。 */
+    fun loadAddons() = bdsAddonsDelegate.loadAddons()
 
-    /**
-     * 启用 / 停用某个包：只改当前世界的 `world_*_packs.json`。
-     *
-     * BDS 只在启动时读这两个文件，运行中改动不会生效，所以运行中直接拒绝而不是静默写入。
-     */
-    fun setAddonEnabled(pack: BdsPacks.Pack, enabled: Boolean) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(if (enabled) R.string.ad_enable else R.string.ad_disable))) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    val world = worldManager.readLevelName(dirName)
-                    BdsPacks.setEnabled(
-                        worldDir = worldManager.worldDir(dirName, world),
-                        kind = pack.kind,
-                        entry = BdsPacks.Entry(pack.uuid, pack.version),
-                        enabled = enabled
-                    )
-                }
-                if (ok) {
-                    _messageFlow.tryEmit(str(if (enabled) R.string.ad_enabled else R.string.ad_disabled, pack.name))
-                    loadAddons()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.ad_write_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.ad_write_failed)}：${e.message}")
-            }
-        }
-    }
+    /** 启用 / 停用某个包：只改当前世界的 `world_*_packs.json`。 */
+    fun setAddonEnabled(pack: BdsPacks.Pack, enabled: Boolean) = bdsAddonsDelegate.setAddonEnabled(pack, enabled)
 
-    /**
-     * 切换「强制客户端下载资源包」（`texturepack-required`）。
-     *
-     * 只写 `server.properties`，BDS 每次启动会把它同步进 `level.dat:texturePacksRequired`。
-     * 开启时如果世界一个资源包都没登记，提示语要说清楚"开了但没东西可下发"，否则用户会
-     * 以为是客户端坏了。
-     */
-    fun setTexturePackRequired(required: Boolean) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.ad_tpr_title))) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    worldManager.setTexturePackRequired(dirName, required)
-                }
-                if (!ok) {
-                    _errorFlow.tryEmit(str(R.string.ad_write_failed))
-                    return@launch
-                }
-                _texturePackRequired.value = required
-                val empty = _addons.value?.enabledResource?.isEmpty() ?: true
-                _messageFlow.tryEmit(
-                    when {
-                        required && empty -> str(R.string.ad_tpr_on_empty)
-                        required -> str(R.string.ad_tpr_on, _addons.value?.enabledResource?.size ?: 0)
-                        else -> str(R.string.ad_tpr_off)
-                    }
-                )
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.ad_write_failed)}：${e.message}")
-            }
-        }
-    }
+    /** 切换「强制客户端下载资源包」（`texturepack-required`）。 */
+    fun setTexturePackRequired(required: Boolean) = bdsAddonsDelegate.setTexturePackRequired(required)
 
-    /**
-     * 安装包目录里躺着的压缩包（`.mcpack` / `.mcaddon`）。
-     *
-     * 装好后把原压缩包挪到 `.minexa/imported-archives/`：它留在 `behavior_packs/` 里
-     * 既不会被 BDS 正确读取（`.mcaddon`），也会让下次扫描重复列出同一个包。
-     */
-    fun installAddonArchive(archive: BdsPacks.Archive) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.ad_install_archive))) return
-        viewModelScope.launch {
-            try {
-                val out = withContext(Dispatchers.IO) {
-                    installArchiveFile(dirName, archive.file, archiveOut = true)
-                }
-                reportArchiveInstall(out)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.ad_install_failed)}：${e.message}")
-            }
-        }
-    }
+    /** 安装包目录中的压缩包（`.mcpack` / `.mcaddon`）。 */
+    fun installAddonArchive(archive: BdsPacks.Archive) = bdsAddonsDelegate.installAddonArchive(archive)
 
-    /**
-     * 从系统文件选择器导入 `.mcpack` / `.mcaddon`。
-     *
-     * 先复制到 cache：SAF 给的流只能顺序读一次，而解压要按条目随机定位，
-     * 且 [BdsPacks.installArchive] 需要真实文件路径。
-     */
-    fun importAddonFromUri(uri: Uri, displayName: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.ad_import_archive))) return
-        viewModelScope.launch {
-            var temp: java.io.File? = null
-            try {
-                temp = withContext(Dispatchers.IO) {
-                    val name = displayName.ifBlank { "addon_${System.currentTimeMillis()}.mcpack" }
-                    val f = java.io.File(app.cacheDir, "addon_" + System.currentTimeMillis() + "_" +
-                        name.substringAfterLast('/').takeLast(40))
-                    app.contentResolver.openInputStream(uri)?.use { input ->
-                        f.outputStream().use { output -> input.copyTo(output) }
-                    }
-                    f.takeIf { it.isFile && it.length() > 0 }
-                }
-                if (temp == null) {
-                    _errorFlow.tryEmit(str(R.string.ad_install_failed))
-                    return@launch
-                }
-                val out = withContext(Dispatchers.IO) {
-                    installArchiveFile(dirName, temp, archiveOut = false)
-                }
-                reportArchiveInstall(out)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.ad_install_failed)}：${e.message}")
-            } finally {
-                runCatching { temp?.delete() }
-            }
-        }
-    }
-
-    /** 解压安装的实际执行（同步，调用方放到 IO 线程）。 */
-    private fun installArchiveFile(
-        dirName: String,
-        archive: java.io.File,
-        archiveOut: Boolean
-    ): BdsPacks.ArchiveInstall {
-        val serverDir = worldManager.serverDir(dirName)
-        val out = if (archiveOut) {
-            java.io.File(serverDir, ".minexa/imported-archives/" + archive.name)
-        } else {
-            null
-        }
-        return BdsPacks.installArchive(
-            archive = archive,
-            destFor = { kind -> java.io.File(serverDir, kind.dirName) },
-            archiveOut = out
-        )
-    }
-
-    private fun reportArchiveInstall(result: BdsPacks.ArchiveInstall) {
-        when {
-            result.success -> {
-                val names = result.installed.map { it.name }.distinct().take(3).joinToString("、")
-                _messageFlow.tryEmit(str(R.string.ad_install_ok, names))
-                loadAddons()
-            }
-            result.skipped.isNotEmpty() ->
-                _messageFlow.tryEmit(str(R.string.ad_install_skipped, result.skipped.first()))
-            else -> _errorFlow.tryEmit(result.error ?: str(R.string.ad_install_failed))
-        }
-    }
+    /** 从系统文件选择器导入 `.mcpack` / `.mcaddon`。 */
+    fun importAddonFromUri(uri: Uri, displayName: String) = bdsAddonsDelegate.importAddonFromUri(uri, displayName)
 
     /**
      * 世界导出的前置检查，**必须在拉起系统保存框之前调用**。
@@ -6020,345 +3396,90 @@ class McViewModel(
     fun canExportWorldNow(): Boolean = requireServerStopped("导出世界")
 
     /** 导出世界到用户选择的位置（先打包到导出目录，再复制到 SAF 目标）。 */
-    fun exportWorldToUri(worldName: String, uri: Uri) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped("导出世界")) {
-            // 兜底：万一还有别的入口绕过了前置检查，这里把空文档清掉，别留 0 字节垃圾
-            runCatching {
-                app.contentResolver.openOutputStream(uri)?.close()
-                app.contentResolver.delete(uri, null, null)
-            }
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val path = worldManager.exportWorld(dirName, worldName)
-                if (path == null) {
-                    _errorFlow.tryEmit("导出失败：世界目录不存在或存储不可写")
-                    return@launch
-                }
-                exportPathToUri(java.io.File(path), uri)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("导出失败：${e.message}")
-            }
-        }
-    }
+    fun exportWorldToUri(worldName: String, uri: Uri) = worldTransferDelegate.exportWorldToUri(worldName, uri)
 
-    /**
-     * 从用户选择的压缩包导入世界。
-     *
-     * 先复制到 cache 再解压：SAF 的 InputStream 只能顺序读一次，而解压需要随机读取
-     * 条目头部（[Worlds.inspectZip] 会独立打开一次）。
-     */
-    fun importWorldFromUri(uri: Uri, preferredName: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped("导入世界")) return
-        viewModelScope.launch {
-            var temp: java.io.File? = null
-            try {
-                temp = withContext(Dispatchers.IO) {
-                    val f = java.io.File(app.cacheDir, "world_import_${System.currentTimeMillis()}.zip")
-                    app.contentResolver.openInputStream(uri)?.use { input ->
-                        f.outputStream().use { output ->
-                            // 边拷边计数：先全量落盘再判断大小，设备已经被填满了
-                            val buf = ByteArray(64 * 1024)
-                            var total = 0L
-                            while (true) {
-                                val read = input.read(buf)
-                                if (read < 0) break
-                                total += read
-                                if (total > maxWorldImportBytes) {
-                                    throw RuntimeException("压缩包超过 2 GB，已中止导入")
-                                }
-                                output.write(buf, 0, read)
-                            }
-                        }
-                    } ?: throw RuntimeException("无法读取所选文件")
-                    f
-                }
-                val imported = withContext(Dispatchers.IO) {
-                    worldManager.importWorld(dirName, temp, preferredName)
-                }
-                if (imported != null) {
-                    _messageFlow.tryEmit("世界已导入为「$imported」")
-                    loadWorlds()
-                } else {
-                    _errorFlow.tryEmit("导入失败：压缩包内没有找到世界（缺少 level.dat / region / db）")
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("导入失败：${e.message}")
-            } finally {
-                // NonCancellable：协程已取消时 finally 里的 withContext 会立刻抛出取消异常，
-                // 直接调用会让临时 zip 残留在 cacheDir 里。
-                withContext(NonCancellable + Dispatchers.IO) { temp?.delete() }
-            }
-        }
-    }
+    /** 从用户选择的压缩包导入世界。 */
+    fun importWorldFromUri(uri: Uri, preferredName: String) = worldTransferDelegate.importWorldFromUri(uri, preferredName)
 
-    /**
-     * 重置世界：先自动导出一份安全备份，再删除目录，让服务端下次启动重新生成。
-     *
-     * 备份失败时不会删除任何文件（由 [WorldManager.resetWorld] 保证），这里按
-     * backupFailed -> success 的顺序判断，避免把「没删成」提示成「已重置」，
-     * 也避免把「已删除但没备份」提示成「已中止」。
-     */
-    fun resetWorld(worldName: String) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped("重置世界")) return
-        viewModelScope.launch {
-            try {
-                val result = worldManager.resetWorld(dirName, worldName, backupFirst = true)
-                val backupPath = result.backupPath
-                when {
-                    result.backupFailed -> _errorFlow.tryEmit("未能在删除前创建安全备份，已中止重置（存档未改动）")
-                    !result.success || backupPath == null -> _errorFlow.tryEmit("重置失败：世界目录不存在或无法删除")
-                    else -> _messageFlow.tryEmit(
-                        "世界「$worldName」已重置，备份保存在 ${java.io.File(backupPath).parentFile?.absolutePath ?: "导出目录"}"
-                    )
-                }
-                loadWorlds()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("重置失败：${e.message}")
-            }
-        }
-    }
+    /** 重置世界：先自动导出一份安全备份，再删除目录，让服务端下次启动重新生成。 */
+    fun resetWorld(worldName: String) = worldMaintenanceDelegate.resetWorld(worldName)
 
     // ── 崩溃报告 ────────────────────────────────────────────────────
 
     private val crashReportManager = CrashReportManager(repo.termuxRuntime)
 
-    private val _crashReports = MutableStateFlow<List<CrashReportManager.CrashReport>>(emptyList())
-    val crashReports: StateFlow<List<CrashReportManager.CrashReport>> = _crashReports.asStateFlow()
+    private val crashReportFilesDelegate by lazy {
+        CrashReportFilesDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            crashReportManager = crashReportManager,
+            refreshKnowledgeIfStale = { crashKnowledgeBase.refreshIfStale() },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    val crashReports: StateFlow<List<CrashReportManager.CrashReport>> get() = crashReportFilesDelegate.crashReports
 
     /** 加载崩溃报告列表 */
-    fun loadCrashReports() {
-        viewModelScope.launch {
-            try {
-                _crashReports.value = withContext(Dispatchers.IO) {
-                    val native = config.value.installedCores.flatMap { core ->
-                        crashReportManager.listNativeCrashReports(core.dirName)
-                    }
-                    (crashReportManager.listCrashReports() + native).sortedByDescending { it.createdTime }
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s287, e.message))
-            }
-        }
-        // 进崩溃页时顺带到点刷新在线规则包（24h 节流；失败静默，不影响本地分析）
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { crashKnowledgeBase.refreshIfStale() }
-        }
-    }
+    fun loadCrashReports() = crashReportFilesDelegate.loadCrashReports()
 
     /** 当前查看的崩溃报告全文（供 UI 展示） */
-    private val _currentCrashContent = MutableStateFlow<String?>(null)
-    val currentCrashContent: StateFlow<String?> = _currentCrashContent.asStateFlow()
-    private val _currentCrashAnalysis = MutableStateFlow<CrashReportAnalyzer.Analysis?>(null)
-    val currentCrashAnalysis: StateFlow<CrashReportAnalyzer.Analysis?> = _currentCrashAnalysis.asStateFlow()
+    val currentCrashContent: StateFlow<String?> get() = crashDetailsDelegate.currentCrashContent
+    val currentCrashAnalysis: StateFlow<CrashReportAnalyzer.Analysis?> get() = crashDetailsDelegate.currentCrashAnalysis
 
     /** 结构化报告（分析页主数据源）；生成失败时为 null，UI 退回纯规则归因 */
-    private val _currentCrashInsight = MutableStateFlow<CrashInsight?>(null)
-    val currentCrashInsight: StateFlow<CrashInsight?> = _currentCrashInsight.asStateFlow()
+    val currentCrashInsight: StateFlow<CrashInsight?> get() = crashDetailsDelegate.currentCrashInsight
+
+    private val trustStoreRepairDelegate by lazy {
+        TrustStoreRepairDelegate(
+            scope = viewModelScope,
+            config = config,
+            termuxRuntime = repo.termuxRuntime,
+            refreshJava = ::refreshJava
+        )
+    }
 
     /** 崩溃弹窗「一键修复证书库」的进度与结果（弹窗内就地展示）。 */
-    private val _trustStoreRepair = MutableStateFlow(TrustStoreRepairUi())
-    val trustStoreRepair: StateFlow<TrustStoreRepairUi> = _trustStoreRepair.asStateFlow()
+    val trustStoreRepair: StateFlow<TrustStoreRepairUi> get() = trustStoreRepairDelegate.trustStoreRepair
 
     /** 本次启动的日志视图（关键日志 / 全部日志）；与报告 sidecar 一一对应 */
-    private val _currentCrashLog = MutableStateFlow<CrashLogView?>(null)
-    val currentCrashLog: StateFlow<CrashLogView?> = _currentCrashLog.asStateFlow()
+    val currentCrashLog: StateFlow<CrashLogView?> get() = crashDetailsDelegate.currentCrashLog
 
-    /** L2 历史案例库 + L3 在线规则包（懒加载，避免拖慢 ViewModel 构建） */
-    private val crashCaseStore by lazy { CrashCaseStore(File(app.filesDir, "crash-cases")) }
-    private val crashInsightEngine by lazy { CrashInsightEngine(crashCaseStore) }
+    private val crashDetailsDelegate by lazy {
+        CrashDetailsDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            crashReportManager = crashReportManager,
+            termuxRuntime = repo.termuxRuntime,
+            timeNow = ::timeNow,
+            crashReportPath = { fileName -> crashReports.value.firstOrNull { it.fileName == fileName }?.path },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    /** L3 在线规则包（懒加载，避免拖慢 ViewModel 构建） */
     private val crashKnowledgeBase by lazy { CrashKnowledgeBase(app) }
 
-    /** 崩溃分析用的环境快照：从用户配置读取，比从日志里猜更可靠。 */
-    private fun crashEnv(): EnvInfo {
-        val c = config.value
-        return EnvInfo(
-            core = c.activeCoreName ?: "unknown",
-            coreVersion = c.mcVersion,
-            mcVersion = c.mcVersion,
-            javaVersion = c.selectedJavaVersion.displayName.removePrefix("Java "),
-            javaVendor = c.selectedJavaVendor.logName,
-            heapMb = c.maxHeapMb,
-            android = android.os.Build.VERSION.RELEASE.orEmpty(),
-            abi = android.os.Build.SUPPORTED_ABIS.firstOrNull().orEmpty(),
-            device = "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}".trim()
-        )
-    }
-
-    /**
-     * 生成结构化报告（失败返回 null，绝不阻塞弹窗）。
-     * @param logText 必须是**本次启动**的日志切片（会话日志或 sidecar `.log`）
-     */
-    private fun buildInsight(
-        crashId: String,
-        exitCode: Int,
-        logText: String,
-        sessionId: String,
-        startedAt: Long,
-        endedAt: Long,
-        fallbackText: String,
-        truncated: Boolean = false,
-        fallbackToLatestLog: Boolean = false,
-        /** native 信号退出时抓到的 abort 诊断；没有采集到传 null。 */
-        abortText: String? = null
-    ): CrashInsight? = runCatching {
-        crashInsightEngine.analyze(
-            CrashInsightEngine.Input(
-                crashId = crashId,
-                env = crashEnv(),
-                trigger = TriggerInfo(exitCode = exitCode),
-                logText = logText.ifBlank { fallbackText },
-                abortText = abortText,
-                sessionId = sessionId,
-                startedAt = startedAt,
-                endedAt = if (endedAt > 0L) endedAt else System.currentTimeMillis(),
-                truncated = truncated,
-                fallbackToLatestLog = fallbackToLatestLog
-            )
-        )
-    }.getOrNull()
-
     /** Shows a structured report when validation fails before a process can create its own crash file. */
-    private fun showStartupFailureReport(error: Throwable) {
-        val text = buildString {
-            appendLine(str(R.string.startup_report_title))
-            appendLine(str(R.string.startup_report_time, timeNow()))
-            appendLine(str(R.string.startup_report_exception, error::class.java.name, error.message ?: str(R.string.startup_report_no_detail)))
-            appendLine()
-            append(error.stackTraceToString())
-        }
-        _currentCrashContent.value = text
-        _currentCrashAnalysis.value = CrashReportAnalyzer.analyze(text)
-        _currentCrashInsight.value = null
-        _currentCrashLog.value = null
-    }
+    private fun showStartupFailureReport(error: Throwable) = crashDetailsDelegate.showStartupFailureReport(error)
 
-    private fun showStartupFailureReport(failure: McServerController.StartupFailure) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val report = failure.reportPath?.let { runCatching { File(it).readText() }.getOrNull() }
-            val text = report ?: buildString {
-                appendLine(str(R.string.startup_report_title))
-                appendLine(str(R.string.startup_report_time, timeNow()))
-                appendLine(str(R.string.startup_report_exitcode, failure.code))
-                appendLine(str(R.string.startup_report_reason, failure.detail))
-                appendLine(str(R.string.startup_report_hint))
-            }
-            val crashId = failure.reportPath?.let { File(it).name.removeSuffix(".txt") }
-                ?: "live_${System.currentTimeMillis()}"
-            // 本次启动的会话切片（启动即失败时可能只有应用侧几行，但依然是有效证据）
-            val session = repo.termuxRuntime.currentLaunchSession()
-            val sessionLog = session?.let { repo.termuxRuntime.readSessionLog(it) }.orEmpty()
-            val logView = sessionLog.takeIf { it.isNotBlank() }?.let {
-                CrashLogView.from(
-                    scopeId = session?.id.orEmpty(),
-                    startedAt = session?.startedAt ?: 0L,
-                    logText = it
-                )
-            }
-            val insight = buildInsight(
-                crashId = crashId,
-                exitCode = failure.code,
-                logText = sessionLog,
-                sessionId = session?.id.orEmpty(),
-                startedAt = session?.startedAt ?: 0L,
-                endedAt = System.currentTimeMillis(),
-                fallbackText = text,
-                abortText = repo.termuxRuntime.lastNativeAbort()
-            )
-            if (insight != null && failure.reportPath != null) {
-                crashReportManager.writeInsight(crashId, CrashInsight.encode(insight))
-            }
-            withContext(Dispatchers.Main) {
-                _currentCrashContent.value = text
-                _currentCrashAnalysis.value = CrashReportAnalyzer.analyze(text)
-                _currentCrashInsight.value = insight
-                _currentCrashLog.value = logView
-            }
-        }
-    }
+    private fun showStartupFailureReport(failure: McServerController.StartupFailure) =
+        crashDetailsDelegate.showStartupFailureReport(failure)
 
-    /**
-     * 读取崩溃报告全文。
-     *
-     * 日志视图只从该报告的会话 sidecar（`{crashId}.log`）读取 —— 那是崩溃当时冻结的
-     * 本次启动日志，App 重启后再打开也不会掺入任何历史启动内容。
-     */
-    fun readCrashReport(fileName: String) {
-        viewModelScope.launch {
-            try {
-                val path = _crashReports.value.firstOrNull { it.fileName == fileName }?.path
-                val text = withContext(Dispatchers.IO) {
-                    path?.let { File(it).takeIf { f -> f.isFile }?.readText() }
-                }
-                if (text == null) {
-                    _errorFlow.tryEmit(str(R.string.s288))
-                    return@launch
-                }
-                val crashId = fileName.removeSuffix(".txt")
-                val loaded = withContext(Dispatchers.IO) {
-                    val sessionLog = crashReportManager.readSessionLogSidecar(crashId)
-                    val insight = crashReportManager.readInsight(crashId)
-                        ?: buildInsight(
-                            crashId = crashId,
-                            exitCode = CrashReportAnalyzer.analyze(text).exitCode ?: -1,
-                            logText = sessionLog,
-                            sessionId = "",
-                            startedAt = 0L,
-                            endedAt = 0L,
-                            fallbackText = text
-                        )?.also { crashReportManager.writeInsight(crashId, CrashInsight.encode(it)) }
-                    val logView = sessionLog.takeIf { it.isNotBlank() }?.let {
-                        CrashLogView.from(
-                            scopeId = insight?.session?.id.orEmpty(),
-                            startedAt = insight?.session?.startedAt ?: 0L,
-                            logText = it
-                        )
-                    }
-                    Triple(insight, logView, text)
-                }
-                _currentCrashContent.value = loaded.third
-                _currentCrashAnalysis.value = CrashReportAnalyzer.analyze(loaded.third)
-                _currentCrashInsight.value = loaded.first
-                _currentCrashLog.value = loaded.second
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s289, e.message))
-            }
-        }
-    }
+    /** 读取崩溃报告全文。 */
+    fun readCrashReport(fileName: String) = crashDetailsDelegate.readCrashReport(fileName)
 
     /** 用户反馈：回写 L2 案例库，让后续相似崩溃的建议更准。 */
-    fun recordCrashFeedback(resolved: Boolean) {
-        val crashId = _currentCrashInsight.value?.crashId ?: return
-        viewModelScope.launch(Dispatchers.IO) {
-            runCatching { crashCaseStore.recordFeedback(crashId, resolved) }
-        }
-    }
+    fun recordCrashFeedback(resolved: Boolean) = crashDetailsDelegate.recordCrashFeedback(resolved)
 
     /**
      * 崩溃弹窗里的「一键修复」：重装当前 Java + ca-certificates，必要时用本机证书包
      * 原地重建 cacerts。修复期间弹窗保持打开，结果就地展示。
      */
-    fun repairJavaTrustStore() {
-        if (_trustStoreRepair.value.running) return
-        val cfg = config.value
-        _trustStoreRepair.value = TrustStoreRepairUi(running = true)
-        viewModelScope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    repo.termuxRuntime.repairTrustStore(cfg.selectedJavaVersion, cfg.selectedJavaVendor)
-                }.getOrElse { TrustStoreRepair(false, "修复过程出错：${it.message ?: it::class.java.simpleName}") }
-            }
-            _trustStoreRepair.value = TrustStoreRepairUi(running = false, ok = result.ok, message = result.summary)
-            if (result.ok) {
-                // 环境页读的是缓存列表，不刷新会继续显示旧状态。
-                refreshJava()
-            }
-        }
-    }
+    fun repairJavaTrustStore() = trustStoreRepairDelegate.repairJavaTrustStore()
 
     /** 手动刷新在线知识库规则包（分析页可选入口，失败静默）。 */
     fun refreshCrashKnowledge() {
@@ -6370,64 +3491,21 @@ class McViewModel(
 
     /** 关闭崩溃报告详情视图 */
     fun clearCrashContent() {
-        _currentCrashContent.value = null
-        _currentCrashAnalysis.value = null
-        _currentCrashInsight.value = null
-        _currentCrashLog.value = null
-        _trustStoreRepair.value = TrustStoreRepairUi()
+        crashDetailsDelegate.clearCrashContent()
+        trustStoreRepairDelegate.clearResult()
     }
 
     /** 删除崩溃报告 */
-    fun deleteCrashReport(fileName: String) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { crashReportManager.deleteCrashReport(fileName) }
-                _messageFlow.tryEmit(str(R.string.s290, fileName))
-                loadCrashReports()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s291, e.message))
-            }
-        }
-    }
+    fun deleteCrashReport(fileName: String) = crashReportFilesDelegate.deleteCrashReport(fileName)
 
-    /** 清空所有崩溃报告 */
     /** 读取应用自身崩溃日志（全局 uncaught handler 写入），无则返回 null */
-    fun appCrashLog(): String? {
-        val dir = java.io.File(app.filesDir, "home")
-        val candidates = listOf(
-            java.io.File(dir, "crash_log.txt"),
-            java.io.File(dir, "crash_log_read.txt")
-        )
-        val file = candidates.firstOrNull { it.exists() && it.length() > 0 } ?: return null
-        return try {
-            val text = file.readText()
-            if (text.length > 4000) text.takeLast(4000) else text
-        } catch (_: Exception) {
-            null
-        }
-    }
+    fun appCrashLog(): String? = crashReportFilesDelegate.appCrashLog()
 
     /** 清空应用崩溃日志文件 */
-    fun clearAppCrashLog() {
-        try {
-            val dir = java.io.File(app.filesDir, "home")
-            java.io.File(dir, "crash_log.txt").delete()
-            java.io.File(dir, "crash_log_read.txt").delete()
-        } catch (_: Exception) {
-        }
-    }
+    fun clearAppCrashLog() = crashReportFilesDelegate.clearAppCrashLog()
 
-    fun clearCrashReports() {
-        viewModelScope.launch {
-            try {
-                val count = withContext(Dispatchers.IO) { crashReportManager.clearAllCrashReports() }
-                _messageFlow.tryEmit(str(R.string.s292, count))
-                loadCrashReports()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s293, e.message))
-            }
-        }
-    }
+    /** 清空所有崩溃报告 */
+    fun clearCrashReports() = crashReportFilesDelegate.clearCrashReports()
 
     // ── 定时备份配置 ────────────────────────────────────────────────
 
@@ -6691,11 +3769,6 @@ class McViewModel(
         }
     }
 
-    private fun formatCoreSize(bytes: Long): String =
-        if (bytes >= 1024 * 1024) "%.1f MB".format(bytes / 1024.0 / 1024.0)
-        else if (bytes >= 1024) "%.1f KB".format(bytes / 1024.0)
-        else "$bytes B"
-
     /**
      * 删除一个已安装核心（磁盘目录 + 配置登记）。
      *
@@ -6770,11 +3843,19 @@ class McViewModel(
         val modifiedText: String
     )
 
-    private val _fileList = MutableStateFlow<List<FileEntry>>(emptyList())
-    val fileList: StateFlow<List<FileEntry>> = _fileList.asStateFlow()
+    private val fileBrowserDelegate: FileBrowserDelegate by lazy {
+        FileBrowserDelegate(
+            app = app,
+            scope = viewModelScope,
+            openTextFile = { openTextFile(it) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _currentPath = MutableStateFlow("")
-    val currentPath: StateFlow<String> = _currentPath.asStateFlow()
+    val fileList: StateFlow<List<FileEntry>> get() = fileBrowserDelegate.fileList
+
+    val currentPath: StateFlow<String> get() = fileBrowserDelegate.currentPath
 
     /**
      * 文件列表为什么是空的。
@@ -6786,113 +3867,33 @@ class McViewModel(
      */
     enum class FileListState { Loading, NoPermission, RootMissing, Empty, Ready }
 
-    private val _fileListState = MutableStateFlow(FileListState.Loading)
-    val fileListState: StateFlow<FileListState> = _fileListState.asStateFlow()
+    val fileListState: StateFlow<FileListState> get() = fileBrowserDelegate.fileListState
 
-    /**
-     * 文件管理根目录：只有统一存储目录一个根。
-     *
-     * 「内部 / 私有」切换控件已移除 —— 旧私有目录不再作为可浏览、可运行的位置，
-     * 它的内容只能通过迁移流程搬到统一目录（见 `LegacyServerMigration`）。
-     */
-    val fileManagerRoot: java.io.File
-        get() = com.mineserve.mobile.data.ServerStorage.serversDir(app)
+    /** 文件管理根目录：只有统一存储目录一个根。 */
+    val fileManagerRoot: java.io.File get() = fileBrowserDelegate.fileManagerRoot
 
-    /**
-     * 文件管理权限状态：未授权时界面必须给出「去授权」入口，并且**不执行任何文件操作**。
-     *
-     * 直接暴露 [StorageAccess.granted]（全局单例流）而不是自己再存一份：
-     * 授权是在 Activity 的 onResume 里刷新的，界面若各自缓存会造成
-     * 「从设置页返回后按钮还在、列表仍为空」的状态撕裂。
-     */
-    val storageGranted: StateFlow<Boolean>
-        get() = com.mineserve.mobile.data.StorageAccess.granted
+    /** 文件管理权限状态，直接转发全局存储授权流。 */
+    val storageGranted: StateFlow<Boolean> get() = fileBrowserDelegate.storageGranted
 
-    fun refreshStoragePermission() {
-        com.mineserve.mobile.data.StorageAccess.refresh(app)
-    }
+    fun refreshStoragePermission() = fileBrowserDelegate.refreshStoragePermission()
 
-    /**
-     * 进入文件管理页（或授权状态变化）时刷新。
-     *
-     * **不再以 Termux 环境就绪为前提**：浏览/上传/导出服务器目录跟 Java 运行时无关，
-     * 初次安装（还没装 Termux 引导包）时文件页也必须能看到磁盘上已有的服务器目录。
-     * 之前的门槛导致首启进入文件页永远是空列表 + 一句「请先安装环境」。
-     */
-    fun onFileManagerVisible() {
-        val path = _currentPath.value
-        if (path.isEmpty()) loadFilesRoot() else loadFiles(java.io.File(path))
-    }
+    /** 进入文件管理页（或授权状态变化）时刷新。 */
+    fun onFileManagerVisible() = fileBrowserDelegate.onFileManagerVisible()
 
     /** 授权成功后（之前因无权限列表是空的），补一次加载 */
-    fun onStoragePermissionGranted() {
-        onFileManagerVisible()
-    }
+    fun onStoragePermissionGranted() = fileBrowserDelegate.onStoragePermissionGranted()
 
     /** 加载指定目录的文件列表 */
-    fun loadFiles(path: java.io.File) {
-        viewModelScope.launch {
-            try {
-                _currentPath.value = path.absolutePath
-                val granted = com.mineserve.mobile.data.StorageAccess.hasAllFilesAccess(app)
-                val result = withContext(Dispatchers.IO) {
-                    val exists = path.isDirectory
-                    val entries = if (!exists) {
-                        emptyList()
-                    } else {
-                        // SimpleDateFormat 创建较贵，且非线程安全；在单线程的 map 内复用一个实例，
-                        // 避免大目录（成百上千文件）下每个文件都 new 一次带来的 GC 与构造开销。
-                        val formatter = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.US)
-                        path.listFiles()?.sortedWith(
-                            compareByDescending<java.io.File> { it.isDirectory }
-                                .thenBy(String.CASE_INSENSITIVE_ORDER) { it.name }
-                        )?.map { f ->
-                            FileEntry(
-                                name = f.name,
-                                path = f.absolutePath,
-                                isDirectory = f.isDirectory,
-                                isEditable = f.isFile && SafeTextFile.isSupported(f),
-                                sizeBytes = if (f.isFile) f.length() else 0L,
-                                sizeText = if (f.isFile) formatBytes(f.length()) else "",
-                                lastModified = f.lastModified(),
-                                modifiedText = formatter.format(java.util.Date(f.lastModified()))
-                            )
-                        } ?: emptyList()
-                    }
-                    val state = when {
-                        entries.isNotEmpty() -> FileListState.Ready
-                        !exists -> if (granted) FileListState.RootMissing else FileListState.NoPermission
-                        else -> FileListState.Empty
-                    }
-                    entries to state
-                }
-                _fileList.value = result.first
-                _fileListState.value = result.second
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s302, e.message))
-            }
-        }
-    }
+    fun loadFiles(path: java.io.File) = fileBrowserDelegate.loadFiles(path)
 
     /** 加载文件管理根目录（不依赖 Termux 环境） */
-    fun loadFilesRoot() {
-        loadFiles(fileManagerRoot)
-    }
+    fun loadFilesRoot() = fileBrowserDelegate.loadFilesRoot()
 
     /** 向上返回上级目录 */
-    fun navigateUp() {
-        val current = java.io.File(_currentPath.value)
-        val parent = current.parentFile
-        if (parent != null && parent.absolutePath.startsWith(fileManagerRoot.absolutePath)) {
-            loadFiles(parent)
-        }
-    }
+    fun navigateUp() = fileBrowserDelegate.navigateUp()
 
     /** 刷新当前目录文件列表；还没定位到目录时重新回到根目录 */
-    fun refreshFiles() {
-        val path = _currentPath.value
-        if (path.isEmpty()) loadFilesRoot() else loadFiles(java.io.File(path))
-    }
+    fun refreshFiles() = fileBrowserDelegate.refreshFiles()
 
     /** 打开 MC 终端前初始化日志 */
     fun launchMcConsole() {
@@ -6900,105 +3901,14 @@ class McViewModel(
         _messageFlow.tryEmit(str(R.string.s303))
     }
 
-    private fun formatBytes(bytes: Long): String {
-        return when {
-            bytes >= 1024 * 1024 -> String.format(java.util.Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
-            bytes >= 1024 -> String.format(java.util.Locale.US, "%.1f KB", bytes / 1024.0)
-            else -> "$bytes B"
-        }
-    }
-
     /** 删除文件或目录 */
-    fun deleteFile(file: java.io.File) {
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { FileOps.deleteRecursively(file) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s304, file.name))
-                    loadFiles(java.io.File(_currentPath.value))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s305, file.name))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s236, e.message))
-            }
-        }
-    }
+    fun deleteFile(file: java.io.File) = fileBrowserDelegate.deleteFile(file)
 
     /** 上传文件：从 Uri 复制到目标目录 */
-    fun uploadFile(uri: android.net.Uri, targetDir: java.io.File) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val input = app.contentResolver.openInputStream(uri)
-                        ?: throw RuntimeException(str(R.string.err_open_file))
-                    val fileName = queryFileName(uri) ?: "uploaded_${System.currentTimeMillis()}"
-                    val targetFile = java.io.File(targetDir, fileName)
-                    input.use { ins ->
-                        java.io.FileOutputStream(targetFile).use { fos ->
-                            ins.copyTo(fos)
-                        }
-                    }
-                }
-                _messageFlow.tryEmit(str(R.string.s307))
-                loadFiles(java.io.File(_currentPath.value))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s308, e.message))
-            }
-        }
-    }
+    fun uploadFile(uri: android.net.Uri, targetDir: java.io.File) = fileBrowserDelegate.uploadFile(uri, targetDir)
 
     /** 导出文件/文件夹到用户选择的 Uri（文件夹打包为 zip） */
-    fun exportPathToUri(source: java.io.File, uri: android.net.Uri) {
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val output = app.contentResolver.openOutputStream(uri)
-                        ?: throw RuntimeException(str(R.string.err_open_export))
-                    output.use { os ->
-                        if (source.isDirectory) {
-                            // 文件夹打包为 zip
-                            java.util.zip.ZipOutputStream(os).use { zos ->
-                                source.walkTopDown().filter { it.isFile }.forEach { f ->
-                                    val entryName = source.toURI().relativize(f.toURI()).path
-                                    zos.putNextEntry(java.util.zip.ZipEntry(entryName))
-                                    f.inputStream().use { it.copyTo(zos) }
-                                    zos.closeEntry()
-                                }
-                            }
-                        } else {
-                            source.inputStream().use { it.copyTo(os) }
-                        }
-                    }
-                }
-                // 写完主动扫一次 + 把落盘路径告诉用户。
-                // SAF 写进 Downloads 的文件不会自动进 MediaStore，部分文件管理器
-                // 要等扫描后才显示 —— 这正是「导出成功但找不到文件」的最常见成因。
-                val path = scanExportedUri(uri)
-                _messageFlow.tryEmit(
-                    if (path != null) str(R.string.export_saved_to, path) else str(R.string.s309)
-                )
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s257, e.message))
-            }
-        }
-    }
-
-    /**
-     * 把 SAF 的 `content://` 目标反解成真实路径并触发媒体扫描。
-     *
-     * 只处理最常见的 `primary:`（主存储）docId；反解不出来时返回 null，
-     * 调用方退回普通的「导出完成」提示——不猜路径，避免给出一个错的。
-     */
-    private fun scanExportedUri(uri: Uri): String? = runCatching {
-        val docId = android.provider.DocumentsContract.getDocumentId(uri)
-        val rel = docId.substringAfter(':', missingDelimiterValue = "")
-        if (rel.isBlank()) return@runCatching null
-        val file = java.io.File(android.os.Environment.getExternalStorageDirectory(), rel)
-        if (!file.isFile) return@runCatching null
-        android.media.MediaScannerConnection.scanFile(app, arrayOf(file.absolutePath), null, null)
-        file.absolutePath
-    }.getOrNull()
+    fun exportPathToUri(source: java.io.File, uri: android.net.Uri) = fileBrowserDelegate.exportPathToUri(source, uri)
 
     /** 导出整个服务器核心目录（打包 zip）；目录按当前活动核心的实际位置解析 */
     fun exportServerToUri(uri: android.net.Uri) {
@@ -7011,171 +3921,20 @@ class McViewModel(
         exportPathToUri(dir, uri)
     }
 
-    /** 从 Uri 查询文件名 */
-    private fun queryFileName(uri: android.net.Uri): String? {
-        return try {
-            val cursor = app.contentResolver.query(uri, null, null, null, null)
-            cursor?.use {
-                val nameIndex = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (nameIndex >= 0 && it.moveToFirst()) it.getString(nameIndex) else null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     /** 创建新目录 */
-    fun createDirectory(parent: java.io.File, name: String) {
-        if (name.isBlank()) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    java.io.File(parent, name).mkdirs()
-                }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s311, name))
-                    loadFiles(java.io.File(_currentPath.value))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s312))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s313, e.message))
-            }
-        }
-    }
+    fun createDirectory(parent: java.io.File, name: String) = fileBrowserDelegate.createDirectory(parent, name)
 
-    /**
-     * 新建空文本文件。
-     *
-     * 名单校验与 [createDirectory] 同源：'/' 会静默建到别处、'..' 能跳出根目录，
-     * 这里必须提前拒绝，否则用户会在「文件管理」里写出根目录之外的东西。
-     * 建成功后直接进入编辑器 —— 新建一个空文件却停在列表里，用户还得再点一次。
-     */
-    fun createTextFile(parent: java.io.File, name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) return
-        if (trimmed != name || trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..")) {
-            _errorFlow.tryEmit(str(R.string.fm_new_dir_invalid_name))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val target = withContext(Dispatchers.IO) {
-                    val f = java.io.File(parent, trimmed)
-                    if (f.exists()) null else f.createNewFile().let { if (it) f else null }
-                }
-                if (target == null) {
-                    _errorFlow.tryEmit(str(R.string.fm_name_exists, trimmed))
-                    return@launch
-                }
-                _messageFlow.tryEmit(str(R.string.fm_created, trimmed))
-                loadFiles(java.io.File(_currentPath.value))
-                openTextFile(target)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.fm_create_failed, e.message))
-            }
-        }
-    }
+    /** 新建空文本文件。 */
+    fun createTextFile(parent: java.io.File, name: String) = fileBrowserDelegate.createTextFile(parent, name)
 
-    /**
-     * 重命名文件/目录。
-     *
-     * 目标已存在时**拒绝**而不是覆盖：文件管理里一次误点就把 server.properties
-     * 换成另一个同名文件，是不可恢复的事故。
-     */
-    fun renameEntry(file: java.io.File, newName: String) {
-        val name = newName.trim()
-        if (name.isEmpty() || name == file.name) return
-        if (name.contains('/') || name.contains('\\') || name.contains("..")) {
-            _errorFlow.tryEmit(str(R.string.fm_new_dir_invalid_name))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val message = withContext(Dispatchers.IO) {
-                    val target = java.io.File(file.parentFile, name)
-                    when {
-                        target.exists() -> str(R.string.fm_name_exists, name) to true
-                        file.renameTo(target) -> str(R.string.fm_renamed, name) to true
-                        else -> str(R.string.fm_rename_failed, file.name) to false
-                    }
-                }
-                if (message.second) _messageFlow.tryEmit(message.first) else _errorFlow.tryEmit(message.first)
-                loadFiles(java.io.File(_currentPath.value))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.fm_rename_failed, e.message))
-            }
-        }
-    }
+    /** 重命名文件/目录。 */
+    fun renameEntry(file: java.io.File, newName: String) = fileBrowserDelegate.renameEntry(file, newName)
 
     /** 复制文件/目录到目标目录；重名自动加序号，不覆盖已有内容 */
-    fun copyEntryTo(src: java.io.File, destDir: java.io.File) {
-        viewModelScope.launch {
-            try {
-                // 把目录复制到它自己内部会无限递归 —— 先挡掉，别等 IO 把磁盘写满
-                if (destDir.absolutePath == src.absolutePath ||
-                    destDir.absolutePath.startsWith(src.absolutePath + java.io.File.separator)
-                ) {
-                    _errorFlow.tryEmit(str(R.string.fm_copy_into_self))
-                    return@launch
-                }
-                val target = withContext(Dispatchers.IO) { copyRecursivelyTo(src, destDir) }
-                _messageFlow.tryEmit(str(R.string.fm_copied_to, target.name))
-                loadFiles(java.io.File(_currentPath.value))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.fm_copy_failed, e.message))
-            }
-        }
-    }
-
-    private fun copyRecursivelyTo(src: java.io.File, destDir: java.io.File): java.io.File {
-        val target = uniqueTarget(destDir, src.name)
-        if (src.isDirectory) {
-            target.mkdirs()
-            src.listFiles()?.forEach { copyRecursivelyTo(it, target) }
-        } else {
-            src.inputStream().use { ins -> java.io.FileOutputStream(target).use { ins.copyTo(it) } }
-        }
-        return target
-    }
-
-    /** `name.ext` 已存在时生成 `name-1.ext`、`name-2.ext`… */
-    private fun uniqueTarget(dir: java.io.File, name: String): java.io.File {
-        val first = java.io.File(dir, name)
-        if (!first.exists()) return first
-        val dot = name.lastIndexOf('.')
-        val base = if (dot > 0) name.substring(0, dot) else name
-        val ext = if (dot > 0) name.substring(dot) else ""
-        var index = 1
-        var candidate = java.io.File(dir, "$base-$index$ext")
-        while (candidate.exists()) {
-            index++
-            candidate = java.io.File(dir, "$base-$index$ext")
-        }
-        return candidate
-    }
+    fun copyEntryTo(src: java.io.File, destDir: java.io.File) = fileBrowserDelegate.copyEntryTo(src, destDir)
 
     /** 批量删除（多选模式）；部分失败时报出失败数量，不谎报全部成功 */
-    fun deleteEntries(entries: List<java.io.File>) {
-        if (entries.isEmpty()) return
-        viewModelScope.launch {
-            try {
-                val failed = withContext(Dispatchers.IO) {
-                    entries.count { f -> !FileOps.deleteRecursively(f) }
-                }
-                when {
-                    failed == 0 -> _messageFlow.tryEmit(str(R.string.fm_deleted_count, entries.size))
-                    failed == entries.size -> _errorFlow.tryEmit(str(R.string.fm_delete_failed_count, failed))
-                    else -> _errorFlow.tryEmit(
-                        str(R.string.fm_deleted_partial, entries.size - failed, failed)
-                    )
-                }
-                loadFiles(java.io.File(_currentPath.value))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s236, e.message))
-            }
-        }
-    }
+    fun deleteEntries(entries: List<java.io.File>) = fileBrowserDelegate.deleteEntries(entries)
 
     /**
      * init 块必须放在类体末尾：这里启动的协程（Dispatchers.IO/Default）会在
@@ -7239,97 +3998,13 @@ class McViewModel(
         }
         viewModelScope.launch(Dispatchers.Default) {
             repo.termuxRuntime.consoleFlow.collect { line ->
-                consoleBuffer.add(line)
-                pendingConsoleBuffer.add(line)
+                consoleLogDelegate.appendLine(line)
                 parseConsoleLine(line)
             }
         }
-        // Process only newly received lines. Older terminal rows keep their identity across UI flushes.
-        viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                // 无 UI 订阅（后台/无页面），或界面不可见（Activity 已停止但 collectAsState 不销毁、订阅数仍 >0）
-                // 时长时间睡眠；控制台可见时以帧友好的频率刷新。
-                if (!uiVisible ||
-                    (_consoleLines.subscriptionCount.value <= 0 &&
-                        _consolePreviewLines.subscriptionCount.value <= 0 &&
-                        _terminalConsoleLines.subscriptionCount.value <= 0)
-                ) {
-                    delay(IDLE_LOG_FLUSH_MS)
-                    continue
-                }
-                delay(200)
-                val batch = pendingConsoleBuffer.snapshotAndClear()
-                if (batch.isNotEmpty()) {
-                    consoleGeneration++
-                }
-                if (terminalDisplayDirty) {
-                    terminalConsoleBuffer.replace(
-                        consoleBuffer.snapshot().map { TerminalLogProcessor.process(it, _logTranslationEnabled.value) }
-                    )
-                    terminalDisplayDirty = false
-                    terminalGeneration++
-                } else if (batch.isNotEmpty()) {
-                    batch.forEach { terminalConsoleBuffer.add(TerminalLogProcessor.process(it, _logTranslationEnabled.value)) }
-                    terminalGeneration++
-                }
-                if (_consoleLines.subscriptionCount.value > 0 && consoleUiGeneration != consoleGeneration) {
-                    _consoleLines.value = consoleBuffer.snapshot()
-                    consoleUiGeneration = consoleGeneration
-                }
-                if (_terminalConsoleLines.subscriptionCount.value > 0 && terminalUiGeneration != terminalGeneration) {
-                    _terminalConsoleLines.value = terminalConsoleBuffer.snapshot()
-                    terminalUiGeneration = terminalGeneration
-                }
-                val now = System.currentTimeMillis()
-                if (_consolePreviewLines.subscriptionCount.value > 0 &&
-                    previewUiGeneration != consoleGeneration &&
-                    now - lastPreviewPublishedAtMs >= CONSOLE_PREVIEW_FLUSH_MS
-                ) {
-                    _consolePreviewLines.value = consoleBuffer.last(8)
-                    previewUiGeneration = consoleGeneration
-                    lastPreviewPublishedAtMs = now
-                }
-            }
-        }
-        viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                // 空闲降频：LogsScreen 不在前台、或 Activity 已停止（collectAsState 不销毁订阅数仍 >0）时，
-                // 每 200ms 醒一次纯属浪费（App 退到后台仍每秒唤醒 5~10 次，是待机耗电的主要来源）。
-                // 注意这里只延长"发布"的间隔，buffer 仍在持续接收，不会丢日志。
-                if (!uiVisible || _termuxLines.subscriptionCount.value <= 0) {
-                    delay(IDLE_LOG_FLUSH_MS)
-                    continue
-                }
-                delay(LOG_FLUSH_MS)
-                val batch = legacyTermuxBuffer.snapshotAndClear()
-                if (batch.isNotEmpty()) {
-                    val current = _termuxLines.value
-                    _termuxLines.value = (current + batch).takeLast(MAX_LOG_LINES).toImmutableList()
-                }
-            }
-        }
-        viewModelScope.launch(Dispatchers.Default) {
-            while (true) {
-                // 同上：终端会话面板不可见时降频；界面不在前台（uiVisible=false）同样降频。
-                val terminalVisible = _terminalSessions.subscriptionCount.value > 0 ||
-                    _activeTerminalSessionId.subscriptionCount.value > 0
-                if (!uiVisible || !terminalVisible) {
-                    delay(IDLE_LOG_FLUSH_MS)
-                    continue
-                }
-                delay(LOG_FLUSH_MS)
-                val batch = synchronized(terminalOutputBuffers) {
-                    terminalOutputBuffers.mapValues { (_, buffer) -> buffer.snapshotAndClear() }
-                        .filterValues { it.isNotEmpty() }
-                }
-                batch.forEach { (id, lines) ->
-                    updateTerminalSession(id) { session ->
-                        val additions = lines.map { TerminalLogProcessor.process(it, false) }
-                        session.copy(lines = (session.lines + additions).takeLast(MAX_LOG_LINES).toImmutableList())
-                    }
-                }
-            }
-        }
+        consoleLogDelegate.startOutputFlush()
+        terminalSessionsDelegate.startLegacyOutputFlush()
+        terminalSessionsDelegate.startOutputFlush()
     }
 
     // ── 后台保活（开机自启 / 周期保活） ─────────────────────────────
@@ -7338,17 +4013,18 @@ class McViewModel(
     private fun str(id: Int, vararg args: Any?): String =
         app.getString(id, *args)
 
-    private fun metaPrefs() =
-        app.getSharedPreferences(BootReceiver.META_PREFS, android.content.Context.MODE_PRIVATE)
+    private val keepAliveDelegate by lazy {
+        KeepAliveDelegate(
+            app = app,
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
     /** 开机自启动开关状态 */
-    fun isBootAutoStart(): Boolean = metaPrefs().getBoolean(BootReceiver.KEY_BOOT_AUTO_START, false)
+    fun isBootAutoStart(): Boolean = keepAliveDelegate.isBootAutoStart()
 
     /** 设置开机自启动：开启时立即拉起前台服务，关闭时停止 */
-    fun setBootAutoStart(v: Boolean) {
-        metaPrefs().edit().putBoolean(BootReceiver.KEY_BOOT_AUTO_START, v).apply()
-        if (v) startKeepAliveService() else stopKeepAliveService()
-    }
+    fun setBootAutoStart(v: Boolean) = keepAliveDelegate.setBootAutoStart(v)
 
     /** 设置服务器事件通知等级（0 关闭 / 1 仅重要 / 2 全部）。 */
     fun setEventNotifyLevel(value: Int) {
@@ -7357,56 +4033,16 @@ class McViewModel(
     }
 
     /** 后台周期保活开关状态（默认开启） */
-    fun isKeepAliveEnabled(): Boolean = metaPrefs().getBoolean(BootReceiver.KEY_KEEP_ALIVE, true)
+    fun isKeepAliveEnabled(): Boolean = keepAliveDelegate.isKeepAliveEnabled()
 
     /** 设置后台周期保活：开启时调度 WorkManager 周期任务，关闭时取消 */
-    fun setKeepAliveEnabled(v: Boolean) {
-        metaPrefs().edit().putBoolean(BootReceiver.KEY_KEEP_ALIVE, v).apply()
-        if (v) {
-            scheduleKeepAlive()
-            // 主心跳：AlarmManager 10 分钟一次（WorkManager 在 Doze/国产 ROM 下会被推迟）。
-            // 打开开关后立刻排一次并拉起服务，不必等下一次 15 分钟周期。
-            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.resetRestartGuard(app) }
-            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.schedule(app) }
-            startKeepAliveService()
-        } else {
-            cancelKeepAlive()
-            runCatching { com.mineserve.mobile.service.KeepAliveWatchdog.cancel(app) }
-        }
-    }
+    fun setKeepAliveEnabled(v: Boolean) = keepAliveDelegate.setKeepAliveEnabled(v)
 
     /** 拉起前台保活服务 */
-    fun startKeepAliveService() {
-        try {
-            val intent = android.content.Intent(app, McForegroundService::class.java)
-                .apply { action = McForegroundService.ACTION_START }
-            app.startForegroundService(intent)
-        } catch (e: Exception) {
-            _errorFlow.tryEmit(str(R.string.s314, e.message))
-        }
-    }
+    fun startKeepAliveService() = keepAliveDelegate.startKeepAliveService()
 
     /** 停止前台保活服务 */
-    fun stopKeepAliveService() {
-        try {
-            val intent = android.content.Intent(app, McForegroundService::class.java)
-                .apply { action = McForegroundService.ACTION_STOP }
-            app.startService(intent)
-        } catch (e: Exception) {
-            // 忽略
-        }
-    }
-
-    private fun scheduleKeepAlive() {
-        val request = androidx.work.PeriodicWorkRequestBuilder<KeepAliveWorker>(15, java.util.concurrent.TimeUnit.MINUTES).build()
-        androidx.work.WorkManager.getInstance(app).enqueueUniquePeriodicWork(
-            "keep_alive", androidx.work.ExistingPeriodicWorkPolicy.UPDATE, request
-        )
-    }
-
-    private fun cancelKeepAlive() {
-        androidx.work.WorkManager.getInstance(app).cancelUniqueWork("keep_alive")
-    }
+    fun stopKeepAliveService() = keepAliveDelegate.stopKeepAliveService()
 }
 
 /**
