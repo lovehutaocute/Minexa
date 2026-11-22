@@ -7,6 +7,7 @@ import com.mineserve.mobile.server.PowerNukkitXConfigManager
 import com.mineserve.mobile.server.ServerPropertiesManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -22,6 +23,7 @@ internal class PlayerListsDelegate(
     private val activeDirName: () -> String?,
     private val isBdsActive: () -> Boolean,
     private val isPowerNukkitXActive: () -> Boolean,
+    private val onlinePlayerNames: () -> List<String>,
     private val serverProperties: () -> Map<String, String>,
     private val setWhitelistProperty: (String, Boolean) -> Unit,
     private val reportMessage: (String) -> Unit,
@@ -104,6 +106,152 @@ internal class PlayerListsDelegate(
                 reportError(str(R.string.s274))
             }
         }
+    }
+
+    /**
+     * 命令发送后延迟刷新，等待 MC 完成回写 JSON 文件
+     * @param msg 操作成功消息
+     * @param refresh 是否需要刷新列表（kick 不改列表无需刷新）
+     */
+    private fun afterCmd(sent: Boolean, msg: String, refresh: Boolean = true) {
+        if (!sent) {
+            reportError(str(R.string.s266))
+            return
+        }
+        reportMessage(msg)
+        if (refresh) {
+            scope.launch {
+                delay(600)  // 等待 MC 处理命令并回写 JSON
+                refreshPlayers()
+            }
+        }
+    }
+
+    fun opPlayer(name: String) {
+        if (name.isBlank()) return
+        val sent = playerManager.opPlayer(name, isBdsActive())
+        afterCmd(sent, str(R.string.s1055, name))
+    }
+
+    /** 设置 OP 并指定等级（1-4）。手动指定等级需重启服务器才生效到权限系统。 */
+    fun opPlayerWithLevel(name: String, level: Int) {
+        if (name.isBlank()) return
+        val dirName = activeDirName() ?: run {
+            reportError(str(R.string.s266))
+            return
+        }
+        val bds = isBdsActive()
+        scope.launch {
+            val sent = withContext(Dispatchers.IO) {
+                playerManager.opPlayerWithLevel(name, level, dirName, bds)
+            }
+            afterCmd(sent, str(R.string.s1056, name, level))
+        }
+    }
+
+    fun deopPlayer(name: String) {
+        if (name.isBlank()) return
+        val bds = isBdsActive()
+        val dirName = activeDirName()
+        // BDS 分支会同步读写 permissions.json（PlayerManager.removeBedrockOperator）；
+        // 公共存储是 FUSE，主线程做文件 IO 会卡顿，慢盘上甚至掉帧。
+        // 与 opPlayerWithLevel 一致，放到 IO 线程。
+        scope.launch {
+            val sent = withContext(Dispatchers.IO) { playerManager.deopPlayer(name, dirName, bds) }
+            afterCmd(sent, str(R.string.msg_op_cancelled, name))
+        }
+    }
+
+    fun whitelistAdd(name: String) {
+        if (name.isBlank()) return
+        val sent = playerManager.whitelistAdd(name, isBdsActive())
+        afterCmd(sent, str(R.string.msg_whitelist_added, name))
+    }
+
+    fun whitelistRemove(name: String) {
+        if (name.isBlank()) return
+        val sent = playerManager.whitelistRemove(name, isBdsActive())
+        afterCmd(sent, str(R.string.msg_whitelist_removed, name))
+    }
+
+    fun kickPlayer(name: String, reason: String = "") {
+        if (name.isBlank()) return
+        val sent = playerManager.kickPlayer(name, reason)
+        afterCmd(sent, str(R.string.msg_kicked, name), refresh = false)
+    }
+
+    fun banPlayer(name: String, reason: String = "Banned by admin") {
+        if (name.isBlank()) return
+        // 官方 BDS 没有封禁命令，也不维护封禁列表，只能靠白名单 + 踢出
+        if (isBdsActive()) {
+            reportError(str(R.string.bds_players_ban_unsupported))
+            return
+        }
+        val sent = playerManager.banPlayer(name, reason)
+        afterCmd(sent, str(R.string.msg_banned, name))
+    }
+
+    /** 限时封禁 */
+    fun tempBanPlayer(name: String, duration: String, reason: String = "") {
+        if (name.isBlank() || duration.isBlank()) return
+        if (isBdsActive()) {
+            reportError(str(R.string.bds_players_ban_unsupported))
+            return
+        }
+        val sent = playerManager.tempBanPlayer(name, duration, reason)
+        afterCmd(sent, str(R.string.msg_banned_temp, name, duration))
+    }
+
+    fun pardonPlayer(name: String) {
+        if (name.isBlank()) return
+        if (isBdsActive()) {
+            reportError(str(R.string.bds_players_ban_unsupported))
+            return
+        }
+        val sent = playerManager.pardonPlayer(name)
+        afterCmd(sent, str(R.string.msg_pardoned, name))
+    }
+
+    /** 请求在线玩家列表（发送 list 命令） */
+    fun requestOnlinePlayers() {
+        val sent = playerManager.requestOnlineList()
+        if (sent) {
+            reportMessage(str(R.string.s279))
+        } else {
+            reportError(str(R.string.s280))
+        }
+    }
+
+    /** 设置玩家游戏模式 */
+    fun setGameMode(name: String, mode: Int) {
+        if (name.isBlank()) return
+        // 基岩版只能给**在线**玩家改模式：BDS 没有离线玩家数据文件，
+        // 目标不在线时命令会被丢弃（控制台只回 No targets matched selector），
+        // 用户点完就是"没反应"。提前说清楚，别让人以为是按钮坏了。
+        if (isBdsActive() &&
+            onlinePlayerNames().none { it.equals(name, ignoreCase = true) }
+        ) {
+            reportError(str(R.string.bds_gamemode_needs_online, name))
+            return
+        }
+        val sent = playerManager.setGameMode(name, mode)
+        val modeNameRes = when (mode.coerceIn(0, 3)) {
+            0 -> R.string.s281; 1 -> R.string.s282; 2 -> R.string.s283; 3 -> R.string.s284; else -> R.string.s281
+        }
+        afterCmd(sent, str(R.string.s285, name, str(modeNameRes)), refresh = false)
+    }
+
+    /** 给玩家经验 */
+    fun giveXp(name: String, amount: Int) {
+        if (name.isBlank() || amount <= 0) return
+        val bds = isBdsActive()
+        // 同 setGameMode：BDS 的经验命令只能作用于在线玩家
+        if (bds && onlinePlayerNames().none { it.equals(name, ignoreCase = true) }) {
+            reportError(str(R.string.bds_gamemode_needs_online, name))
+            return
+        }
+        val sent = playerManager.giveXp(name, amount, bds)
+        afterCmd(sent, str(R.string.msg_xp_given, name, amount), refresh = false)
     }
 
     private fun str(id: Int, vararg args: Any?): String =
