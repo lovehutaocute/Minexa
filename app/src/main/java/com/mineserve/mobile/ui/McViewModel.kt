@@ -92,6 +92,7 @@ import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
 import com.mineserve.mobile.ui.vm.ModsDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
+import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
 import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
@@ -2964,14 +2965,25 @@ class McViewModel(
 
     val curatedMods: List<PluginManager.CuratedMod> get() = modsDelegate.curatedMods
 
+    private val pluginDownloadsDelegate by lazy {
+        PluginDownloadsDelegate(
+            app = app,
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            activeDirName = ::activeDirName,
+            currentModrinthLoader = { modrinthLoader(config.value.selectedCore) },
+            refreshMods = ::refreshMods,
+            refreshInstalledPlugins = ::refreshInstalledPlugins,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     /** 当前正在下载的插件 id → 进度 */
-    private val _pluginDownloadProgress = MutableStateFlow<Map<String, PluginDownloadProgress>>(emptyMap())
-    val pluginDownloadProgress: StateFlow<Map<String, PluginDownloadProgress>> = _pluginDownloadProgress.asStateFlow()
+    val pluginDownloadProgress: StateFlow<Map<String, PluginDownloadProgress>> get() = pluginDownloadsDelegate.pluginDownloadProgress
 
     /** 是否有任意插件正在下载 */
-    val isPluginDownloading: StateFlow<Boolean> = _pluginDownloadProgress
-        .map { it.isNotEmpty() }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    val isPluginDownloading: StateFlow<Boolean> get() = pluginDownloadsDelegate.isPluginDownloading
 
     /** 扫描当前核心的 plugins 目录 */
     fun refreshInstalledPlugins() {
@@ -3060,38 +3072,8 @@ class McViewModel(
         pluginManager.detectPluginConflicts(plugins)
 
     /** 一键安装 Modrinth 模组（解析指定版本 release 直链并下载到 mods/） */
-    fun installModrinthMod(hit: PluginManager.ModrinthHit, mcVersion: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        val loader = modrinthLoader(config.value.selectedCore)
-        viewModelScope.launch {
-            try {
-                val url = withContext(Dispatchers.IO) {
-                    pluginManager.resolveModrinthDownload(hit.slug, mcVersion, loader)
-                } ?: throw RuntimeException(str(R.string.err_mod_incompatible))
-                val fileName = "${hit.slug}.jar"
-                withContext(Dispatchers.IO) {
-                    // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                    _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                        pluginId = hit.slug, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                    )) }
-                    pluginManager.installModFromUrl(url, fileName, dirName) { d, t, s ->
-                        _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                            pluginId = hit.slug, downloadedBytes = d, totalBytes = t, speedBytesPerSec = s
-                        )) }
-                    }
-                }
-                _pluginDownloadProgress.update { it - hit.slug }
-                _messageFlow.tryEmit(str(R.string.s225, hit.title))
-                refreshMods()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - hit.slug }
-                _errorFlow.tryEmit(str(R.string.s226, hit.title, e.message))
-            }
-        }
-    }
+    fun installModrinthMod(hit: PluginManager.ModrinthHit, mcVersion: String) =
+        pluginDownloadsDelegate.installModrinthMod(hit, mcVersion)
 
     // ── Modrinth 插件获取（插件页复用同一下载模块） ───────────────
 
@@ -3117,85 +3099,11 @@ class McViewModel(
     fun loadMoreModrinthPlugin() = modrinthDiscoveryDelegate.loadMoreModrinthPlugin()
 
     /** 安装 Modrinth 插件到 plugins/ 目录 */
-    fun installModrinthPlugin(hit: PluginManager.ModrinthHit, mcVersion: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        val loader = "bukkit"
-        viewModelScope.launch {
-            try {
-                val url = withContext(Dispatchers.IO) {
-                    pluginManager.resolveModrinthDownload(hit.slug, mcVersion, loader)
-                } ?: throw RuntimeException(str(R.string.err_plugin_incompatible))
-                val fileName = "${hit.slug}.jar"
-                withContext(Dispatchers.IO) {
-                    // 下载开始前先放占位进度，保证进度弹窗一定显示
-                    _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                        pluginId = hit.slug, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                    )) }
-                    pluginManager.installFromUrl(url, fileName, dirName) { d, t, s ->
-                        _pluginDownloadProgress.update { it + (hit.slug to PluginDownloadProgress(
-                            pluginId = hit.slug, downloadedBytes = d, totalBytes = t, speedBytesPerSec = s
-                        )) }
-                    }
-                }
-                _pluginDownloadProgress.update { it - hit.slug }
-                _messageFlow.tryEmit(str(R.string.s229, hit.title))
-                refreshInstalledPlugins()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - hit.slug }
-                _errorFlow.tryEmit(str(R.string.s230, hit.title, e.message))
-            }
-        }
-    }
+    fun installModrinthPlugin(hit: PluginManager.ModrinthHit, mcVersion: String) =
+        pluginDownloadsDelegate.installModrinthPlugin(hit, mcVersion)
 
     /** 从精选库下载安装插件 */
-    fun installCuratedPlugin(curated: PluginManager.CuratedPlugin) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (_pluginDownloadProgress.value.containsKey(curated.id)) {
-            _errorFlow.tryEmit(str(R.string.s227, curated.name))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // asset 文件名带版本号的精选资源（如 ViaVersion），先经 GitHub API 解析最新直链；
-                // 解析失败直接报错，不静默回退到 HTML 页面
-                val resolvedUrl = if (curated.githubAssetPattern != null) {
-                    withContext(Dispatchers.IO) {
-                        pluginManager.resolveLatestAsset(curated.repo, curated.githubAssetPattern)
-                    } ?: throw RuntimeException(str(R.string.err_parse_curated_url, curated.name))
-                } else {
-                    curated.downloadUrl
-                }
-                // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                _pluginDownloadProgress.update { it + (curated.id to PluginDownloadProgress(
-                    pluginId = curated.id, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                )) }
-                pluginManager.installFromUrl(
-                    resolvedUrl,
-                    curated.targetFileName,
-                    dirName
-                ) { downloaded, total, speed ->
-                    _pluginDownloadProgress.update { it + (curated.id to PluginDownloadProgress(
-                        pluginId = curated.id,
-                        downloadedBytes = downloaded,
-                        totalBytes = total,
-                        speedBytesPerSec = speed
-                    )) }
-                }
-                _messageFlow.tryEmit(str(R.string.s229, curated.name))
-                _pluginDownloadProgress.update { it - curated.id }
-                refreshInstalledPlugins()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - curated.id }
-                _errorFlow.tryEmit(str(R.string.s230, curated.name, e.message))
-            }
-        }
-    }
+    fun installCuratedPlugin(curated: PluginManager.CuratedPlugin) = pluginDownloadsDelegate.installCuratedPlugin(curated)
 
     /** 从本地 Uri 上传插件 */
     fun installPluginFromUri(uri: Uri) {
@@ -3294,52 +3202,15 @@ class McViewModel(
 
     // ── 自定义 URL 下载 ──
 
-    private val URL_DOWNLOAD_ID = "__custom_url__"
-
     /** 从自定义 URL 下载插件 */
-    fun installPluginFromUrl(url: String, customFileName: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        if (url.isBlank() || customFileName.isBlank()) {
-            _errorFlow.tryEmit(str(R.string.s244))
-            return
-        }
-        if (_pluginDownloadProgress.value.containsKey(URL_DOWNLOAD_ID)) {
-            _errorFlow.tryEmit(str(R.string.s245))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                // 下载开始前先放占位进度，保证进度弹窗一定显示（下载瞬间完成也不会漏）
-                _pluginDownloadProgress.update { it + (URL_DOWNLOAD_ID to PluginDownloadProgress(
-                    pluginId = URL_DOWNLOAD_ID, downloadedBytes = 0, totalBytes = 0, speedBytesPerSec = 0
-                )) }
-                pluginManager.installFromUrl(url, customFileName, dirName) { downloaded, total, speed ->
-                    _pluginDownloadProgress.update { it + (URL_DOWNLOAD_ID to PluginDownloadProgress(
-                        pluginId = URL_DOWNLOAD_ID,
-                        downloadedBytes = downloaded,
-                        totalBytes = total,
-                        speedBytesPerSec = speed
-                    )) }
-                }
-                _messageFlow.tryEmit(str(R.string.s246, customFileName))
-                _pluginDownloadProgress.update { it - URL_DOWNLOAD_ID }
-                refreshInstalledPlugins()
-            } catch (e: Exception) {
-                _pluginDownloadProgress.update { it - URL_DOWNLOAD_ID }
-                _errorFlow.tryEmit(str(R.string.s247, e.message))
-            }
-        }
-    }
+    fun installPluginFromUrl(url: String, customFileName: String) =
+        pluginDownloadsDelegate.installPluginFromUrl(url, customFileName)
 
     /** 判断自定义 URL 是否正在下载 */
-    fun isCustomUrlDownloading(): Boolean = _pluginDownloadProgress.value.containsKey(URL_DOWNLOAD_ID)
+    fun isCustomUrlDownloading(): Boolean = pluginDownloadsDelegate.isCustomUrlDownloading()
 
     /** 获取自定义 URL 下载进度（无则 null） */
-    fun customUrlDownloadProgress(): PluginDownloadProgress? =
-        _pluginDownloadProgress.value[URL_DOWNLOAD_ID]
+    fun customUrlDownloadProgress(): PluginDownloadProgress? = pluginDownloadsDelegate.customUrlDownloadProgress()
 
     /** 获取当前核心的 plugins 目录路径（用于 UI 显示） */
     fun currentPluginsPath(): String? {
