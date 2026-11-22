@@ -70,6 +70,66 @@ internal class JavaAddonsDelegate(
         }
     }
 
+    /** 启用 / 停用一个世界级数据包（改 `level.dat:DataPacks`）。 */
+    fun setJavaDataPackEnabled(pack: JavaWorlds.DataPack, enabled: Boolean) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(if (enabled) R.string.jv_enable else R.string.jv_disable))) return
+        scope.launch {
+            try {
+                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+                val ok = withContext(Dispatchers.IO) {
+                    worldManager.setJavaDataPackEnabled(dirName, world, pack, enabled)
+                }
+                if (ok) {
+                    reportMessage(
+                        str(if (enabled) R.string.jv_enabled else R.string.jv_disabled, pack.name)
+                    )
+                    loadJavaAddons()
+                } else {
+                    reportError(str(R.string.jv_write_failed))
+                }
+            } catch (e: Exception) {
+                reportError("${str(R.string.jv_write_failed)}：${e.message}")
+            }
+        }
+    }
+
+    /** 从系统选择器导入数据包 zip（拷进 `world/datapacks/`）。 */
+    fun importJavaDataPackFromUri(uri: Uri, displayName: String) {
+        val dirName = activeDirName() ?: return
+        if (!requireServerStopped(str(R.string.jv_import))) return
+        scope.launch {
+            var temp: java.io.File? = null
+            try {
+                temp = withContext(Dispatchers.IO) {
+                    val f = java.io.File(app.cacheDir, "datapack_${System.currentTimeMillis()}.zip")
+                    app.contentResolver.openInputStream(uri)?.use { input ->
+                        f.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    f.takeIf { it.isFile && it.length() > 0 }
+                }
+                if (temp == null) {
+                    reportError(str(R.string.jv_import_failed))
+                    return@launch
+                }
+                val world = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
+                val name = withContext(Dispatchers.IO) {
+                    worldManager.installJavaDataPack(dirName, world, temp)
+                }
+                if (name != null) {
+                    reportMessage(str(R.string.jv_import_ok, name))
+                    loadJavaAddons()
+                } else {
+                    reportError(str(R.string.jv_import_failed))
+                }
+            } catch (e: Exception) {
+                reportError("${str(R.string.jv_import_failed)}：${e.message}")
+            } finally {
+                runCatching { temp?.delete() }
+            }
+        }
+    }
+
     /** 保存资源包配置（URL / SHA-1 / ID / 提示语 / 是否强制）。 */
     fun saveResourcePack(config: JavaResourcePack.Config) {
         val dirName = activeDirName() ?: return
