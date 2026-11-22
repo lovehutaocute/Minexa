@@ -100,6 +100,7 @@ import com.mineserve.mobile.ui.vm.formatCoreSize
 import com.mineserve.mobile.ui.vm.formatDiagnosticBytes
 import com.mineserve.mobile.ui.vm.modrinthLoader
 import com.mineserve.mobile.ui.vm.previewLayers as parsePreviewLayers
+import com.mineserve.mobile.ui.vm.WorldCreationDelegate
 import com.mineserve.mobile.ui.vm.WorldListDelegate
 import com.mineserve.mobile.ui.vm.WorldTransferDelegate
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -3235,90 +3236,29 @@ class McViewModel(
     /** 切换当前使用的世界（写入 level-name）。 */
     fun setActiveWorld(name: String) = worldListDelegate.setActiveWorld(name)
 
-    /** 清空 level-seed，让服务端下次生成地图时使用随机种子。 */
-    fun clearWorldSeed() {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { worldManager.clearLevelSeed(dirName) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.wl_seed_cleared))
-                    // 必须重载：卡片上的种子来自 level.dat / properties 的快照，
-                    // 不清空这个快照的话界面上还挂着清空前的旧种子（真机实测）。
-                    loadWorlds()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.wl_seed_clear_failed))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_seed_clear_failed)}：${e.message}")
-            }
-        }
+    private val worldCreationDelegate by lazy {
+        WorldCreationDelegate(
+            app = app,
+            scope = viewModelScope,
+            worldManagerProvider = { worldManager },
+            activeDirName = ::activeDirName,
+            requireServerStopped = ::requireServerStopped,
+            loadWorlds = ::loadWorlds,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
-    /**
-     * 新建一个世界（基岩版）。
-     *
-     * 生成方式（普通/超平坦/虚空）写在**新世界目录的 `level.dat`** 里，不经过
-     * `server.properties`（BDS 没有 `level-type`）。[BdsWorldGen] 只写 5 个字段，
-     * BDS 首次启动就会按它生成地形——实测把原来的"两段式"省掉了。
-     *
-     * 种子允许数字或文本；文本会被 BDS 按 Java `String.hashCode` 转成 int64（实测 1.19~1.26
-     * 一致），这里直接按同一规则算好写进 `level.dat`，UI 也能提前展示"将被保存为 xxx"。
-     */
+    /** 清空 level-seed，让服务端下次生成地图时使用随机种子。 */
+    fun clearWorldSeed() = worldCreationDelegate.clearWorldSeed()
+
+    /** 新建一个世界（基岩版）。 */
     fun createWorld(
         name: String,
         seed: String,
         generator: BdsWorldGen.Generator = BdsWorldGen.Generator.NORMAL,
         layers: List<BdsWorldGen.Layer> = BdsWorldGen.DEFAULT_FLAT
-    ) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_create))) return
-        // 超平坦层里的方块名先对一遍原版清单：BDS 遇到不认识的方块不会报错，
-        // 只会把那一层当成空气，世界生成出来缺层，而生成参数写过就改不了了。
-        if (generator == BdsWorldGen.Generator.FLAT) {
-            val unknown = com.mineserve.mobile.data.BlockIds
-                .unknownVanilla(app, layers.map { it.block })
-            if (unknown.isNotEmpty()) {
-                _errorFlow.tryEmit(
-                    str(R.string.wl_create_fail_unknown_block, unknown.take(3).joinToString(", "))
-                )
-                return
-            }
-        }
-        viewModelScope.launch {
-            try {
-                val failure = withContext(Dispatchers.IO) {
-                    worldManager.createBedrockWorld(dirName, name, seed, generator, layers)
-                }
-                when (failure) {
-                    null -> {
-                        _messageFlow.tryEmit(str(R.string.wl_created, Worlds.sanitize(name)))
-                        loadWorlds()
-                    }
-                    WorldManager.CreateFailure.BadName ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_name))
-                    WorldManager.CreateFailure.NameTaken ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_taken))
-                    WorldManager.CreateFailure.ServerRunning ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_running))
-                    WorldManager.CreateFailure.WriteFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_write))
-                    WorldManager.CreateFailure.NotBedrock ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_bedrock))
-                    WorldManager.CreateFailure.NotJava ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_java))
-                    WorldManager.CreateFailure.LevelDatFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_leveldat))
-                    WorldManager.CreateFailure.BadBiome ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_biome))
-                    WorldManager.CreateFailure.BadLayer ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_layer))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_create_fail_write)}：${e.message}")
-            }
-        }
-    }
+    ) = worldCreationDelegate.createWorld(name, seed, generator, layers)
 
     /** 文本种子会被 BDS 存成这个整数；空输入返回 null（随机）。 */
     fun previewSeed(raw: String): Long? = worldManager.resolveSeed(raw)
@@ -3403,43 +3343,7 @@ class McViewModel(
         type: JavaWorldGen.LevelType,
         layers: List<BdsWorldGen.Layer>,
         biome: String
-    ) {
-        val dirName = activeDirName() ?: return
-        if (!requireServerStopped(str(R.string.wl_create))) return
-        viewModelScope.launch {
-            try {
-                val failure = withContext(Dispatchers.IO) {
-                    worldManager.createJavaWorld(dirName, name, seed, type, layers, biome)
-                }
-                when (failure) {
-                    null -> {
-                        _messageFlow.tryEmit(str(R.string.wl_jv_created, Worlds.sanitize(name)))
-                        loadWorlds()
-                    }
-                    WorldManager.CreateFailure.BadName ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_name))
-                    WorldManager.CreateFailure.NameTaken ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_taken))
-                    WorldManager.CreateFailure.ServerRunning ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_running))
-                    WorldManager.CreateFailure.WriteFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_write))
-                    WorldManager.CreateFailure.NotJava ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_java))
-                    WorldManager.CreateFailure.NotBedrock ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_not_bedrock))
-                    WorldManager.CreateFailure.LevelDatFailed ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_leveldat))
-                    WorldManager.CreateFailure.BadBiome ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_biome))
-                    WorldManager.CreateFailure.BadLayer ->
-                        _errorFlow.tryEmit(str(R.string.wl_create_fail_layer))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("${str(R.string.wl_create_fail_write)}：${e.message}")
-            }
-        }
-    }
+    ) = worldCreationDelegate.createJavaWorld(name, seed, type, layers, biome)
 
     /** 启用 / 停用一个世界级数据包（改 `level.dat:DataPacks`）。 */
     fun setJavaDataPackEnabled(pack: JavaWorlds.DataPack, enabled: Boolean) {
