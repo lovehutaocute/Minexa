@@ -100,6 +100,7 @@ import com.mineserve.mobile.ui.vm.formatCoreSize
 import com.mineserve.mobile.ui.vm.formatDiagnosticBytes
 import com.mineserve.mobile.ui.vm.modrinthLoader
 import com.mineserve.mobile.ui.vm.previewLayers as parsePreviewLayers
+import com.mineserve.mobile.ui.vm.WorldListDelegate
 import com.mineserve.mobile.ui.vm.WorldTransferDelegate
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -3184,23 +3185,32 @@ class McViewModel(
         return false
     }
 
-    private val _worlds = MutableStateFlow<List<Worlds.WorldInfo>>(emptyList())
-    val worlds: StateFlow<List<Worlds.WorldInfo>> = _worlds.asStateFlow()
+    private val worldListDelegate by lazy {
+        WorldListDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            serverState = repo.serverState,
+            worldManagerProvider = { worldManager },
+            activeDirName = ::activeDirName,
+            isMcRunningIn = { repo.termuxRuntime.isMcRunningIn(it) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
 
-    private val _worldsLoading = MutableStateFlow(false)
-    val worldsLoading: StateFlow<Boolean> = _worldsLoading.asStateFlow()
+    val worlds: StateFlow<List<Worlds.WorldInfo>> get() = worldListDelegate.worlds
+
+    val worldsLoading: StateFlow<Boolean> get() = worldListDelegate.worldsLoading
 
     /** 当前 level-name 指向的世界名（可能尚未生成对应目录）。 */
-    private val _activeWorldName = MutableStateFlow("")
-    val activeWorldName: StateFlow<String> = _activeWorldName.asStateFlow()
+    val activeWorldName: StateFlow<String> get() = worldListDelegate.activeWorldName
 
     /** 当前世界的基岩版元信息（种子 / 生成类型）；Java 系或还没生成时为 null。 */
-    private val _activeWorldMeta = MutableStateFlow<WorldManager.BedrockMeta?>(null)
-    val activeWorldMeta: StateFlow<WorldManager.BedrockMeta?> = _activeWorldMeta.asStateFlow()
+    val activeWorldMeta: StateFlow<WorldManager.BedrockMeta?> get() = worldListDelegate.activeWorldMeta
 
     /** 当前世界的 Java 版元信息（种子 / 生成类型 / 难度 / 数据包数）；基岩系为 null。 */
-    private val _activeJavaWorldMeta = MutableStateFlow<JavaWorlds.Meta?>(null)
-    val activeJavaWorldMeta: StateFlow<JavaWorlds.Meta?> = _activeJavaWorldMeta.asStateFlow()
+    val activeJavaWorldMeta: StateFlow<JavaWorlds.Meta?> get() = worldListDelegate.activeJavaWorldMeta
 
     /**
      * 当前世界的「建世界时的要求」（种子原文 + 生成方式）。
@@ -3209,121 +3219,21 @@ class McViewModel(
      * 这个是**用户当时的选择**。世界还没生成时只有后者有值，UI 必须分开展示，
      * 否则就会出现「种子：尚未生成 / 生成类型：未知」这种什么都没说的组合。
      */
-    private val _activeWorldPlan = MutableStateFlow<WorldGenLedger.Record?>(null)
-    val activeWorldPlan: StateFlow<WorldGenLedger.Record?> = _activeWorldPlan.asStateFlow()
+    val activeWorldPlan: StateFlow<WorldGenLedger.Record?> get() = worldListDelegate.activeWorldPlan
 
     /** 当前核心类型（UI 靠它决定显示基岩版还是 Java 版的世界/附加包界面）。 */
-    private val _activeCore = MutableStateFlow<ServerCore?>(null)
-    val activeCore: StateFlow<ServerCore?> = _activeCore.asStateFlow()
+    val activeCore: StateFlow<ServerCore?> get() = worldListDelegate.activeCore
 
-    private fun refreshActiveCore() {
-        _activeCore.value = config.value.installedCores
-            .firstOrNull { it.name == config.value.activeCoreName }?.core
-    }
+    private fun refreshActiveCore() = worldListDelegate.refreshActiveCore()
 
     /** 当前核心是否 Java 版（非 BDS / PNX / PocketMine / Allay）。 */
-    fun isJavaCore(): Boolean {
-        val core = _activeCore.value ?: return false
-        return !core.isBedrock
-    }
+    fun isJavaCore(): Boolean = worldListDelegate.isJavaCore()
 
     /** 加载世界列表（含各世界占用大小）。大小统计较慢，放在 IO 线程。 */
-    fun loadWorlds() {
-        val dirName = activeDirName() ?: return
-        refreshActiveCore()
-        viewModelScope.launch {
-            _worldsLoading.value = true
-            try {
-                val list = withContext(Dispatchers.IO) { worldManager.listWorlds(dirName) }
-                val active = withContext(Dispatchers.IO) { worldManager.readLevelName(dirName) }
-                // 已建但还没生成的世界（目录不存在）也要列出来：Java 新建世界只写
-                // properties，不建目录，只列真实目录会让用户「建完什么也看不到」。
-                val planned = withContext(Dispatchers.IO) {
-                    runCatching {
-                        val root = worldManager.worldsRoot(dirName)
-                        val existing = list.map { it.name }.toHashSet()
-                        WorldGenLedger.read(worldManager.serverDir(dirName))
-                            .filterKeys { it !in existing && it.isNotBlank() }
-                            .map { (name, record) ->
-                                Worlds.WorldInfo(
-                                    name = name,
-                                    dir = java.io.File(root, name),
-                                    kind = if (record.kind == WorldGenLedger.Kind.JAVA) Worlds.Kind.Java
-                                    else Worlds.Kind.Bedrock,
-                                    sizeBytes = 0L,
-                                    sizeTruncated = false,
-                                    isActive = name == active,
-                                    planned = true
-                                )
-                            }
-                    }.getOrDefault(emptyList())
-                }
-                _worlds.value = (list + planned).sortedWith(
-                    compareByDescending<Worlds.WorldInfo> { it.isActive }.thenBy { it.name }
-                )
-                _activeWorldName.value = active
-                // 两套 level.dat 格式完全不同（基岩小端 / Java gzip 大端），按核心类型只读一套
-                val javaCore = isJavaCore()
-                _activeWorldMeta.value = withContext(Dispatchers.IO) {
-                    if (javaCore) null
-                    else runCatching { worldManager.readBedrockMeta(dirName, active) }.getOrNull()
-                }
-                _activeJavaWorldMeta.value = withContext(Dispatchers.IO) {
-                    if (!javaCore) null
-                    else runCatching { worldManager.readJavaMeta(dirName, active) }.getOrNull()
-                }
-                // 「用户当时要的」单独一份：世界没生成时只有它有值
-                _activeWorldPlan.value = withContext(Dispatchers.IO) {
-                    runCatching { WorldGenLedger.get(worldManager.serverDir(dirName), active) }.getOrNull()
-                }
-                // 维度也要跟着当前世界刷新，否则切到未生成的世界后仍显示上一个世界的维度
-                if (javaCore) {
-                    _javaDimensions.value = withContext(Dispatchers.IO) {
-                        runCatching { worldManager.javaDimensionDirs(dirName, active) }
-                            .getOrDefault(emptyList())
-                    }
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("读取世界列表失败：${e.message}")
-            } finally {
-                _worldsLoading.value = false
-            }
-        }
-    }
+    fun loadWorlds() = worldListDelegate.loadWorlds()
 
-    /**
-     * 切换当前使用的世界（写入 level-name）。
-     *
-     * 服务端运行中时改动不会立刻生效，需要重启，这里明确提示而不是静默写入。
-     */
-    fun setActiveWorld(name: String) {
-        val dirName = activeDirName() ?: return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { worldManager.setLevelName(dirName, name) }
-                if (ok) {
-                    _activeWorldName.value = name
-                    _messageFlow.tryEmit(
-                        if (repo.serverState.value.isRunning) "已切换到世界「$name」，重启服务端后生效"
-                        else "已切换到世界「$name」"
-                    )
-                    loadWorlds()
-                } else {
-                    // setLevelName 现在能区分「写不进去」与「目标实例正在运行」，别再一律
-                    // 报成配置不可写——用户会去翻存储权限，而真正原因可能只是要停服。
-                    _errorFlow.tryEmit(
-                        if (repo.termuxRuntime.isMcRunningIn(dirName)) {
-                            str(R.string.world_switch_blocked_running)
-                        } else {
-                            str(R.string.world_switch_failed)
-                        }
-                    )
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit("切换世界失败：${e.message}")
-            }
-        }
-    }
+    /** 切换当前使用的世界（写入 level-name）。 */
+    fun setActiveWorld(name: String) = worldListDelegate.setActiveWorld(name)
 
     /** 清空 level-seed，让服务端下次生成地图时使用随机种子。 */
     fun clearWorldSeed() {
@@ -3433,8 +3343,7 @@ class McViewModel(
     val resourcePackIssues: StateFlow<List<String>> = _resourcePackIssues.asStateFlow()
 
     /** 当前世界可单独重置的维度。 */
-    private val _javaDimensions = MutableStateFlow<List<JavaWorlds.DimensionDir>>(emptyList())
-    val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> = _javaDimensions.asStateFlow()
+    val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> get() = worldListDelegate.javaDimensions
 
     /**
      * 只刷新「维度」这一块（数据包 / 资源包不动）。
@@ -3449,9 +3358,9 @@ class McViewModel(
         viewModelScope.launch {
             val world = withContext(Dispatchers.IO) { runCatching { worldManager.readLevelName(dirName) }.getOrNull() }
                 ?: return@launch
-            _javaDimensions.value = withContext(Dispatchers.IO) {
+            worldListDelegate.setJavaDimensions(withContext(Dispatchers.IO) {
                 runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
-            }
+            })
         }
     }
 
@@ -3467,9 +3376,9 @@ class McViewModel(
                 _javaDataPacks.value = withContext(Dispatchers.IO) {
                     runCatching { worldManager.scanJavaDataPacks(dirName, world) }.getOrDefault(emptyList())
                 }
-                _javaDimensions.value = withContext(Dispatchers.IO) {
+                worldListDelegate.setJavaDimensions(withContext(Dispatchers.IO) {
                     runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
-                }
+                })
                 val cfg = withContext(Dispatchers.IO) {
                     runCatching { worldManager.readResourcePack(dirName) }.getOrNull()
                 }
