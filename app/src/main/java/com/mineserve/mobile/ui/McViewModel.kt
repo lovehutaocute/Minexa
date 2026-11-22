@@ -85,6 +85,7 @@ import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.vm.AppUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
+import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
@@ -3632,45 +3633,28 @@ class McViewModel(
 
     // ── 精选插件更新检测 ──
 
+    private val curatedPluginUpdatesDelegate by lazy {
+        CuratedPluginUpdatesDelegate(
+            app = app,
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            activeDirName = ::activeDirName,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     /** 更新检测结果（key = curated.id） */
-    private val _curatedUpdates = MutableStateFlow<Map<String, PluginManager.CuratedUpdateInfo>>(emptyMap())
-    val curatedUpdates: StateFlow<Map<String, PluginManager.CuratedUpdateInfo>> = _curatedUpdates.asStateFlow()
+    val curatedUpdates: StateFlow<Map<String, PluginManager.CuratedUpdateInfo>> get() = curatedPluginUpdatesDelegate.curatedUpdates
 
     /** 是否正在检测更新 */
-    private val _isCheckingUpdates = MutableStateFlow(false)
-    val isCheckingUpdates: StateFlow<Boolean> = _isCheckingUpdates.asStateFlow()
+    val isCheckingUpdates: StateFlow<Boolean> get() = curatedPluginUpdatesDelegate.isCheckingUpdates
 
     /** 检测精选插件更新（5 分钟内有缓存不重复请求） */
-    fun checkCuratedUpdates() {
-        if (_isCheckingUpdates.value) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            _isCheckingUpdates.value = true
-            try {
-                val installed = pluginManager.scan(dirName)
-                val updates = pluginManager.checkCuratedUpdates(installed)
-                _curatedUpdates.value = updates.associateBy { it.curated.id }
-                val updateCount = updates.count { it.hasUpdate }
-                _messageFlow.tryEmit(
-                    if (updateCount > 0) str(R.string.msg_updates_found, updateCount)
-                    else str(R.string.msg_updates_all_latest)
-                )
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s243, e.message))
-            } finally {
-                _isCheckingUpdates.value = false
-            }
-        }
-    }
+    fun checkCuratedUpdates() = curatedPluginUpdatesDelegate.checkCuratedUpdates()
 
     /** 强制重新检测（清空缓存） */
-    fun forceRecheckUpdates() {
-        pluginManager.invalidateUpdateCache()
-        checkCuratedUpdates()
-    }
+    fun forceRecheckUpdates() = curatedPluginUpdatesDelegate.forceRecheckUpdates()
 
     // ── 自定义 URL 下载 ──
 
