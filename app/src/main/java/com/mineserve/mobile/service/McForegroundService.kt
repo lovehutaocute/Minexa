@@ -182,26 +182,22 @@ class McForegroundService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // 无条件先抬前台：**任何**一条经 startForegroundService 进来的 intent（含 ACTION_STOP、
+        // 将来新增的 action、以及 null intent）都会在 AMS 里重新挂上 5 秒计时，
+        // 漏掉一次就抛 ForegroundServiceDidNotStartInTimeException 杀进程。
+        ensureForeground()
         when (intent?.action) {
-            ACTION_START -> ensureForeground()
+            ACTION_START -> Unit
             ACTION_REFRESH_KEEP_ALIVE -> {
-                // 这两个 action（尤其 REFRESH_STATUS）也是经 startForegroundService 进来的：
-                // 任何一条进来后 5 秒内没调 startForeground，系统会抛 RemoteServiceException
-                // 并杀掉 App 进程 —— 连带杀掉正在跑的 MC。所以必须先抬到前台再做正事。
-                ensureForeground()
                 scope.launch { syncOverlayFromConfig() }
             }
             ACTION_REFRESH_STATUS -> {
-                ensureForeground()
                 scope.launch { refreshServerStatusNow() }
             }
             ACTION_HEARTBEAT -> {
                 // 保活心跳（AlarmManager 每 10 分钟一次）。它的唯一职责是「让进程活着」：
                 // 进程已被系统冻结/回收时，这条闹钟会把 App 重新拉起来并恢复前台，
                 // 顺带重持唤醒锁、补一次状态刷新。
-                // 先 ensureForeground：任何一条 startForegroundService 进来的 intent
-                // 都必须 5 秒内进前台，否则系统会抛 RemoteServiceException 杀整个进程。
-                ensureForeground()
                 if (!KeepAliveWatchdog.isEnabled(this)) {
                     // 用户关闭保活后残留的闹钟（取消与投递之间的竞态）：不续排。
                     // 没有服务端在跑时顺手收摊，别让服务空转耗电；
@@ -212,8 +208,8 @@ class McForegroundService : Service() {
                         return START_NOT_STICKY
                     }
                 } else {
-                    // 必须在这里显式续排：ensureForeground 对已在前台的服务是幂等的，
-                    // 里面那次排期不会执行，不补这一句心跳链走完一次就断了。
+                    // 必须在这里显式续排：ensureForeground 只做一次副作用（已经在前面统一调用过），
+                    // 不补这一句心跳链走完一次就断了。
                     KeepAliveWatchdog.schedule(this)
                     scope.launch {
                         syncLocksFromConfig()
@@ -229,7 +225,6 @@ class McForegroundService : Service() {
                 // PendingResult 有硬性时限（前台 10s / 后台 60s），超时系统会判定 ANR
                 // 并杀掉 App 进程——正在运行的 MC 会跟着一起死。
                 // 交给前台服务后既没有时限，也顺带拿到了前台保活。
-                ensureForeground()
                 val action = intent.getStringExtra(EXTRA_WIDGET_ACTION)
                 val scheduleAction = intent.getStringExtra(EXTRA_SCHEDULE_ACTION)
                 scope.launch {
@@ -238,7 +233,6 @@ class McForegroundService : Service() {
             }
             ACTION_AUTOMATION_TASK -> {
                 // 自动化定时任务（备份/重启/广播/自定义命令/开关服）同样不能在广播回调里跑。
-                ensureForeground()
                 val taskId = intent.getStringExtra(EXTRA_AUTOMATION_TASK_ID)
                 scope.launch { runAutomationTask(taskId) }
             }
@@ -262,8 +256,7 @@ class McForegroundService : Service() {
                 return START_NOT_STICKY
             }
             else -> {
-                // null intent（系统重启）或其他 action：仍需启动前台通知
-                ensureForeground()
+                // null intent（系统重启）或其他 action：前台已在方法开头统一抬起
             }
         }
         // START_STICKY：进程被杀后系统会在资源充足时尝试重启 Service
@@ -271,24 +264,38 @@ class McForegroundService : Service() {
     }
 
     /**
-     * 抬到前台（幂等）。
+     * 抬到前台。
      *
-     * 为什么不直接延用旧的单次调用：`ACTION_REFRESH_STATUS` 这类 action 同样走
-     * `startForegroundService`，而它过去从不调 `startForeground`——targetSdk ≥ 26 时
-     * 系统判定「5 秒内未进前台」，在 App 进程里抛 RemoteServiceException 把它整个杀掉，
-     * 正在跑的 MC 随之一起没。做成幂等后任意 action 先进来都会补齐这一步。
+     * **不能**用「已在前台就 return」的方式来幂等：每一次 `startForegroundService()` 都会在
+     * AMS 侧重新给这个 ServiceRecord 挂上 5 秒计时（fgRequired/fgWaiting），只有再调一次
+     * `startForeground()` 才会清掉。若服务本来就在前台、这里因布尔标志直接返回，
+     * 计时照样走完，系统抛 `ForegroundServiceDidNotStartInTimeException`
+     * 杀掉整个进程 —— 正在跑的 MC 一起没。
+     *
+     * 所以 startForeground 每次进来都调（重复调用等于更新通知，无副作用）；
+     * 排闹钟、同步锁、起 watchdog 这些真正的副作用只在首次执行。
      */
     private fun ensureForeground() {
-        if (foregroundStarted) return
-        val notif = buildNotification(getString(R.string.notif_title_running), getString(R.string.notif_text_running))
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            // Android 14+ 必须显式传入 FGS 类型
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
-        } else {
-            startForeground(NOTIF_ID, notif)
+        val alreadyForeground = foregroundStarted
+        try {
+            val notif = buildNotification(getString(R.string.notif_title_running), getString(R.string.notif_text_running))
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                // Android 14+ 必须显式传入 FGS 类型
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIF_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+            } else {
+                startForeground(NOTIF_ID, notif)
+            }
+        } catch (t: Throwable) {
+            // 进不了前台（厂商拦截、FGS 类型权限被拒、通知通道被删）时不能把异常抛回
+            // onStartCommand：服务会崩，进程里的 MC 也跟着死；而且 AMS 的计时仍在，
+            // 5 秒后照样 RemoteServiceException。主动收摊，交给重启闹钟按退避重试。
+            Log.e(TAG, "startForeground 失败，停止服务等待重试: ${t.message}", t)
+            runCatching { stopSelf() }
+            return
         }
+        if (alreadyForeground) return
         foregroundStarted = true
         // 续上保活心跳。放在这里而不是只在启动入口：心跳自己、桌面组件动作、开机自启、
         // 系统重启（START_STICKY 的 null intent）都会经过 ensureForeground，
@@ -310,6 +317,9 @@ class McForegroundService : Service() {
         StatusOverlay.hide(this)
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)
+        // 标志必须跟着复位：服务实例在 stopSelf() 生效前还活着，这期间若有
+        // startForegroundService 进来，遗留的 true 会让下一次真的漏掉 startForeground。
+        foregroundStarted = false
     }
 
     /**

@@ -126,9 +126,12 @@ class ModPluginWidgetService : RemoteViewsService() {
                 }.getOrNull()
                 val core = config?.installedCores?.find { it.name == config.activeCoreName }
                 val dirName = core?.dirName ?: return Snapshot("", emptyList())
-                val root = app.termuxRuntime.installer.rootDir
-                val modsDir = File(root, "home/servers/$dirName/mods")
-                val pluginsDir = File(root, "home/servers/$dirName/plugins")
+                // 必须走 serverDirFor：rootDir 是 filesDir/home，旧写法再拼一句
+                // "home/servers/$dirName" 会落到双层的 home/home/servers/...（已废弃的
+                // 迁移源），组件因此永远是空列表。
+                val serverDir = app.termuxRuntime.serverDirFor(dirName)
+                val modsDir = File(serverDir, "mods")
+                val pluginsDir = File(serverDir, "plugins")
 
                 val list = mutableListOf<Row>()
                 val mods = runCatching { pluginManager.readMods(dirName) }.getOrDefault(emptyList())
