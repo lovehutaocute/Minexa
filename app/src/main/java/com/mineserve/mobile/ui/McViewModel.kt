@@ -89,6 +89,7 @@ import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
+import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
 import com.mineserve.mobile.ui.vm.ModsDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
@@ -3009,49 +3010,49 @@ class McViewModel(
 
     // ── Modrinth 模组获取 ────────────────────────────────────────
 
-    private val _modrinthResults = MutableStateFlow<List<PluginManager.ModrinthHit>>(emptyList())
-    val modrinthResults: StateFlow<List<PluginManager.ModrinthHit>> = _modrinthResults.asStateFlow()
+    private val modrinthDiscoveryDelegate by lazy {
+        ModrinthDiscoveryDelegate(
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            currentServerVersion = ::currentServerVersion,
+            reportMessage = { _messageFlow.tryEmit(str(it)) }
+        )
+    }
+
+    val modrinthResults: StateFlow<List<PluginManager.ModrinthHit>> get() = modrinthDiscoveryDelegate.modrinthResults
 
     /** Modrinth 全部可用加载器 */
-    private val _modrinthLoaders = MutableStateFlow<List<String>>(emptyList())
-    val modrinthLoaders: StateFlow<List<String>> = _modrinthLoaders.asStateFlow()
+    val modrinthLoaders: StateFlow<List<String>> get() = modrinthDiscoveryDelegate.modrinthLoaders
 
     /** Modrinth 支持的 MC 游戏版本（供版本筛选下拉） */
-    private val _modrinthGameVersions = MutableStateFlow<List<String>>(emptyList())
-    val modrinthGameVersions: StateFlow<List<String>> = _modrinthGameVersions.asStateFlow()
+    val modrinthGameVersions: StateFlow<List<String>> get() = modrinthDiscoveryDelegate.modrinthGameVersions
 
     /** 模组筛选选中的游戏版本（默认当前服务器版本） */
-    private val _selectedModVersion = MutableStateFlow("")
-    val selectedModVersion: StateFlow<String> = _selectedModVersion.asStateFlow()
+    val selectedModVersion: StateFlow<String> get() = modrinthDiscoveryDelegate.selectedModVersion
+
+    /** 加载 Modrinth 可用加载器列表（仅保留模组专用加载器，与插件池完全隔离） */
+    fun loadModrinthLoaders() = modrinthDiscoveryDelegate.loadModrinthLoaders()
+
+    /** 加载 Modrinth 游戏版本列表；默认选中当前服务器版本 */
+    fun loadModrinthGameVersions() = modrinthDiscoveryDelegate.loadModrinthGameVersions()
+
+    /** 切换模组筛选的 MC 版本 */
+    fun setSelectedModVersion(v: String) = modrinthDiscoveryDelegate.setSelectedModVersion(v)
+
+    val isLoadingMoreMods: StateFlow<Boolean> get() = modrinthDiscoveryDelegate.isLoadingMoreMods
+
+    /** 搜索 Modrinth 模组（多加载器 + 版本筛选 + 排序） */
+    fun searchModrinthMods(query: String, loaders: List<String>, sort: String, mcVersion: String) =
+        modrinthDiscoveryDelegate.searchModrinthMods(query, loaders, sort, mcVersion)
+
+    /** 分页加载更多 Modrinth 模组（追加到现有结果） */
+    fun loadMoreModrinthMods() = modrinthDiscoveryDelegate.loadMoreModrinthMods()
 
     /** 当前激活核心的 MC 版本（用于版本匹配判断） */
     private fun currentServerVersion(): String {
         val cfg = config.value
         return cfg.installedCores.find { it.name == cfg.activeCoreName }?.version
             ?: cfg.mcVersion
-    }
-
-    /** 加载 Modrinth 可用加载器列表（仅保留模组专用加载器，与插件池完全隔离） */
-    fun loadModrinthLoaders() {
-        viewModelScope.launch {
-            val all = withContext(Dispatchers.IO) { pluginManager.fetchModrinthLoaders() }
-            _modrinthLoaders.value = pluginManager.filterModLoaders(all)
-        }
-    }
-
-    /** 加载 Modrinth 游戏版本列表；默认选中当前服务器版本 */
-    fun loadModrinthGameVersions() {
-        viewModelScope.launch {
-            val versions = withContext(Dispatchers.IO) { pluginManager.fetchModrinthGameVersions() }
-            _modrinthGameVersions.value = versions
-            val serverVer = currentServerVersion()
-            _selectedModVersion.value = serverVer.takeIf { it.isNotBlank() && it in versions } ?: versions.firstOrNull().orEmpty()
-        }
-    }
-
-    /** 切换模组筛选的 MC 版本 */
-    fun setSelectedModVersion(v: String) {
-        _selectedModVersion.value = v
     }
 
     /** Modrinth 搜索参数（用于分页加载更多） */
@@ -3061,65 +3062,6 @@ class McViewModel(
         val sort: String,
         val mcVersion: String
     )
-
-    private var lastModrinthModQuery: ModrinthQueryArgs? = null
-    private val _isLoadingMoreMods = MutableStateFlow(false)
-    val isLoadingMoreMods: StateFlow<Boolean> = _isLoadingMoreMods.asStateFlow()
-
-    /**
-     * 模组搜索的代际号。
-     *
-     * 搜索请求是异步的，用户快速改关键字/加载器时会发出多次请求，而**响应到达顺序
-     * 不保证与发出顺序一致**（网络抖动、后一次请求更小更先返回）。没有代际校验时，
-     * 晚到的旧响应会覆盖新结果——列表显示的内容与实际筛选条件不符。
-     * 每次新搜索/加载更多都递增，回写前比对，只有最新一代才允许写入。
-     */
-    private var modrinthModSearchToken = 0L
-
-    /** 搜索 Modrinth 模组（多加载器 + 版本筛选 + 排序） */
-    fun searchModrinthMods(query: String, loaders: List<String>, sort: String, mcVersion: String) {
-        lastModrinthModQuery = ModrinthQueryArgs(query, loaders, sort, mcVersion)
-        val token = ++modrinthModSearchToken
-        viewModelScope.launch {
-            val hits = withContext(Dispatchers.IO) {
-                pluginManager.searchModrinth(query, loaders, sort, projectType = "mod", mcVersion = mcVersion)
-            }
-            // 已被更新的一次搜索取代：本次结果整体丢弃，不覆盖新列表。
-            if (token != modrinthModSearchToken) return@launch
-            _modrinthResults.value = hits
-            if (hits.isEmpty()) {
-                _messageFlow.tryEmit(str(R.string.s223))
-            }
-        }
-    }
-
-    /** 分页加载更多 Modrinth 模组（追加到现有结果） */
-    fun loadMoreModrinthMods() {
-        val args = lastModrinthModQuery ?: run {
-            _messageFlow.tryEmit(str(R.string.vm_search_first))
-            return
-        }
-        if (_isLoadingMoreMods.value) return
-        val token = ++modrinthModSearchToken
-        viewModelScope.launch {
-            _isLoadingMoreMods.value = true
-            try {
-                val offset = _modrinthResults.value.size
-                val more = withContext(Dispatchers.IO) {
-                    pluginManager.searchModrinth(args.query, args.loaders, args.sort, projectType = "mod", mcVersion = args.mcVersion, offset = offset)
-                }
-                // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
-                if (token != modrinthModSearchToken) return@launch
-                if (more.isEmpty()) {
-                    _messageFlow.tryEmit(str(R.string.vm_no_more_results))
-                } else {
-                    _modrinthResults.value = (_modrinthResults.value + more).distinctBy { it.slug }
-                }
-            } finally {
-                _isLoadingMoreMods.value = false
-            }
-        }
-    }
 
     /** 检测已安装插件冲突（同名 / 同主类） */
     fun detectPluginConflicts(plugins: List<PluginManager.InstalledPlugin>): List<String> =
@@ -3195,7 +3137,7 @@ class McViewModel(
     private val _isLoadingMorePlugins = MutableStateFlow(false)
     val isLoadingMorePlugins: StateFlow<Boolean> = _isLoadingMorePlugins.asStateFlow()
 
-    /** 插件搜索的代际号；理由同 [modrinthModSearchToken]。 */
+    /** 插件搜索的代际号；只有最新一代请求允许回写结果。 */
     private var modrinthPluginSearchToken = 0L
 
     /** 插件页搜索 Modrinth 插件（project_type=plugin，布局与模组页统一） */
