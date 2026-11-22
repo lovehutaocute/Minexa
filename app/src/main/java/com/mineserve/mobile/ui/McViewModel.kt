@@ -79,6 +79,7 @@ import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
+import com.mineserve.mobile.ui.vm.ExternalBackupsDelegate
 import com.mineserve.mobile.ui.vm.FileBrowserDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
@@ -2768,70 +2769,29 @@ class McViewModel(
             .firstOrNull { it.name == config.value.activeCoreName }
             ?.core == ServerCore.Paper
 
-    /** 创建 world 目录快照（zip 打包），返回快照文件路径或 null */
-    suspend fun createSnapshot(): String? {
-        val dirName = activeDirName() ?: return null
-        return withContext(Dispatchers.IO) {
-            backupManager.backupWorldToExternal(dirName, BackupManager.BackupOrigin.Manual)
-        }
+    private val externalBackupsDelegate by lazy {
+        ExternalBackupsDelegate(
+            app = app,
+            scope = viewModelScope,
+            backupManager = backupManager,
+            config = config,
+            activeDirName = ::activeDirName,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
+
+    /** 创建 world 目录快照（zip 打包），返回快照文件路径或 null */
+    suspend fun createSnapshot(): String? = externalBackupsDelegate.createSnapshot()
 
     /** 更新前备份存档（更新对话框「先备份存档」入口） */
-    fun backupBeforeUpdate() {
-        viewModelScope.launch {
-            try {
-                val path = createSnapshot()
-                if (path != null) {
-                    _messageFlow.tryEmit(str(R.string.update_backup_done, java.io.File(path).name))
-                } else {
-                    _messageFlow.tryEmit(str(R.string.update_backup_empty))
-                }
-            } catch (e: Exception) {
-                _messageFlow.tryEmit(str(R.string.err_backup_fail, e.message))
-            }
-        }
-    }
+    fun backupBeforeUpdate() = externalBackupsDelegate.backupBeforeUpdate()
 
     /** 外部备份整个世界（world+nether+end → 外部目录） */
-    fun backupWorldToExternal() {
-        val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
-        viewModelScope.launch {
-            try {
-                val path = withContext(Dispatchers.IO) {
-                    backupManager.backupWorldToExternal(dirName, BackupManager.BackupOrigin.Manual)
-                }
-                if (path != null) {
-                    _messageFlow.tryEmit(str(R.string.msg_world_backup_done, java.io.File(path).name))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.err_world_backup_empty))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_world_backup_fail, e.message))
-            }
-        }
-    }
+    fun backupWorldToExternal() = externalBackupsDelegate.backupWorldToExternal()
 
     /** 外部备份整个服务器（world+核心+配置+插件 → 外部目录，文件名带核心类型） */
-    fun backupServerToExternal() {
-        val dirName = activeDirName() ?: run { _errorFlow.tryEmit(str(R.string.s212)); return }
-        // 当前服务器核心类型写入文件名（还原时据此识别核心）
-        val coreTag = config.value.installedCores
-            .firstOrNull { it.dirName == dirName }?.core?.displayName
-        viewModelScope.launch {
-            try {
-                val path = withContext(Dispatchers.IO) {
-                    backupManager.backupServerToExternal(dirName, coreTag, BackupManager.BackupOrigin.Manual)
-                }
-                if (path != null) {
-                    _messageFlow.tryEmit(str(R.string.msg_server_backup_done, java.io.File(path).name))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.err_server_backup_fail))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.err_server_backup_fail_msg, e.message))
-            }
-        }
-    }
+    fun backupServerToExternal() = externalBackupsDelegate.backupServerToExternal()
 
     // ── 外部备份导入/还原（含重名检测） ─────────────────────────────
 
