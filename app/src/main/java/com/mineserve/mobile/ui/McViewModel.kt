@@ -4953,10 +4953,11 @@ class McViewModel(
         val modifiedText: String
     )
 
-    private val fileBrowserDelegate by lazy {
+    private val fileBrowserDelegate: FileBrowserDelegate by lazy {
         FileBrowserDelegate(
             app = app,
             scope = viewModelScope,
+            openTextFile = { openTextFile(it) },
             reportMessage = { _messageFlow.tryEmit(it) },
             reportError = { _errorFlow.tryEmit(it) }
         )
@@ -5011,21 +5012,7 @@ class McViewModel(
     }
 
     /** 删除文件或目录 */
-    fun deleteFile(file: java.io.File) {
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { FileOps.deleteRecursively(file) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s304, file.name))
-                    loadFiles(java.io.File(currentPath.value))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s305, file.name))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s236, e.message))
-            }
-        }
-    }
+    fun deleteFile(file: java.io.File) = fileBrowserDelegate.deleteFile(file)
 
     /** 上传文件：从 Uri 复制到目标目录 */
     fun uploadFile(uri: android.net.Uri, targetDir: java.io.File) = fileBrowserDelegate.uploadFile(uri, targetDir)
@@ -5045,157 +5032,19 @@ class McViewModel(
     }
 
     /** 创建新目录 */
-    fun createDirectory(parent: java.io.File, name: String) {
-        if (name.isBlank()) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    java.io.File(parent, name).mkdirs()
-                }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s311, name))
-                    loadFiles(java.io.File(currentPath.value))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s312))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s313, e.message))
-            }
-        }
-    }
+    fun createDirectory(parent: java.io.File, name: String) = fileBrowserDelegate.createDirectory(parent, name)
 
-    /**
-     * 新建空文本文件。
-     *
-     * 名单校验与 [createDirectory] 同源：'/' 会静默建到别处、'..' 能跳出根目录，
-     * 这里必须提前拒绝，否则用户会在「文件管理」里写出根目录之外的东西。
-     * 建成功后直接进入编辑器 —— 新建一个空文件却停在列表里，用户还得再点一次。
-     */
-    fun createTextFile(parent: java.io.File, name: String) {
-        val trimmed = name.trim()
-        if (trimmed.isEmpty()) return
-        if (trimmed != name || trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..")) {
-            _errorFlow.tryEmit(str(R.string.fm_new_dir_invalid_name))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val target = withContext(Dispatchers.IO) {
-                    val f = java.io.File(parent, trimmed)
-                    if (f.exists()) null else f.createNewFile().let { if (it) f else null }
-                }
-                if (target == null) {
-                    _errorFlow.tryEmit(str(R.string.fm_name_exists, trimmed))
-                    return@launch
-                }
-                _messageFlow.tryEmit(str(R.string.fm_created, trimmed))
-                loadFiles(java.io.File(currentPath.value))
-                openTextFile(target)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.fm_create_failed, e.message))
-            }
-        }
-    }
+    /** 新建空文本文件。 */
+    fun createTextFile(parent: java.io.File, name: String) = fileBrowserDelegate.createTextFile(parent, name)
 
-    /**
-     * 重命名文件/目录。
-     *
-     * 目标已存在时**拒绝**而不是覆盖：文件管理里一次误点就把 server.properties
-     * 换成另一个同名文件，是不可恢复的事故。
-     */
-    fun renameEntry(file: java.io.File, newName: String) {
-        val name = newName.trim()
-        if (name.isEmpty() || name == file.name) return
-        if (name.contains('/') || name.contains('\\') || name.contains("..")) {
-            _errorFlow.tryEmit(str(R.string.fm_new_dir_invalid_name))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val message = withContext(Dispatchers.IO) {
-                    val target = java.io.File(file.parentFile, name)
-                    when {
-                        target.exists() -> str(R.string.fm_name_exists, name) to true
-                        file.renameTo(target) -> str(R.string.fm_renamed, name) to true
-                        else -> str(R.string.fm_rename_failed, file.name) to false
-                    }
-                }
-                if (message.second) _messageFlow.tryEmit(message.first) else _errorFlow.tryEmit(message.first)
-                loadFiles(java.io.File(currentPath.value))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.fm_rename_failed, e.message))
-            }
-        }
-    }
+    /** 重命名文件/目录。 */
+    fun renameEntry(file: java.io.File, newName: String) = fileBrowserDelegate.renameEntry(file, newName)
 
     /** 复制文件/目录到目标目录；重名自动加序号，不覆盖已有内容 */
-    fun copyEntryTo(src: java.io.File, destDir: java.io.File) {
-        viewModelScope.launch {
-            try {
-                // 把目录复制到它自己内部会无限递归 —— 先挡掉，别等 IO 把磁盘写满
-                if (destDir.absolutePath == src.absolutePath ||
-                    destDir.absolutePath.startsWith(src.absolutePath + java.io.File.separator)
-                ) {
-                    _errorFlow.tryEmit(str(R.string.fm_copy_into_self))
-                    return@launch
-                }
-                val target = withContext(Dispatchers.IO) { copyRecursivelyTo(src, destDir) }
-                _messageFlow.tryEmit(str(R.string.fm_copied_to, target.name))
-                loadFiles(java.io.File(currentPath.value))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.fm_copy_failed, e.message))
-            }
-        }
-    }
-
-    private fun copyRecursivelyTo(src: java.io.File, destDir: java.io.File): java.io.File {
-        val target = uniqueTarget(destDir, src.name)
-        if (src.isDirectory) {
-            target.mkdirs()
-            src.listFiles()?.forEach { copyRecursivelyTo(it, target) }
-        } else {
-            src.inputStream().use { ins -> java.io.FileOutputStream(target).use { ins.copyTo(it) } }
-        }
-        return target
-    }
-
-    /** `name.ext` 已存在时生成 `name-1.ext`、`name-2.ext`… */
-    private fun uniqueTarget(dir: java.io.File, name: String): java.io.File {
-        val first = java.io.File(dir, name)
-        if (!first.exists()) return first
-        val dot = name.lastIndexOf('.')
-        val base = if (dot > 0) name.substring(0, dot) else name
-        val ext = if (dot > 0) name.substring(dot) else ""
-        var index = 1
-        var candidate = java.io.File(dir, "$base-$index$ext")
-        while (candidate.exists()) {
-            index++
-            candidate = java.io.File(dir, "$base-$index$ext")
-        }
-        return candidate
-    }
+    fun copyEntryTo(src: java.io.File, destDir: java.io.File) = fileBrowserDelegate.copyEntryTo(src, destDir)
 
     /** 批量删除（多选模式）；部分失败时报出失败数量，不谎报全部成功 */
-    fun deleteEntries(entries: List<java.io.File>) {
-        if (entries.isEmpty()) return
-        viewModelScope.launch {
-            try {
-                val failed = withContext(Dispatchers.IO) {
-                    entries.count { f -> !FileOps.deleteRecursively(f) }
-                }
-                when {
-                    failed == 0 -> _messageFlow.tryEmit(str(R.string.fm_deleted_count, entries.size))
-                    failed == entries.size -> _errorFlow.tryEmit(str(R.string.fm_delete_failed_count, failed))
-                    else -> _errorFlow.tryEmit(
-                        str(R.string.fm_deleted_partial, entries.size - failed, failed)
-                    )
-                }
-                loadFiles(java.io.File(currentPath.value))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s236, e.message))
-            }
-        }
-    }
+    fun deleteEntries(entries: List<java.io.File>) = fileBrowserDelegate.deleteEntries(entries)
 
     /**
      * init 块必须放在类体末尾：这里启动的协程（Dispatchers.IO/Default）会在
