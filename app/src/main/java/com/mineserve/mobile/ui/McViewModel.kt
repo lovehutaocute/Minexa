@@ -85,7 +85,6 @@ import com.mineserve.mobile.server.tunnel.StunDiagnostics
 import com.mineserve.mobile.server.tunnel.easytier.EasyTierEngine
 import com.mineserve.mobile.server.tunnel.easytier.EasyTierSettings
 import com.mineserve.mobile.server.tunnel.frpc.FrpcEngineConfig
-import com.mineserve.mobile.server.tunnel.frpc.FrpcRuntimeDownloader
 import com.mineserve.mobile.server.PowerNukkitXConfigManager
 import com.mineserve.mobile.server.ServerImporter
 import com.mineserve.mobile.server.TunnelManager
@@ -93,6 +92,7 @@ import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
+import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.clearMarkKey
@@ -938,31 +938,23 @@ class McViewModel(
         val sha256: String? = null
     )
 
-    private val _frpcEngine = MutableStateFlow(FrpcEngineInfo())
-    val frpcEngine: StateFlow<FrpcEngineInfo> = _frpcEngine.asStateFlow()
+    private val frpcEngineDelegate by lazy {
+        FrpcEngineDelegate(
+            context = app,
+            scope = viewModelScope,
+            frpcRuntime = tunnelManager.frpcRuntime
+        )
+    }
+
+    val frpcEngine: StateFlow<FrpcEngineInfo> get() = frpcEngineDelegate.frpcEngine
 
     /** 引擎导入结果提示，一次性消费后清空。 */
-    private val _frpcEngineMessage = MutableStateFlow<String?>(null)
-    val frpcEngineMessage: StateFlow<String?> = _frpcEngineMessage.asStateFlow()
+    val frpcEngineMessage: StateFlow<String?> get() = frpcEngineDelegate.frpcEngineMessage
 
-    fun clearFrpcEngineMessage() {
-        _frpcEngineMessage.value = null
-    }
-
-    private val frpcRuntime get() = tunnelManager.frpcRuntime
+    fun clearFrpcEngineMessage() = frpcEngineDelegate.clearFrpcEngineMessage()
 
     /** 刷新 frpc 引擎状态（含 SHA-256 计算，走 IO 线程）。 */
-    fun refreshFrpcEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val installed = frpcRuntime.isInstalled()
-            _frpcEngine.value = FrpcEngineInfo(
-                installed = installed,
-                version = if (installed) frpcRuntime.installedVersion else null,
-                sizeBytes = if (installed) frpcRuntime.engineFile.length() else 0,
-                sha256 = if (installed) frpcRuntime.engineSha256() else null
-            )
-        }
-    }
+    fun refreshFrpcEngine() = frpcEngineDelegate.refreshFrpcEngine()
 
     /** 在线下载状态。未配置下载源时 UI 不显示下载入口，这个状态也就一直是 Idle。 */
     sealed interface DownloadState {
@@ -970,78 +962,19 @@ class McViewModel(
         data class Downloading(val fraction: Float) : DownloadState
     }
 
-    private val _frpcDownload = MutableStateFlow<DownloadState>(DownloadState.Idle)
-    val frpcDownload: StateFlow<DownloadState> = _frpcDownload.asStateFlow()
+    val frpcDownload: StateFlow<DownloadState> get() = frpcEngineDelegate.frpcDownload
 
     /** 是否配置了在线下载源；没配置时 UI 只保留本地导入。 */
     val frpcOnlineAvailable: Boolean get() = FrpcEngineConfig.isConfigured
 
-    /**
-     * 在线下载并安装引擎。
-     *
-     * 下载失败**不动**已有引擎（[FrpcRuntimeDownloader] 保证）：用户可能只是想升级，
-     * 升级失败却把当前可用的版本弄没了，那是最糟的结果。所以这里失败只提示，不清理。
-     */
-    fun downloadFrpcEngine() {
-        if (_frpcDownload.value is DownloadState.Downloading) return
-        viewModelScope.launch(Dispatchers.IO) {
-            _frpcDownload.value = DownloadState.Downloading(-1f)
-            try {
-                val downloader = FrpcRuntimeDownloader(frpcRuntime)
-                val manifest = downloader.fetchManifest()
-                val result = downloader.downloadAndInstall(manifest) { fraction ->
-                    _frpcDownload.value = DownloadState.Downloading(fraction)
-                }
-                _frpcEngineMessage.value = str(R.string.vm_engine_downloaded) +
-                    (result.version?.let { str(R.string.vm_version_suffix, it) } ?: "")
-            } catch (e: Exception) {
-                _frpcEngineMessage.value = str(R.string.vm_download_failed, e.message ?: str(R.string.vm_network_unavailable))
-            } finally {
-                _frpcDownload.value = DownloadState.Idle
-                refreshFrpcEngine()
-            }
-        }
-    }
+    /** 在线下载并安装引擎。 */
+    fun downloadFrpcEngine() = frpcEngineDelegate.downloadFrpcEngine()
 
-    /**
-     * 从用户选中的文件导入 frpc 引擎（libfrpc.so）。
-     *
-     * 校验在 [com.mineserve.mobile.server.tunnel.frpc.FrpcRuntime.install] 内完成
-     * （体积 / ELF 魔数 / arm64 架构）。校验失败时**不覆盖**已装引擎 ——
-     * 用户手上未必还有第二份可用的引擎。
-     */
-    fun importFrpcEngine(uri: Uri) {
-        viewModelScope.launch(Dispatchers.IO) {
-            try {
-                val name = queryDisplayName(uri)
-                app.contentResolver.openInputStream(uri)?.use { input ->
-                    frpcRuntime.install(input, name)
-                } ?: throw IllegalStateException(str(R.string.vm_cannot_read_file))
-                _frpcEngineMessage.value = str(R.string.vm_engine_imported) +
-                    (frpcRuntime.installedVersion?.let { str(R.string.vm_version_suffix, it) } ?: "")
-                refreshFrpcEngine()
-            } catch (e: Exception) {
-                _frpcEngineMessage.value = str(R.string.vm_import_failed, e.message ?: "")
-            }
-        }
-    }
+    /** 从用户选中的文件导入 frpc 引擎（libfrpc.so）。 */
+    fun importFrpcEngine(uri: Uri) = frpcEngineDelegate.importFrpcEngine(uri)
 
     /** 卸载 frpc 引擎。 */
-    fun uninstallFrpcEngine() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val ok = frpcRuntime.uninstall()
-            _frpcEngineMessage.value = if (ok) str(R.string.vm_engine_uninstalled) else str(R.string.vm_uninstall_failed)
-            refreshFrpcEngine()
-        }
-    }
-
-    /** 取 SAF 文件的显示名，仅用于从文件名里认引擎版本号。 */
-    private fun queryDisplayName(uri: Uri): String? = runCatching {
-        app.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
-            val index = cursor.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-            if (index >= 0 && cursor.moveToFirst()) cursor.getString(index) else null
-        }
-    }.getOrNull()
+    fun uninstallFrpcEngine() = frpcEngineDelegate.uninstallFrpcEngine()
 
     // ── 软件更新（GitHub Releases） ──────────────────────────────────
 
