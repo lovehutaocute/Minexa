@@ -120,4 +120,86 @@ internal class ModrinthDiscoveryDelegate(
             }
         }
     }
+
+    private val _pluginModrinthResults = MutableStateFlow<List<PluginManager.ModrinthHit>>(emptyList())
+    val pluginModrinthResults: StateFlow<List<PluginManager.ModrinthHit>> = _pluginModrinthResults.asStateFlow()
+
+    private val _pluginModrinthLoaders = MutableStateFlow<List<String>>(emptyList())
+    val pluginModrinthLoaders: StateFlow<List<String>> = _pluginModrinthLoaders.asStateFlow()
+
+    private val _selectedPluginVersion = MutableStateFlow("")
+    val selectedPluginVersion: StateFlow<String> = _selectedPluginVersion.asStateFlow()
+
+    fun loadPluginModrinthLoaders() {
+        scope.launch {
+            val all = withContext(Dispatchers.IO) { pluginManager.fetchModrinthLoaders() }
+            _pluginModrinthLoaders.value = pluginManager.filterPluginLoaders(all)
+        }
+    }
+
+    fun loadPluginModrinthVersions() {
+        scope.launch {
+            val versions = withContext(Dispatchers.IO) { pluginManager.fetchModrinthGameVersions() }
+            if (_pluginModrinthResults.value.isEmpty()) {
+                val serverVer = currentServerVersion()
+                _selectedPluginVersion.value = serverVer.takeIf { it.isNotBlank() && it in versions } ?: versions.firstOrNull().orEmpty()
+            }
+        }
+    }
+
+    fun setSelectedPluginVersion(v: String) {
+        _selectedPluginVersion.value = v
+    }
+
+    private var lastModrinthPluginQuery: ModrinthQueryArgs? = null
+    private val _isLoadingMorePlugins = MutableStateFlow(false)
+    val isLoadingMorePlugins: StateFlow<Boolean> = _isLoadingMorePlugins.asStateFlow()
+
+    /** 插件搜索的代际号；只有最新一代请求允许回写结果。 */
+    private var modrinthPluginSearchToken = 0L
+
+    /** 插件页搜索 Modrinth 插件（project_type=plugin，布局与模组页统一） */
+    fun searchModrinthPlugin(query: String, loaders: List<String>, sort: String, mcVersion: String) {
+        lastModrinthPluginQuery = ModrinthQueryArgs(query, loaders, sort, mcVersion)
+        val token = ++modrinthPluginSearchToken
+        scope.launch {
+            val hits = withContext(Dispatchers.IO) {
+                pluginManager.searchModrinth(query, loaders, sort, projectType = "plugin", mcVersion = mcVersion)
+            }
+            // 已被更新的一次搜索取代：丢弃本次结果，避免旧响应覆盖新列表。
+            if (token != modrinthPluginSearchToken) return@launch
+            _pluginModrinthResults.value = hits
+            if (hits.isEmpty()) {
+                reportMessage(R.string.s223)
+            }
+        }
+    }
+
+    /** 分页加载更多 Modrinth 插件（追加到现有结果） */
+    fun loadMoreModrinthPlugin() {
+        val args = lastModrinthPluginQuery ?: run {
+            reportMessage(R.string.vm_search_first)
+            return
+        }
+        if (_isLoadingMorePlugins.value) return
+        val token = ++modrinthPluginSearchToken
+        scope.launch {
+            _isLoadingMorePlugins.value = true
+            try {
+                val offset = _pluginModrinthResults.value.size
+                val more = withContext(Dispatchers.IO) {
+                    pluginManager.searchModrinth(args.query, args.loaders, args.sort, projectType = "plugin", mcVersion = args.mcVersion, offset = offset)
+                }
+                // 期间若发生过新的搜索，这一页属于旧查询，追加进去会得到混合列表。
+                if (token != modrinthPluginSearchToken) return@launch
+                if (more.isEmpty()) {
+                    reportMessage(R.string.vm_no_more_results)
+                } else {
+                    _pluginModrinthResults.value = (_pluginModrinthResults.value + more).distinctBy { it.slug }
+                }
+            } finally {
+                _isLoadingMorePlugins.value = false
+            }
+        }
+    }
 }
