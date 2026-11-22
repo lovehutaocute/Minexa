@@ -91,6 +91,7 @@ import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
+import com.mineserve.mobile.ui.vm.SnapshotsDelegate
 import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
 import com.mineserve.mobile.ui.vm.TextEditorDelegate
 import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
@@ -3142,19 +3143,23 @@ class McViewModel(
 
     private val backupManager = BackupManager(repo.termuxRuntime)
 
-    private val _snapshots = MutableStateFlow<List<BackupManager.SnapshotInfo>>(emptyList())
-    val snapshots: StateFlow<List<BackupManager.SnapshotInfo>> = _snapshots.asStateFlow()
+    private val snapshotsDelegate by lazy {
+        SnapshotsDelegate(
+            app = app,
+            scope = viewModelScope,
+            backupManager = backupManager,
+            activeDirName = ::activeDirName,
+            runtimeRoot = { repo.termuxRuntime.installer.rootDir },
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    val snapshots: StateFlow<List<BackupManager.SnapshotInfo>> get() = snapshotsDelegate.snapshots
 
     /** 加载快照列表 */
-    fun loadSnapshots() {
-        viewModelScope.launch {
-            try {
-                _snapshots.value = withContext(Dispatchers.IO) { backupManager.listSnapshots() }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s248, e.message))
-            }
-        }
-    }
+    fun loadSnapshots() = snapshotsDelegate.loadSnapshots()
 
     /** 删除当前激活核心的世界文件夹（world / world_nether / world_the_end），不可恢复 */
     fun deleteWorldDirs() {
@@ -3185,66 +3190,13 @@ class McViewModel(
     }
 
     /** 恢复快照（会先停止服务器） */
-    fun restoreSnapshot(name: String) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s249))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                _messageFlow.tryEmit(str(R.string.s250))
-                val ok = withContext(Dispatchers.IO) { backupManager.restoreSnapshot(name, dirName) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s251))
-                    loadSnapshots()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s252))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s253, e.message))
-            }
-        }
-    }
+    fun restoreSnapshot(name: String) = snapshotsDelegate.restoreSnapshot(name)
 
     /** 导出快照 zip 到用户选择的 Uri（自定义导出路径） */
-    fun exportSnapshotToUri(snapshotName: String, uri: android.net.Uri) {
-        val src = java.io.File(repo.termuxRuntime.installer.rootDir, "home/snapshots/$snapshotName")
-        if (!src.exists()) {
-            _errorFlow.tryEmit(str(R.string.s254))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val output = app.contentResolver.openOutputStream(uri)
-                        ?: throw RuntimeException(str(R.string.err_open_export))
-                    output.use { os -> src.inputStream().use { it.copyTo(os) } }
-                }
-                _messageFlow.tryEmit(str(R.string.s256, snapshotName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s257, e.message))
-            }
-        }
-    }
+    fun exportSnapshotToUri(snapshotName: String, uri: android.net.Uri) = snapshotsDelegate.exportSnapshotToUri(snapshotName, uri)
 
     /** 删除快照 */
-    fun deleteSnapshot(name: String) {
-        // 兜底：运行中删除快照会毁掉「出事可回滚」的备份，与服务端活动期解耦更安全
-        if (!requireServerStopped("删除快照")) return
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) { backupManager.deleteSnapshot(name) }
-                if (ok) {
-                    _messageFlow.tryEmit(str(R.string.s258, name))
-                    loadSnapshots()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s259))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s260, e.message))
-            }
-        }
-    }
+    fun deleteSnapshot(name: String) = snapshotsDelegate.deleteSnapshot(name)
 
     // ── server.properties 编辑 ─────────────────────────────────────
 
