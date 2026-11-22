@@ -212,7 +212,7 @@ jobs:
           VERSION=$(grep -oP 'versionName\s*=\s*"\K[^"]+' app/build.gradle.kts)
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
-          CURATED="RELEASE_NOTES_${VERSION}.md"
+          CURATED="docs/releases/RELEASE_NOTES_${VERSION}.md"
           if [ -f "$CURATED" ]; then
             cp "$CURATED" release-notes.md
             echo "更新说明来源：$CURATED（手写精简版，适合更新弹窗阅读）"
