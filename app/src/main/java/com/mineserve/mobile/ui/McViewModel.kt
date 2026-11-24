@@ -88,6 +88,7 @@ import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
 import com.mineserve.mobile.ui.vm.ModsDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
+import com.mineserve.mobile.ui.vm.ProotContainerDelegate
 import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
 import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
@@ -1664,66 +1665,28 @@ class McViewModel(
 
     fun deleteJava(runtime: JavaRuntime) = javaRuntimeDelegate.deleteJava(runtime)
 
-    /** 容器占用空间（字节），供删除确认弹窗显示「可回收多少」。 */
+    private val prootContainerDelegate by lazy {
+        ProotContainerDelegate(
+            app = app,
+            scope = viewModelScope,
+            termuxRuntime = repo.termuxRuntime,
+            isInstalling = isInstalling,
+            setJavaOperation = javaRuntimeDelegate::setJavaOperation,
+            refreshJava = ::refreshJava,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     fun prootContainerSizeBytes(distro: ProotDistro): Long =
-        repo.termuxRuntime.prootContainerSizeBytes(distro)
+        prootContainerDelegate.prootContainerSizeBytes(distro)
 
-    /**
-     * 各发行版容器占用空间（字节），**异步**填充。
-     *
-     * 为什么不直接在 Composable 里调 [prootContainerSizeBytes]：
-     * 它内部是 `walkTopDown()` 全量递归 rootfs（数万个文件），属于重量级 IO。
-     * 旧代码在 EnvManagerScreen 里同步调用，且 remember 的 key 含每次刷新
-     * 都会换新实例的 `installed`，于是进页面、切发行版、每次刷新 Java 状态
-     * 都会重新扫一遍整个 rootfs —— 这就是依赖管理页卡顿的主因。
-     *
-     * 现在改为：进页面时在 IO 线程算一次，结果放进 StateFlow 供 UI 读取。
-     */
-    private val _prootContainerSizes = MutableStateFlow<Map<ProotDistro, Long>>(emptyMap())
-    val prootContainerSizes: StateFlow<Map<ProotDistro, Long>> = _prootContainerSizes.asStateFlow()
+    val prootContainerSizes: StateFlow<Map<ProotDistro, Long>>
+        get() = prootContainerDelegate.prootContainerSizes
 
-    /** 刷新所有发行版容器占用（IO 线程，供依赖管理页展示「删除可回收多少空间」）。 */
-    fun refreshProotContainerSizes() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val sizes = ProotDistro.entries.associateWith { distro ->
-                repo.termuxRuntime.prootContainerSizeBytes(distro)
-            }
-            _prootContainerSizes.value = sizes
-        }
-    }
+    fun refreshProotContainerSizes() = prootContainerDelegate.refreshProotContainerSizes()
 
-    /**
-     * 删除整个 PRoot 容器（连同容器内已装的全部 Java 版本）。
-     *
-     * 与 [deleteJava] 是**两个不同粒度**的操作，所以入口也分开：
-     * - [deleteJava]：卸载某一个 Java 版本，容器与其余版本保留（apt purge）
-     * - 本方法：回收整个容器（直接删 rootfs），用于磁盘空间吃紧时一次性清干净
-     *
-     * 若混成一个按钮，用户点「卸载 Java 17」却把 Java 8/11 一起清掉，
-     * 那是数据静默丢失级别的问题。
-     */
-    fun deleteProotContainer(distro: ProotDistro) {
-        if (_isInstalling.value) return
-        if (repo.termuxRuntime.isMcRunning()) {
-            _errorFlow.tryEmit(str(R.string.err_java_running))
-            return
-        }
-        javaRuntimeDelegate.setJavaOperation(str(R.string.msg_java_op_deleting, distro.displayName))
-        viewModelScope.launch {
-            try {
-                val ok = withContext(Dispatchers.IO) {
-                    repo.termuxRuntime.deleteProotContainer(distro)
-                }
-                refreshJava()
-                if (ok) _messageFlow.tryEmit(str(R.string.msg_proot_container_deleted, distro.displayName))
-                else _errorFlow.tryEmit(str(R.string.err_proot_container_delete_fail, distro.displayName))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(e.message ?: str(R.string.err_proot_container_delete_fail, distro.displayName))
-            } finally {
-                javaRuntimeDelegate.setJavaOperation(null)
-            }
-        }
-    }
+    fun deleteProotContainer(distro: ProotDistro) = prootContainerDelegate.deleteProotContainer(distro)
 
     /** 卸载依赖（直接删除 wget/frpc/rclone/proot 文件，不动 Termux 环境） */
     fun deleteDependencies() {
