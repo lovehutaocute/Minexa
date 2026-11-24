@@ -70,6 +70,7 @@ import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
 import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
+import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
@@ -313,8 +314,7 @@ class McViewModel(
     }
 
     /** apt 安装下载速度（bytes/s） */
-    private val _installSpeed = MutableStateFlow(0L)
-    val installSpeed: StateFlow<Long> = _installSpeed.asStateFlow()
+    val installSpeed: StateFlow<Long> get() = baseDependenciesDelegate.installSpeed
 
     /** 重试 Termux 环境初始化 */
     fun retryBootstrap() {
@@ -1449,15 +1449,24 @@ class McViewModel(
 
     fun refreshJava() = javaRuntimeDelegate.refreshJava()
 
-    fun refreshDependencies() {
-        if (!isBootstrapped.value) return
-        viewModelScope.launch(Dispatchers.IO) {
-            val steps = repo.termuxRuntime.installedDependencySteps()
-            repo.updateServerState { state ->
-                state.copy(installSteps = steps)
-            }
-        }
+    private val baseDependenciesDelegate by lazy {
+        BaseDependenciesDelegate(
+            app = app,
+            scope = viewModelScope,
+            controller = controller,
+            termuxRuntime = repo.termuxRuntime,
+            isBootstrapped = isBootstrapped,
+            isInstalling = isInstalling,
+            setInstalling = { _isInstalling.value = it },
+            updateInstallSteps = { steps ->
+                repo.updateServerState { state -> state.copy(installSteps = steps) }
+            },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
+
+    fun refreshDependencies() = baseDependenciesDelegate.refreshDependencies()
 
     // 运行环境的选中统一走 setJavaRuntime（来源 + 版本一起写），
     // 不再提供「只改版本、来源沿用」的入口 —— 那会写出「FCL 来源 + Java 8」
@@ -1689,34 +1698,10 @@ class McViewModel(
     fun deleteProotContainer(distro: ProotDistro) = prootContainerDelegate.deleteProotContainer(distro)
 
     /** 卸载依赖（直接删除 wget/frpc/rclone/proot 文件，不动 Termux 环境） */
-    fun deleteDependencies() {
-        if (!isBootstrapped.value || _isInstalling.value) return
-        _isInstalling.value = true
-        viewModelScope.launch {
-            try {
-                val removed = withContext(Dispatchers.IO) { repo.termuxRuntime.deleteDependencies() }
-                refreshDependencies()
-                _messageFlow.tryEmit(str(R.string.msg_deps_deleted, removed))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s195, e.message))
-            } finally {
-                _isInstalling.value = false
-            }
-        }
-    }
+    fun deleteDependencies() = baseDependenciesDelegate.deleteDependencies()
 
     /** 重装依赖 = 先删除再安装 */
-    fun reinstallDependencies() {
-        if (!isBootstrapped.value || _isInstalling.value) return
-        _isInstalling.value = true
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) { repo.termuxRuntime.deleteDependencies() }
-            } catch (_: Exception) {}
-            _isInstalling.value = false
-            installDependencies()
-        }
-    }
+    fun reinstallDependencies() = baseDependenciesDelegate.reinstallDependencies()
 
     /**
      * 选择服务端核心。
@@ -1901,32 +1886,7 @@ class McViewModel(
         com.mineserve.mobile.data.DownloadPrefs.setThreadCount(count)
     }
 
-    fun installDependencies() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
-        if (_isInstalling.value) return
-        _isInstalling.value = true
-        viewModelScope.launch {
-            try {
-                val ok = controller.installDependencies { speedBps ->
-                    _installSpeed.value = speedBps
-                }
-                _installSpeed.value = 0L
-                if (ok) {
-                    refreshDependencies()
-                    _messageFlow.tryEmit(str(R.string.s193))
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s194))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s195, e.message))
-            } finally {
-                _isInstalling.value = false
-            }
-        }
-    }
+    fun installDependencies() = baseDependenciesDelegate.installDependencies()
 
     /**
      * 「停止」请求是否仍在飞行中。
