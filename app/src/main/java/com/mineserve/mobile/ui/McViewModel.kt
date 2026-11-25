@@ -85,6 +85,7 @@ import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.InstalledCoresDelegate
 import com.mineserve.mobile.ui.vm.JavaAddonsDelegate
 import com.mineserve.mobile.ui.vm.JavaRuntimeDelegate
+import com.mineserve.mobile.ui.vm.LanAddressDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
@@ -464,9 +465,18 @@ class McViewModel(
     val javaInFlight: StateFlow<JavaRuntime?> get() = javaRuntimeDelegate.javaInFlight
     val installedJava: StateFlow<Set<JavaRuntime>> get() = javaRuntimeDelegate.installedJava
 
+    private val lanAddressDelegate by lazy {
+        LanAddressDelegate(
+            app = app,
+            scope = viewModelScope,
+            realServerPort = ::realServerPort,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     /** 局域网 IP（IPv4，非 loopback），用于 Network Tab 展示和一键复制 */
-    private val _lanIp = MutableStateFlow("--")
-    val lanIp: StateFlow<String> = _lanIp.asStateFlow()
+    val lanIp: StateFlow<String> get() = lanAddressDelegate.lanIp
     /**
      * 聚合隧道状态（两条通道取其一），保留给不区分通道的地方。
      * 网络页**不要**用它 —— 两张卡片各自订阅 [frpState] / [stunState]，
@@ -862,46 +872,11 @@ class McViewModel(
     fun safeRepairRuntime() = diagnosticsDelegate.safeRepairRuntime()
 
     /** 刷新局域网 IP：在 IO 线程遍历网络接口，取第一个非 loopback 的 IPv4 地址 */
-    fun refreshLanIp() {
-        viewModelScope.launch(Dispatchers.IO) {
-            _lanIp.value = queryLanIp()
-        }
-    }
-
-    private fun queryLanIp(): String {
-        return try {
-            NetworkInterface.getNetworkInterfaces()
-                .asSequence()
-                .filter { it.isUp && !it.isLoopback }
-                .flatMap { it.inetAddresses.asSequence() }
-                .filterIsInstance<Inet4Address>()
-                .filter { !it.isLoopbackAddress }
-                .map { it.hostAddress ?: "" }
-                .firstOrNull { it.isNotEmpty() }
-                ?: "--"
-        } catch (e: Exception) {
-            "--"
-        }
-    }
+    fun refreshLanIp() = lanAddressDelegate.refreshLanIp()
 
     /** 一键复制服务器连接地址到剪贴板，格式：IP:端口 */
-    fun copyServerAddress(context: android.content.Context) {
-        val ip = _lanIp.value
-        // 端口取真源（服务端配置文件里的 server-port），不读 config.localPort ——
-        // 后者在配置文件被外部改动时可能停在旧值。
-        // 用 [realServerPort] 而不是 [serverPort] 这个 StateFlow：复制出去的是要发给别人的
-        // 地址，不能受订阅状态影响而拿到缓存里的旧端口。
-        val port = realServerPort()
-        val address = if (ip == "--") {
-            _errorFlow.tryEmit(str(R.string.s187))
-            return
-        } else {
-            "$ip:$port"
-        }
-        val clipboard = context.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
-        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("MC Server", address))
-        _messageFlow.tryEmit(str(R.string.s188, address))
-    }
+    fun copyServerAddress(context: android.content.Context) =
+        lanAddressDelegate.copyServerAddress(context)
 
     companion object {
         private const val MAX_LOG_LINES = 1500
