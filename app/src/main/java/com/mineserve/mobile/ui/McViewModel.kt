@@ -98,6 +98,7 @@ import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
+import com.mineserve.mobile.ui.vm.ServerResourcesDelegate
 import com.mineserve.mobile.ui.vm.SnapshotsDelegate
 import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
 import com.mineserve.mobile.ui.vm.TextEditorDelegate
@@ -631,24 +632,6 @@ class McViewModel(
 
     // ── 服务端资源状态 ───────────────────────────────────────────────
 
-    private val _serverResources = MutableStateFlow(ServerResourceStats())
-    val serverResources: StateFlow<ServerResourceStats> = _serverResources.asStateFlow()
-    private val _statusRefreshInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
-
-    /**
-     * 手动刷新是否正在进行（供 UI 显示进度/禁用按钮）。
-     *
-     * 加上这个状态是因为：采集本身很快，而各采样项都有 30s/60s 缓存，
-     * 点一次刷新往往「值没变」——用户无法区分「没反应」和「刷了但没变化」。
-     * 有了明确的进行中状态 + 完成回调，点击就是有反馈的。
-     */
-    private val _isRefreshingStatus = MutableStateFlow(false)
-    val isRefreshingStatus: StateFlow<Boolean> = _isRefreshingStatus.asStateFlow()
-
-    /** 最近一次手动刷新的完成时间（供 UI 显示「刚刚更新」）。 */
-    private val _lastStatusRefreshAtMs = MutableStateFlow(0L)
-    val lastStatusRefreshAtMs: StateFlow<Long> = _lastStatusRefreshAtMs.asStateFlow()
-
     // 采样缓存的读写可能发生在不同线程（周期采集 / 手动刷新各是一条协程），
     // 标 @Volatile 保证可见性，避免一边写入、另一边长期读到旧值导致数值来回跳。
     @Volatile private var cachedResourceDir: String? = null
@@ -680,75 +663,24 @@ class McViewModel(
         cachedJavaAvailableAtMs = 0L
     }
 
-    /** Samples values that belong to the selected server. */
-    private fun startServerResourceCollection() {
-        viewModelScope.launch {
-            // 首屏尽快出值：原来开局先 delay(15s)，加上「首次采样只建基线」的语义，
-            // 用户进界面后可能半分钟都看不到 CPU/内存。这里先立即采一次轻量数据
-            // （不扫服务端目录），再做原来的 15s 周期循环。
-            withContext(Dispatchers.IO) { collectServerResourcesOnce(includeDirectorySize = false) }
-            // 整机 CPU 走 /proc/stat 两次采样求差值，首次调用只建基线、拿不到读数。
-            // 若等到 15s 后的下一轮才采第二次，进界面后会有十几秒显示 `--`；
-            // 这里隔 1.2s 补采一次（采样窗口 ≥1s 才有意义），让主路径尽快出真实值，
-            // 期间 UI 会由 cpufreq 回退路径先给一个粗略值兜底。
-            delay(1_200)
-            withContext(Dispatchers.IO) { collectServerResourcesOnce(includeDirectorySize = false) }
-            // Defer the first recursive server-directory scan until the first screen settles.
-            delay(15_000)
-            while (true) {
-                // 界面不在前台时降频，并且**跳过最昂贵的服务端目录遍历**
-                // （walkTopDown 递归求和世界文件，动辄几万个小文件）：锁屏/切后台后
-                // 还在每 15 秒扫一遍既耗电，又会和正在写区块的 MC 抢 IO。
-                // 其余采样（/proc 内存与 CPU、StatFs）很廉价且悬浮窗/通知/组件要用，
-                // 所以后台仍然保留，只是放慢到 1 分钟。
-                val visible = uiVisible
-                withContext(Dispatchers.IO) { collectServerResourcesOnce(includeDirectorySize = visible) }
-                delay(if (visible) 15_000 else 60_000)
-            }
-        }
+    private val serverResourcesDelegate by lazy {
+        ServerResourcesDelegate(
+            scope = viewModelScope,
+            uiVisible = { uiVisible },
+            termuxRuntime = repo.termuxRuntime,
+            collectResourcesOnce = ::collectServerResourcesOnce,
+            invalidateResourceCaches = ::invalidateResourceCaches,
+            isActiveCorePaper = ::isActiveCorePaper
+        )
     }
 
-    /**
-     * 手动刷新：立即重新采集服务器状态并请求前台服务查询最新数据。
-     *
-     * ## 为什么原先「点了没反应」
-     * 采集函数里各采样项都有缓存（内存 30s、目录大小 60s、Java 可用性 60s），
-     * 且有一段「值未变化就不发布新快照」的优化。用户点刷新时通常都在缓存窗口内，
-     * 于是采出的值与上次完全相同 → 不发布 → UI 毫无变化，看起来就是「按钮坏了」。
-     *
-     * 现在手动刷新会：
-     *   1. **清空采样缓存**，强制重新读取 /proc 与目录
-     *   2. 置位 [isRefreshingStatus]，让按钮立刻有视觉反馈
-     *   3. 结束后记录 [lastStatusRefreshAtMs]，UI 可以显示「刚刚更新」
-     *   4. 无论值是否变化都强制发布一次快照，确保订阅方至少收到一次
-     */
-    fun refreshServerStatus() {
-        if (!_statusRefreshInFlight.compareAndSet(false, true)) return
-        _isRefreshingStatus.value = true
-        viewModelScope.launch(Dispatchers.IO) {
-            var sampled = false
-            try {
-                invalidateResourceCaches()
-                sampled = collectServerResourcesOnce(force = true)
-                if (sampled) {
-                    // 运行中的服务器异步回复 list/tps，由现有解析器更新在线人数与 TPS。
-                    val rt = repo.termuxRuntime
-                    if (rt.isMcRunning()) {
-                        rt.sendCommand("list")
-                        if (isActiveCorePaper()) {
-                            rt.sendCommand("tps")
-                        }
-                    }
-                }
-            } finally {
-                _statusRefreshInFlight.set(false)
-                _isRefreshingStatus.value = false
-                // 本轮没采到（并发锁被占 / 探针失败）就不记录「刚刚更新」——
-                // 否则 UI 显示刚刷新过、拿到的却还是上一次的旧快照。
-                if (sampled) _lastStatusRefreshAtMs.value = System.currentTimeMillis()
-            }
-        }
-    }
+    val serverResources: StateFlow<ServerResourceStats> get() = serverResourcesDelegate.serverResources
+    val isRefreshingStatus: StateFlow<Boolean> get() = serverResourcesDelegate.isRefreshingStatus
+    val lastStatusRefreshAtMs: StateFlow<Long> get() = serverResourcesDelegate.lastStatusRefreshAtMs
+
+    private fun startServerResourceCollection() = serverResourcesDelegate.startServerResourceCollection()
+
+    fun refreshServerStatus() = serverResourcesDelegate.refreshServerStatus()
 
     /**
      * 采集一次服务器资源快照。
@@ -814,19 +746,7 @@ class McViewModel(
                 javaAvailable = javaAvailable,
                 sampledAtMs = now
             )
-            // 值无变化时不发布新快照：避免每 15 秒无谓的重组（后台游戏挤压 CPU 时尤其明显）。
-            // 但 [force]（手动刷新）时必须无条件发布，否则用户会觉得「点了没反应」。
-            val prev = _serverResources.value
-            if (force ||
-                prev.processMemoryMb != newStats.processMemoryMb ||
-                prev.cpuPercent != newStats.cpuPercent ||
-                prev.deviceCpuPercent != newStats.deviceCpuPercent ||
-                prev.availableBytes != newStats.availableBytes ||
-                prev.directoryBytes != newStats.directoryBytes ||
-                prev.javaAvailable != newStats.javaAvailable
-            ) {
-                _serverResources.value = newStats
-            }
+            serverResourcesDelegate.publishResources(newStats, force)
             repo.updateServerState { state ->
                 if (!force &&
                     state.usedMemoryMb == (effectiveMemory ?: 0L) &&
