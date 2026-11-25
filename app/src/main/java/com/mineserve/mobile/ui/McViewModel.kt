@@ -74,6 +74,7 @@ import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
+import com.mineserve.mobile.ui.vm.DiagnosticsDelegate
 import com.mineserve.mobile.ui.vm.CrashDetailsDelegate
 import com.mineserve.mobile.ui.vm.CrashReportFilesDelegate
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
@@ -835,62 +836,28 @@ class McViewModel(
         }
     }
 
-    private val _diagnosticReport = MutableStateFlow(DiagnosticReport())
-    val diagnosticReport: StateFlow<DiagnosticReport> = _diagnosticReport.asStateFlow()
-    private val _isDiagnosing = MutableStateFlow(false)
-    val isDiagnosing: StateFlow<Boolean> = _isDiagnosing.asStateFlow()
-    private val _isRepairingRuntime = MutableStateFlow(false)
-    val isRepairingRuntime: StateFlow<Boolean> = _isRepairingRuntime.asStateFlow()
-
-    fun runDiagnostics() {
-        if (_isDiagnosing.value || _isRepairingRuntime.value) return
-        _isDiagnosing.value = true
-        viewModelScope.launch {
-            try {
-                _diagnosticReport.value = withContext(Dispatchers.IO) { buildDiagnosticReport() }
-            } catch (e: Exception) {
-                _diagnosticReport.value = DiagnosticReport(
-                    checks = listOf(DiagnosticCheck(
-                        "scan", str(R.string.diag_check_scan), e.message ?: str(R.string.diag_check_scan_fail), DiagnosticStatus.Failed
-                    )),
-                    generatedAtMs = System.currentTimeMillis()
-                )
-            } finally {
-                _isDiagnosing.value = false
-            }
-        }
+    private val diagnosticsDelegate by lazy {
+        DiagnosticsDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            termuxRuntime = repo.termuxRuntime,
+            buildReport = ::buildDiagnosticReport,
+            refreshJava = ::refreshJava,
+            refreshDependencies = ::refreshDependencies,
+            refreshPhp = ::refreshPhp,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
-    fun safeRepairRuntime() {
-        if (_isRepairingRuntime.value || _isDiagnosing.value) return
-        _isRepairingRuntime.value = true
-        _diagnosticReport.value = _diagnosticReport.value.copy(isRunning = true)
-        viewModelScope.launch {
-            try {
-                withContext(Dispatchers.IO) {
-                    val cfg = config.value
-                    val core = cfg.installedCores.find { it.name == cfg.activeCoreName }
-                    repo.termuxRuntime.fixRootfsPermissions()
-                    repo.termuxRuntime.repairInstalledCommands()
-                    if (repo.termuxRuntime.isReady()) {
-                        repo.termuxRuntime.autoRepairRuntime(
-                            cfg.selectedJavaVersion,
-                            core?.let { repo.termuxRuntime.needsFontRuntime(it.core) } == true
-                        )
-                    }
-                }
-                refreshJava()
-                refreshDependencies()
-                refreshPhp()
-                _messageFlow.tryEmit(str(R.string.msg_repair_done))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(e.message ?: str(R.string.msg_repair_fail))
-            } finally {
-                _isRepairingRuntime.value = false
-                runDiagnostics()
-            }
-        }
-    }
+    val diagnosticReport: StateFlow<DiagnosticReport> get() = diagnosticsDelegate.diagnosticReport
+    val isDiagnosing: StateFlow<Boolean> get() = diagnosticsDelegate.isDiagnosing
+    val isRepairingRuntime: StateFlow<Boolean> get() = diagnosticsDelegate.isRepairingRuntime
+
+    fun runDiagnostics() = diagnosticsDelegate.runDiagnostics()
+
+    fun safeRepairRuntime() = diagnosticsDelegate.safeRepairRuntime()
 
     private fun buildDiagnosticReport(): DiagnosticReport {
         val cfg = config.value
