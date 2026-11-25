@@ -632,44 +632,13 @@ class McViewModel(
 
     // ── 服务端资源状态 ───────────────────────────────────────────────
 
-    // 采样缓存的读写可能发生在不同线程（周期采集 / 手动刷新各是一条协程），
-    // 标 @Volatile 保证可见性，避免一边写入、另一边长期读到旧值导致数值来回跳。
-    @Volatile private var cachedResourceDir: String? = null
-    @Volatile private var cachedDirectoryBytes: Long? = null
-    @Volatile private var cachedDirectoryBytesAtMs = 0L
-    @Volatile private var cachedMemoryAtMs = 0L
-    @Volatile private var cachedMemoryMb = 0L
-    @Volatile private var cachedJavaAvailable: Boolean? = null
-    @Volatile private var cachedJavaAvailableAtMs = 0L
-
-    /**
-     * 采集串行化锁。
-     *
-     * 周期采集（每 15s）与手动刷新（[refreshServerStatus]）可能并发调用
-     * [collectServerResourcesOnce]，而采集内部有 `walkTopDown` 全目录求和，
-     * 并发执行会把同一目录扫两遍、两个协程互相覆盖上面的采样缓存。
-     * 用 tryLock 语义：已在采集就直接跳过本轮，不做重复工作。
-     *
-     * @return 是否真的采集了。跳过时必须让调用方知道——以前返回 Unit，
-     *         [refreshServerStatus] 抢不到锁照样置 `_lastStatusRefreshAtMs`，
-     *         UI 显示「刚刚更新」但拿到的还是上一次的旧数据。
-     */
-    private val resourceCollectionMutex = Mutex()
-
-    /** 使所有采样缓存失效，让下一次采集拿到真实的最新值。 */
-    private fun invalidateResourceCaches() {
-        cachedDirectoryBytesAtMs = 0L
-        cachedMemoryAtMs = 0L
-        cachedJavaAvailableAtMs = 0L
-    }
-
     private val serverResourcesDelegate by lazy {
         ServerResourcesDelegate(
             scope = viewModelScope,
             uiVisible = { uiVisible },
             termuxRuntime = repo.termuxRuntime,
-            collectResourcesOnce = ::collectServerResourcesOnce,
-            invalidateResourceCaches = ::invalidateResourceCaches,
+            config = config,
+            updateServerState = repo::updateServerState,
             isActiveCorePaper = ::isActiveCorePaper
         )
     }
@@ -681,90 +650,6 @@ class McViewModel(
     private fun startServerResourceCollection() = serverResourcesDelegate.startServerResourceCollection()
 
     fun refreshServerStatus() = serverResourcesDelegate.refreshServerStatus()
-
-    /**
-     * 采集一次服务器资源快照。
-     *
-     * @param force 为 true 时忽略「值未变化就不发布」的优化，强制发布一次。
-     *        手动刷新走这条路：即使用户在缓存窗口内点击，UI 也必定收到新快照，
-     *        并且能通过 [ServerResourceStats.sampledAtMs] 观察到刷新确实生效了。
-     */
-    /**
-     * @param includeDirectorySize 是否允许执行服务端目录的递归求和（最昂贵的一步）。
-     *        界面不在前台时传 false：缓存命中（同一目录）就沿用旧值，
-     *        缓存不可用则返回 null（未知）而不是去扫一遍。
-     */
-    private fun collectServerResourcesOnce(force: Boolean = false, includeDirectorySize: Boolean = true): Boolean {
-        // 已在采集则跳过本轮：并发采集会重复全目录扫描并互相覆盖采样缓存。
-        if (!resourceCollectionMutex.tryLock()) return false
-        try {
-            val cfg = config.value
-            val active = cfg.installedCores.find { it.name == cfg.activeCoreName }
-            val dir = active?.let { repo.termuxRuntime.serverDirFor(it.dirName) }
-            val available = dir?.takeIf { it.exists() }?.let { android.os.StatFs(it.path).availableBytes }
-            val now = System.currentTimeMillis()
-            val running = repo.termuxRuntime.isMcRunning()
-            val directoryBytes = dir?.takeIf { running && it.exists() }?.let { serverDir ->
-                val sameDir = cachedResourceDir == serverDir.path
-                val stale = now - cachedDirectoryBytesAtMs >= 60_000L
-                when {
-                    // 允许扫描且（换了目录 或 缓存过期）：真正遍历一次
-                    includeDirectorySize && (!sameDir || stale) -> {
-                        cachedResourceDir = serverDir.path
-                        cachedDirectoryBytes = serverDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
-                        cachedDirectoryBytesAtMs = now
-                        cachedDirectoryBytes
-                    }
-                    // 同目录的缓存可直接沿用（后台路径主要走这里）
-                    sameDir -> cachedDirectoryBytes
-                    // 后台且无可用缓存：宁可显示未知，也不去扫盘
-                    else -> null
-                }
-            }
-            // 进程内存采样遍历 /proc，降频到 30s（运行中才需要），窗口内沿用旧值。
-            if (running && now - cachedMemoryAtMs >= 30_000L) {
-                cachedMemoryAtMs = now
-                cachedMemoryMb = repo.termuxRuntime.mcProcessMemoryMb()
-            }
-            val effectiveMemory = cachedMemoryMb.takeIf { running && it > 0L }
-            // 服务端进程自身 CPU（支持多线程超过 100%），不可用或未运行时为 null。
-            val cpu = if (running) repo.termuxRuntime.mcProcessCpuPercent() else null
-            // 整机 CPU 总使用率：与 running 解耦，服务端未运行时也要有读数；
-            // 首次调用只建立基线返回 null，下一次周期采样即拿到真实值。
-            val deviceCpu = repo.termuxRuntime.deviceCpuPercent()
-            if (running && now - cachedJavaAvailableAtMs >= 60_000L) {
-                cachedJavaAvailable = repo.termuxRuntime.isJavaInstalled(cfg.selectedJavaVersion, cfg.selectedJavaVendor)
-                cachedJavaAvailableAtMs = now
-            }
-            val javaAvailable = cachedJavaAvailable ?: true
-            val newStats = ServerResourceStats(
-                processMemoryMb = effectiveMemory,
-                cpuPercent = cpu,
-                deviceCpuPercent = deviceCpu,
-                availableBytes = available,
-                directoryBytes = directoryBytes,
-                javaAvailable = javaAvailable,
-                sampledAtMs = now
-            )
-            serverResourcesDelegate.publishResources(newStats, force)
-            repo.updateServerState { state ->
-                if (!force &&
-                    state.usedMemoryMb == (effectiveMemory ?: 0L) &&
-                    state.cpuPercent == cpu
-                ) {
-                    state
-                } else {
-                    state.copy(usedMemoryMb = effectiveMemory ?: 0L, cpuPercent = cpu)
-                }
-            }
-            return true
-        } catch (e: Exception) {
-            // Keep the last known snapshot when Android or PRoot denies a probe.
-            return false
-        } finally {
-            resourceCollectionMutex.unlock()
-        }
-    }
 
     private val diagnosticsDelegate by lazy {
         DiagnosticsDelegate(
