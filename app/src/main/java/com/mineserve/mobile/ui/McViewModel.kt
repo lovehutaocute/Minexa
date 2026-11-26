@@ -74,6 +74,8 @@ import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
+import com.mineserve.mobile.ui.vm.formatSize
+import com.mineserve.mobile.ui.vm.formatSpeed
 import com.mineserve.mobile.ui.vm.DiagnosticsDelegate
 import com.mineserve.mobile.ui.vm.CrashDetailsDelegate
 import com.mineserve.mobile.ui.vm.CrashReportFilesDelegate
@@ -2837,25 +2839,6 @@ class McViewModel(
         /** 总大小文本，如 "58.0 MB"，未知时为 "?" */
         val totalText: String
             get() = if (totalBytes > 0) formatSize(totalBytes) else "?"
-
-        private fun formatSpeed(bytesPerSec: Long): String {
-            val mb = bytesPerSec / 1024.0 / 1024.0
-            val kb = bytesPerSec / 1024.0
-            return when {
-                mb >= 1.0 -> String.format("%.2f MB/s", mb)
-                kb >= 1.0 -> String.format("%.0f KB/s", kb)
-                else -> "$bytesPerSec B/s"
-            }
-        }
-        private fun formatSize(bytes: Long): String {
-            val mb = bytes / 1024.0 / 1024.0
-            val kb = bytes / 1024.0
-            return when {
-                mb >= 1.0 -> String.format("%.1f MB", mb)
-                kb >= 1.0 -> String.format("%.0f KB", kb)
-                else -> "$bytes B"
-            }
-        }
     }
 
     val downloadProgress: StateFlow<DownloadProgress> get() = coreDownloadDelegate.downloadProgress
