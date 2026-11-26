@@ -96,6 +96,7 @@ import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
 import com.mineserve.mobile.ui.vm.ProotContainerDelegate
 import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
 import com.mineserve.mobile.ui.vm.PlayerListsDelegate
+import com.mineserve.mobile.ui.vm.PlayerPresenceDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
@@ -797,7 +798,7 @@ class McViewModel(
                 // 全量校正在线玩家名单（list 命令响应）。
                 // BDS 的名单在后续行、本行为空，此时传入人数让解析器自己判断该不该清空。
                 playerManager.parseOnlinePlayers(line, p.online)?.let { names ->
-                    _onlinePlayerNames.value = names
+                    playerPresenceDelegate.replaceOnlinePlayerNames(names)
                 }
                 // BDS 用 `There are N/M players online:` 开头，名字在后续几行里。
                 // 记下期望条数，后面的行交给下面的收集逻辑。
@@ -829,7 +830,7 @@ class McViewModel(
                     }
                     if (done != null) {
                         bdsListExpected = 0
-                        _onlinePlayerNames.value = done
+                        playerPresenceDelegate.replaceOnlinePlayerNames(done)
                         repo.updateServerState { it.copy(onlinePlayers = done.size) }
                     }
                 }
@@ -2245,7 +2246,7 @@ class McViewModel(
             activeDirName = ::activeDirName,
             isBdsActive = { activeBdsCore() != null },
             isPowerNukkitXActive = ::isPowerNukkitXActive,
-            onlinePlayerNames = { _onlinePlayerNames.value },
+            onlinePlayerNames = { playerPresenceDelegate.onlinePlayerNames.value },
             serverProperties = { serverProperties.value },
             setWhitelistProperty = { key, enabled -> serverPropertiesDelegate.setWhitelistProperty(key, enabled) },
             reportMessage = { _messageFlow.tryEmit(it) },
@@ -2265,9 +2266,19 @@ class McViewModel(
     /** 当前 server.properties 配置的默认 OP 等级（null 表示未配置，使用 MC 默认 4） */
     val defaultOpLevel: StateFlow<Int?> get() = playerListsDelegate.defaultOpLevel
 
-    /** 在线玩家名列表（从日志解析） */
-    private val _onlinePlayerNames: MutableStateFlow<List<String>> by lazy { MutableStateFlow(emptyList()) }
-    val onlinePlayerNames: StateFlow<List<String>> by lazy { _onlinePlayerNames.asStateFlow() }
+    /** 在线玩家名单与进出服计数 */
+    private val playerPresenceDelegate by lazy {
+        PlayerPresenceDelegate(
+            updateOnlinePlayerCount = { joined ->
+                repo.updateServerState {
+                    it.copy(onlinePlayers = (it.onlinePlayers + if (joined) 1 else -1).coerceAtLeast(0))
+                }
+            },
+            isServerRunning = repo.termuxRuntime::isMcRunning,
+            requestOnlineList = { playerManager.requestOnlineList() }
+        )
+    }
+    val onlinePlayerNames: StateFlow<List<String>> get() = playerPresenceDelegate.onlinePlayerNames
 
     /** 玩家进服/离服历史记录（最新在前，上限 500 条），持久化到 app 私有目录 */
     @Serializable
@@ -2328,16 +2339,8 @@ class McViewModel(
      *
      * @return 名单是否真的变化（重复进服行、玩家本不在名单、同名跨平台无法判断删谁 → false）
      */
-    private fun setPlayerOnline(name: String, joined: Boolean): Boolean {
-        val cur = _onlinePlayerNames.value
-        val next = if (joined) PlayerNames.mergeInto(cur, name) else PlayerNames.removeFrom(cur, name)
-        if (next === cur) return false
-        _onlinePlayerNames.value = next
-        repo.updateServerState {
-            it.copy(onlinePlayers = (it.onlinePlayers + if (joined) 1 else -1).coerceAtLeast(0))
-        }
-        return true
-    }
+    private fun setPlayerOnline(name: String, joined: Boolean): Boolean =
+        playerPresenceDelegate.setPlayerOnline(name, joined)
 
     data class TextEditorFile(val path: String, val name: String, val content: String)
     private val textEditorDelegate by lazy {
@@ -2358,10 +2361,7 @@ class McViewModel(
     fun canEditTextFile(file: java.io.File) = textEditorDelegate.canEditTextFile(file)
 
     /** 请求在线玩家列表（发送 list 命令，结果通过日志解析全量校正名单） */
-    fun refreshOnlinePlayers() {
-        if (!repo.termuxRuntime.isMcRunning()) return
-        playerManager.requestOnlineList()
-    }
+    fun refreshOnlinePlayers() = playerPresenceDelegate.refreshOnlinePlayers()
 
     /** 刷新玩家数据（OP/白名单/封禁列表） */
     fun refreshPlayers() = playerListsDelegate.refreshPlayers()
@@ -3027,7 +3027,7 @@ class McViewModel(
                 if (wasRunning && !state.isRunning) {
                     // 服务端已停：在线名单与计数一起归零。只清一个会留下「列表 0 行、计数 3」，
                     // 而两者下一次对齐要等到重启就绪后那次 list —— 期间界面上就是个假数字。
-                    _onlinePlayerNames.value = emptyList()
+                    playerPresenceDelegate.clearOnlinePlayerNames()
                     repo.updateServerState { if (it.isRunning) it else it.copy(onlinePlayers = 0) }
                     interruptPlayerSessions()
                     _lastRunLog.value = withContext(Dispatchers.IO) {
