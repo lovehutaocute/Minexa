@@ -62,6 +62,7 @@ import com.mineserve.mobile.server.TunnelManager
 import com.mineserve.mobile.server.WorldManager
 import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.vm.AppUpdateDelegate
+import com.mineserve.mobile.ui.vm.AptMirrorDelegate
 import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
 import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
@@ -1330,15 +1331,16 @@ class McViewModel(
     fun setKeepCpuWakelock(v: Boolean) = updateConfig { it.copy(keepCpuWakelock = v) }
     fun setKeepScreenOnWhileRunning(v: Boolean) = updateConfig { it.copy(keepScreenOnWhileRunning = v) }
     fun setKeepStatusOverlay(v: Boolean) = updateConfig { it.copy(keepStatusOverlay = v) }
+    private val aptMirrorDelegate by lazy {
+        AptMirrorDelegate(
+            scope = viewModelScope,
+            updateAndSaveConfig = repo::updateAndSaveConfig,
+            applyMirror = repo.termuxRuntime::setAptMirror
+        )
+    }
+
     fun setAptMirror(mirror: com.mineserve.mobile.data.AptMirror) =
-        viewModelScope.launch {
-            val effective = if (mirror == com.mineserve.mobile.data.AptMirror.Official) {
-                com.mineserve.mobile.data.AptMirror.Tuna
-            } else mirror
-            // 原子读改写 + 落盘，不用 config.value 陈旧快照整份写回（会覆盖并发的其他修改）
-            repo.updateAndSaveConfig { it.copy(aptMirror = effective) }
-            withContext(Dispatchers.IO) { repo.termuxRuntime.setAptMirror(effective) }
-        }
+        aptMirrorDelegate.setAptMirror(mirror)
     private val downloadMirrorDelegate by lazy {
         DownloadMirrorDelegate(
             app = app,
