@@ -17,8 +17,6 @@ import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.JavaRuntime
 import com.mineserve.mobile.data.JavaVendor
 import com.mineserve.mobile.data.ServerCore
-import com.mineserve.mobile.data.MinecraftVersionNormalizer
-import com.mineserve.mobile.data.ServerPort
 import com.mineserve.mobile.data.BdsEnvStatus
 import com.mineserve.mobile.data.BdsChannel
 import com.mineserve.mobile.data.BdsCoreStatus
@@ -72,6 +70,7 @@ import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
+import com.mineserve.mobile.ui.vm.CoreSelection
 import com.mineserve.mobile.ui.vm.formatSize
 import com.mineserve.mobile.ui.vm.formatSpeed
 import com.mineserve.mobile.ui.vm.DiagnosticsDelegate
@@ -1261,16 +1260,7 @@ class McViewModel(
         val previous = config.value.selectedCore
         val coreChanged = previous != core
         updateConfig {
-            // 基岩版核心（PNX/PocketMine/Allay/BDS）走 UDP，默认端口 19132；Java 系 25565。
-            // 迁移规则见 [ServerPort.migrateOnCoreSwitch]：只在 Java 系 ↔ 基岩系之间
-            // 对调**默认值**，用户自定义端口（如 25562）原样保留。
-            // 同一个核心重复点击不动端口 —— 用户没换核心，端口不该被「迁移」一次。
-            val port = if (coreChanged) {
-                ServerPort.migrateOnCoreSwitch(it.localPort, it.selectedCore, core)
-            } else {
-                it.localPort
-            }
-            it.copy(selectedCore = core, mcVersion = "", localPort = port)
+            CoreSelection.select(it, core, coreChanged)
         }
         // 版本号已被清空，必须让用户重新选：给一句明确提示，而不是让他对着
         // 「请选择版本」猜是不是加载失败。
@@ -1281,17 +1271,15 @@ class McViewModel(
         }
     }
 
-    fun setMcVersion(version: String) {
-        val trimmed = version.trim()
-        val core = config.value.selectedCore
-        val normalized = MinecraftVersionNormalizer.forCore(core, trimmed)
-        updateConfig { it.copy(mcVersion = normalized) }
-        // 版本纠正提示移到 updateConfig 之后：底层 _config.updateAndGet 是 CAS 循环，
-        // transform 失败会被重放，副作用写在里面会在并发写配置时重复弹窗，也破坏重放语义。
-        if (normalized != trimmed) {
-            _messageFlow.tryEmit(str(R.string.msg_version_corrected, core.displayName, trimmed, normalized))
+    fun setMcVersion(version: String) =
+        CoreSelection.setVersion(version, config.value.selectedCore) { core, trimmed, normalized ->
+            updateConfig { it.copy(mcVersion = normalized) }
+            // 版本纠正提示移到 updateConfig 之后：底层 _config.updateAndGet 是 CAS 循环，
+            // transform 失败会被重放，副作用写在里面会在并发写配置时重复弹窗，也破坏重放语义。
+            if (normalized != trimmed) {
+                _messageFlow.tryEmit(str(R.string.msg_version_corrected, core.displayName, trimmed, normalized))
+            }
         }
-    }
 
     fun setLocalPort(port: Int) = updateConfig { it.copy(localPort = port) }
     fun setDomain(d: String) = updateConfig { it.copy(customDomain = d) }
