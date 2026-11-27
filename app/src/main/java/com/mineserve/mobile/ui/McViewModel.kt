@@ -1135,21 +1135,8 @@ class McViewModel(
      * 立即写入 config（UI 会自动重组刷新运行环境按钮与版本列表，无需刷新页面），
      * 并确保当前所选版本属于该模式 —— 不属于时回退到该模式的默认版本。
      */
-    fun setRuntimeKind(kind: RuntimeKind) {
-        updateConfig { cfg ->
-            when (kind) {
-                RuntimeKind.Java -> {
-                    // Java 模式下 selectedJavaVersion 本身就是 JavaVersion，天然合法，
-                    // 只需保证 runtimeKind 落位。
-                    cfg.copy(runtimeKind = RuntimeKind.Java)
-                }
-                RuntimeKind.Php -> {
-                    val valid = cfg.selectedPhpVersion.takeIf { it in PhpVersion.entries } ?: PhpVersion.Default
-                    cfg.copy(runtimeKind = RuntimeKind.Php, selectedPhpVersion = valid)
-                }
-            }
-        }
-    }
+    fun setRuntimeKind(kind: RuntimeKind) =
+        updateConfig { cfg -> RuntimeKinds.withRuntimeKind(cfg, kind) }
 
     /**
      * 切换运行环境（来源 + 版本），见 [JavaRuntime]。

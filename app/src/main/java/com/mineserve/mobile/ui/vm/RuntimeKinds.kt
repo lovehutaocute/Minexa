@@ -29,6 +29,20 @@ internal object RuntimeKinds {
         return str(R.string.err_runtime_kind_mismatch, listOf(core.name, requiredLabel))
     }
 
+    fun withRuntimeKind(config: McConfig, kind: RuntimeKind): McConfig {
+        return when (kind) {
+            RuntimeKind.Java -> {
+                // Java 模式下 selectedJavaVersion 本身就是 JavaVersion，天然合法，
+                // 只需保证 runtimeKind 落位。
+                config.copy(runtimeKind = RuntimeKind.Java)
+            }
+            RuntimeKind.Php -> {
+                val valid = config.selectedPhpVersion.takeIf { it in PhpVersion.entries } ?: PhpVersion.Default
+                config.copy(runtimeKind = RuntimeKind.Php, selectedPhpVersion = valid)
+            }
+        }
+    }
+
     fun withJavaRuntime(config: McConfig, runtime: JavaRuntime): McConfig {
         // Proot 来源的版本必须落在**当前发行版**提供的范围内。界面上点不到
         // 置灰项（见 JavaRuntimeGroupList），这里是第二道保险：
