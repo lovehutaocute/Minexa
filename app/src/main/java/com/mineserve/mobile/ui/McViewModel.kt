@@ -68,6 +68,7 @@ import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
+import com.mineserve.mobile.ui.vm.BackupSettingsDelegate
 import com.mineserve.mobile.ui.vm.BootstrapDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
@@ -2670,12 +2671,14 @@ class McViewModel(
 
     // ── 定时备份配置 ────────────────────────────────────────────────
 
-    fun setAutoBackupInterval(min: Int) = updateConfig {
-        it.copy(autoBackupIntervalMin = if (min <= 0) 0 else min.coerceIn(5, 10080))
+    private val backupSettingsDelegate by lazy {
+        BackupSettingsDelegate(updateConfig = ::updateConfig)
     }
+
+    fun setAutoBackupInterval(min: Int) = backupSettingsDelegate.setAutoBackupInterval(min)
     fun setAutoBackupType(type: com.mineserve.mobile.data.AutoBackupType) =
-        updateConfig { it.copy(autoBackupType = type) }
-    fun setMaxSnapshots(max: Int) = updateConfig { it.copy(maxSnapshots = max.coerceIn(1, 100)) }
+        backupSettingsDelegate.setAutoBackupType(type)
+    fun setMaxSnapshots(max: Int) = backupSettingsDelegate.setMaxSnapshots(max)
 
     // ── 服务端核心下载相关 ──────────────────────────────────────────
 
