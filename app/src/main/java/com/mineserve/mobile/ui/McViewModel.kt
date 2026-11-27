@@ -71,6 +71,7 @@ import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
 import com.mineserve.mobile.ui.vm.CoreSelection
+import com.mineserve.mobile.ui.vm.DownloadMirrorDelegate
 import com.mineserve.mobile.ui.vm.formatSize
 import com.mineserve.mobile.ui.vm.formatSpeed
 import com.mineserve.mobile.ui.vm.DiagnosticsDelegate
@@ -1341,53 +1342,23 @@ class McViewModel(
             repo.updateAndSaveConfig { it.copy(aptMirror = effective) }
             withContext(Dispatchers.IO) { repo.termuxRuntime.setAptMirror(effective) }
         }
-    fun setDownloadMirror(mirror: com.mineserve.mobile.data.DownloadMirror) {
-        updateConfig { it.copy(downloadMirror = mirror) }
-        // 立即应用到 bootstrap 下载器（下次下载生效；App 重启后由 McApplication 从配置恢复）
-        repo.termuxRuntime.setDownloadMirror(mirror)
+    private val downloadMirrorDelegate by lazy {
+        DownloadMirrorDelegate(
+            app = app,
+            scope = viewModelScope,
+            installer = repo.termuxRuntime.installer,
+            updateConfig = ::updateConfig,
+            applyMirror = repo.termuxRuntime::setDownloadMirror
+        )
     }
 
-    /** 「依次尝试下载源」的运行状态与结果文本，供设置页展示。 */
-    private val _mirrorTestRunning = MutableStateFlow(false)
-    val mirrorTestRunning: StateFlow<Boolean> = _mirrorTestRunning.asStateFlow()
+    val mirrorTestRunning: StateFlow<Boolean> get() = downloadMirrorDelegate.mirrorTestRunning
+    val mirrorTestResult: StateFlow<String?> get() = downloadMirrorDelegate.mirrorTestResult
 
-    private val _mirrorTestResult = MutableStateFlow<String?>(null)
-    val mirrorTestResult: StateFlow<String?> = _mirrorTestResult.asStateFlow()
+    fun setDownloadMirror(mirror: com.mineserve.mobile.data.DownloadMirror) =
+        downloadMirrorDelegate.setDownloadMirror(mirror)
 
-    private fun appendMirrorTest(line: String) {
-        val cur = _mirrorTestResult.value
-        _mirrorTestResult.value = if (cur.isNullOrEmpty()) line else "$cur\n$line"
-    }
-
-    /**
-     * 「依次尝试下载源」：按顺序逐个探测各下载源，直到找到**第一个可用**的为止。
-     *
-     * 测试通过后自动把该源设为当前下载源（下次 bootstrap 下载生效）。过程中每测一个源
-     * 就把结果追加到 [mirrorTestResult]；全部失败时提示检查网络。
-     */
-    fun testDownloadSources() {
-        if (_mirrorTestRunning.value) return
-        _mirrorTestRunning.value = true
-        _mirrorTestResult.value = null
-        viewModelScope.launch {
-            try {
-                val installer = repo.termuxRuntime.installer
-                val idx = installer.probeMirrors { line -> appendMirrorTest(line) }
-                val mirror = if (idx >= 0) installer.mirrorAt(idx) else null
-                if (mirror != null) {
-                    updateConfig { it.copy(downloadMirror = mirror) }
-                    repo.termuxRuntime.setDownloadMirror(mirror)
-                    appendMirrorTest(str(R.string.vm_mirror_selected, mirror.displayName))
-                } else {
-                    appendMirrorTest(str(R.string.vm_mirror_all_failed))
-                }
-            } catch (e: Exception) {
-                appendMirrorTest(str(R.string.vm_mirror_test_failed, e.message ?: str(R.string.vm_unknown_error)))
-            } finally {
-                _mirrorTestRunning.value = false
-            }
-        }
-    }
+    fun testDownloadSources() = downloadMirrorDelegate.testDownloadSources()
 
     /** 多线程下载是否启用（内置下载模块开关，默认启用） */
     fun isMultiThreadDownloadEnabled(): Boolean = com.mineserve.mobile.data.DownloadPrefs.isEnabled()
