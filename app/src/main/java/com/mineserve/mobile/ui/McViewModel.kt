@@ -98,6 +98,7 @@ import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PlayerPresenceDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.RuntimeEnvironmentDelegate
+import com.mineserve.mobile.ui.vm.RuntimeKinds
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
@@ -1234,25 +1235,8 @@ class McViewModel(
      *
      * 只用于启动前提醒，**不修改**用户的任何选择 —— 用户选择优先。
      */
-    fun runtimeKindMismatchMessage(): String? {
-        val cfg = config.value
-        val core = cfg.installedCores.firstOrNull { it.name == cfg.activeCoreName } ?: return null
-        val required = when (core.core) {
-            ServerCore.PocketMine -> RuntimeKind.Php
-            // 官方 BDS 既不跑 JVM 也不跑 PHP：它是原生可执行文件，
-            // arm64 设备上靠 box64 转译（容器由启动流程自行准备）。
-            // 若仍按「Java 核心」要求 runtimeKind=Java，之前开过 PocketMine 的用户
-            // 会被一条与 BDS 无关的提示挡住启动。
-            ServerCore.Bds -> cfg.runtimeKind
-            else -> RuntimeKind.Java
-        }
-        if (cfg.runtimeKind == required) return null
-        val requiredLabel = when (required) {
-            RuntimeKind.Java -> str(R.string.dash_runtime_java)
-            RuntimeKind.Php -> str(R.string.dash_runtime_php)
-        }
-        return str(R.string.err_runtime_kind_mismatch, core.name, requiredLabel)
-    }
+    fun runtimeKindMismatchMessage(): String? =
+        RuntimeKinds.mismatchMessage(config.value) { id, args -> str(id, *args.toTypedArray()) }
 
     fun setJavaCardAtBottom(atBottom: Boolean) =
         updateConfig { it.copy(javaCardAtBottom = atBottom) }
