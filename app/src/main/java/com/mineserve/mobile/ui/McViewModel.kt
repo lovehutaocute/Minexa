@@ -72,6 +72,7 @@ import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
 import com.mineserve.mobile.ui.vm.CoreSelection
 import com.mineserve.mobile.ui.vm.DownloadMirrorDelegate
+import com.mineserve.mobile.ui.vm.EventNotifyDelegate
 import com.mineserve.mobile.ui.vm.formatSize
 import com.mineserve.mobile.ui.vm.formatSpeed
 import com.mineserve.mobile.ui.vm.DiagnosticsDelegate
@@ -375,9 +376,10 @@ class McViewModel(
         uiVisible = visible
     }
 
+    private val eventNotifyDelegate by lazy { EventNotifyDelegate(app) }
+
     /** 事件通知等级：0=关闭 1=仅重要 2=全部（含玩家上下线）。 */
-    private val _eventNotifyLevel = MutableStateFlow(ServerEventNotifier.level(app))
-    val eventNotifyLevel: StateFlow<Int> = _eventNotifyLevel.asStateFlow()
+    val eventNotifyLevel: StateFlow<Int> get() = eventNotifyDelegate.eventNotifyLevel
 
     /** Small, stable preview for cards that only show the latest few server messages. */
     val consolePreviewLines: StateFlow<ImmutableList<String>> get() = consoleLogDelegate.consolePreviewLines
@@ -2976,10 +2978,7 @@ class McViewModel(
     fun setBootAutoStart(v: Boolean) = keepAliveDelegate.setBootAutoStart(v)
 
     /** 设置服务器事件通知等级（0 关闭 / 1 仅重要 / 2 全部）。 */
-    fun setEventNotifyLevel(value: Int) {
-        ServerEventNotifier.setLevel(app, value.coerceIn(0, 2))
-        _eventNotifyLevel.value = value.coerceIn(0, 2)
-    }
+    fun setEventNotifyLevel(value: Int) = eventNotifyDelegate.setEventNotifyLevel(value)
 
     /** 后台周期保活开关状态（默认开启） */
     fun isKeepAliveEnabled(): Boolean = keepAliveDelegate.isKeepAliveEnabled()
