@@ -72,6 +72,7 @@ import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
 import com.mineserve.mobile.ui.vm.CoreSelection
 import com.mineserve.mobile.ui.vm.DownloadMirrorDelegate
+import com.mineserve.mobile.ui.vm.DownloadPrefsDelegate
 import com.mineserve.mobile.ui.vm.EventNotifyDelegate
 import com.mineserve.mobile.ui.vm.formatSize
 import com.mineserve.mobile.ui.vm.formatSpeed
@@ -1362,22 +1363,25 @@ class McViewModel(
 
     fun testDownloadSources() = downloadMirrorDelegate.testDownloadSources()
 
+    private val downloadPrefsDelegate by lazy {
+        DownloadPrefsDelegate(
+            app = app,
+            reportMessage = { _messageFlow.tryEmit(it) }
+        )
+    }
+
     /** 多线程下载是否启用（内置下载模块开关，默认启用） */
-    fun isMultiThreadDownloadEnabled(): Boolean = com.mineserve.mobile.data.DownloadPrefs.isEnabled()
+    fun isMultiThreadDownloadEnabled(): Boolean = downloadPrefsDelegate.isMultiThreadDownloadEnabled()
 
     /** 下载线程数 */
-    fun downloadThreadCount(): Int = com.mineserve.mobile.data.DownloadPrefs.threadCount()
+    fun downloadThreadCount(): Int = downloadPrefsDelegate.downloadThreadCount()
 
     /** 切换多线程下载开关 */
-    fun setMultiThreadDownloadEnabled(enabled: Boolean) {
-        com.mineserve.mobile.data.DownloadPrefs.setEnabled(enabled)
-        _messageFlow.tryEmit(if (enabled) str(R.string.msg_mt_enabled) else str(R.string.msg_mt_disabled))
-    }
+    fun setMultiThreadDownloadEnabled(enabled: Boolean) =
+        downloadPrefsDelegate.setMultiThreadDownloadEnabled(enabled)
 
     /** 设置下载线程数 */
-    fun setDownloadThreadCount(count: Int) {
-        com.mineserve.mobile.data.DownloadPrefs.setThreadCount(count)
-    }
+    fun setDownloadThreadCount(count: Int) = downloadPrefsDelegate.setDownloadThreadCount(count)
 
     fun installDependencies() = baseDependenciesDelegate.installDependencies()
 
