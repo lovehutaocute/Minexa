@@ -67,6 +67,7 @@ import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
+import com.mineserve.mobile.ui.vm.BootstrapDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
@@ -301,44 +302,37 @@ class McViewModel(
     /** 关闭更新结果卡片（成功/失败提示） */
     fun dismissBdsUpdateState() = bdsCoreUpdateDelegate.dismissBdsUpdateState()
 
+    private val bootstrapDelegate by lazy { BootstrapDelegate(app) }
+
     /** Termux 环境是否初始化完成 */
-    val isBootstrapped: StateFlow<Boolean> = app.isBootstrapped
+    val isBootstrapped: StateFlow<Boolean> get() = bootstrapDelegate.isBootstrapped
 
     /** Termux 环境初始化错误信息 */
-    val bootstrapError: StateFlow<String?> = app.bootstrapError
+    val bootstrapError: StateFlow<String?> get() = bootstrapDelegate.bootstrapError
 
     /** bootstrap 下载速度（bytes/s） */
-    val bootstrapSpeed: StateFlow<Long> = app.bootstrapSpeed
+    val bootstrapSpeed: StateFlow<Long> get() = bootstrapDelegate.bootstrapSpeed
 
     /** bootstrap 当前镜像源索引 */
-    val currentMirrorIndex: StateFlow<Int> = app.currentMirrorIndex
+    val currentMirrorIndex: StateFlow<Int> get() = bootstrapDelegate.currentMirrorIndex
 
     /** 镜像源名称列表 */
-    val mirrorSources: List<String> get() = app.mirrorSources
+    val mirrorSources: List<String> get() = bootstrapDelegate.mirrorSources
 
     /** 请求切换到下一个镜像源 */
-    fun switchBootstrapMirror() {
-        android.util.Log.i("McViewModel", "[切换] switchBootstrapMirror 调用, 线程=${Thread.currentThread().name}")
-        app.switchBootstrapMirror()
-    }
+    fun switchBootstrapMirror() = bootstrapDelegate.switchBootstrapMirror()
 
     /** apt 安装下载速度（bytes/s） */
     val installSpeed: StateFlow<Long> get() = baseDependenciesDelegate.installSpeed
 
     /** 重试 Termux 环境初始化 */
-    fun retryBootstrap() {
-        app.startBootstrap()
-    }
+    fun retryBootstrap() = bootstrapDelegate.retryBootstrap()
 
     /** 删除 Termux 运行环境（会自动重新初始化） */
-    fun deleteBootstrap() {
-        app.deleteBootstrap()
-    }
+    fun deleteBootstrap() = bootstrapDelegate.deleteBootstrap()
 
     /** 强制删除 Termux 依赖：彻底卸载，删除后不自动重新初始化（需手动安装） */
-    fun forceDeleteBootstrap() {
-        app.forceDeleteBootstrap()
-    }
+    fun forceDeleteBootstrap() = bootstrapDelegate.forceDeleteBootstrap()
 
     private val consoleLogDelegate by lazy {
         ConsoleLogDelegate(
