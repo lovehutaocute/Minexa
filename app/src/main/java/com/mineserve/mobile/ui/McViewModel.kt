@@ -71,6 +71,7 @@ import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
 import com.mineserve.mobile.ui.vm.BackupSettingsDelegate
 import com.mineserve.mobile.ui.vm.BootstrapDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
+import com.mineserve.mobile.ui.vm.ConsoleEntryDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
 import com.mineserve.mobile.ui.vm.CoreSelection
@@ -2842,11 +2843,15 @@ class McViewModel(
     /** 刷新当前目录文件列表；还没定位到目录时重新回到根目录 */
     fun refreshFiles() = fileBrowserDelegate.refreshFiles()
 
-    /** 打开 MC 终端前初始化日志 */
-    fun launchMcConsole() {
-        // 确保终端日志色标已处理
-        _messageFlow.tryEmit(str(R.string.s303))
+    private val consoleEntryDelegate by lazy {
+        ConsoleEntryDelegate(
+            app = app,
+            reportMessage = { _messageFlow.tryEmit(it) }
+        )
     }
+
+    /** 打开 MC 终端前初始化日志 */
+    fun launchMcConsole() = consoleEntryDelegate.launchMcConsole()
 
     /** 删除文件或目录 */
     fun deleteFile(file: java.io.File) = fileBrowserDelegate.deleteFile(file)
