@@ -31,7 +31,6 @@ import com.mineserve.mobile.data.ServerState
 import com.mineserve.mobile.data.LegacyPrivateStore
 import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.runtime.ConsoleLineParser
-import com.mineserve.mobile.runtime.NativeLibraryBundler
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.FrpProfile
 import com.mineserve.mobile.data.DiagnosticCheck
@@ -98,6 +97,7 @@ import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
 import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PlayerPresenceDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
+import com.mineserve.mobile.ui.vm.RuntimeEnvironmentDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
@@ -443,6 +443,10 @@ class McViewModel(
 
     /** 图标变更信号（UI 用于重载预览） */
     val serverIconVersion: StateFlow<Int> get() = serverIconDelegate.serverIconVersion
+
+    private val runtimeEnvironmentDelegate by lazy {
+        RuntimeEnvironmentDelegate(app = app)
+    }
 
     /** 当前核心的 server-icon.png 文件（不存在返回 null） */
     fun serverIconFile(): File? = serverIconDelegate.serverIconFile()
@@ -1179,10 +1183,7 @@ class McViewModel(
      * 与这里的判断是同一件事，缺库时不会静默变成「什么都没发生」。
      */
     val ipv6CompatReady: Boolean
-        get() = File(
-            app.applicationInfo.nativeLibraryDir,
-            NativeLibraryBundler.IPV6_FIX_LIB
-        ).isFile
+        get() = runtimeEnvironmentDelegate.ipv6CompatReady
 
     /**
      * 一次性写入运行模式与对应版本。
