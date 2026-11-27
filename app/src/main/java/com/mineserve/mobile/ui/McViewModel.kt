@@ -1162,19 +1162,8 @@ class McViewModel(
      * 来源与版本必须一次写入：分两次 set 会因为 config 落盘的 300ms debounce 撞在一起，
      * 第二次读到的还是旧快照（与 [applyRuntimeSelection] 注释里那个竞态同源）。
      */
-    fun setJavaRuntime(runtime: JavaRuntime) = updateConfig { cfg ->
-        // Proot 来源的版本必须落在**当前发行版**提供的范围内。界面上点不到
-        // 置灰项（见 JavaRuntimeGroupList），这里是第二道保险：
-        // 写进 config 的组合一旦装不上，用户要到启动失败时才会发现。
-        val version = if (runtime.vendor == JavaVendor.Proot) {
-            runtime.version.takeIf { it in cfg.prootDistro.availableJavaVersions }
-                ?: cfg.prootDistro.availableJavaVersions.firstOrNull()
-                ?: runtime.version
-        } else {
-            runtime.version
-        }
-        cfg.copy(selectedJavaVendor = runtime.vendor, selectedJavaVersion = version)
-    }
+    fun setJavaRuntime(runtime: JavaRuntime) =
+        updateConfig { cfg -> RuntimeKinds.withJavaRuntime(cfg, runtime) }
 
     /**
      * 兼容层依赖的 `libipv6fix.so` 是否真的随 APK 打包。
@@ -1205,28 +1194,7 @@ class McViewModel(
         prootDistro: ProotDistro? = null
     ) {
         updateConfig { cfg ->
-            val vendor = javaRuntime.vendor
-            val distro = prootDistro ?: cfg.prootDistro
-            // Proot 来源的可用版本由**发行版**决定，而不是来源的并集：
-            // 并集里同时有 8（仅 focal）与 21（仅 jammy），照并集放行会写出
-            // 一个该发行版装不上的版本，用户点安装才看到 apt 报「找不到软件包」。
-            val allowed = if (vendor == JavaVendor.Proot) {
-                distro.availableJavaVersions
-            } else {
-                vendor.versions
-            }
-            // 版本必须落在允许列表内，否则会出现「FCL 来源 + Java 8」这种
-            // 不存在的组合（FCL 只发布 17/21/25）。
-            val version = javaRuntime.version.takeIf { it in allowed }
-                ?: allowed.firstOrNull()
-                ?: JavaRuntime.Default.version
-            cfg.copy(
-                runtimeKind = kind,
-                selectedJavaVendor = vendor,
-                selectedJavaVersion = version,
-                prootDistro = distro,
-                selectedPhpVersion = phpVersion.takeIf { it in PhpVersion.entries } ?: PhpVersion.Default
-            )
+            RuntimeKinds.applySelection(cfg, kind, javaRuntime, phpVersion, prootDistro)
         }
     }
 
