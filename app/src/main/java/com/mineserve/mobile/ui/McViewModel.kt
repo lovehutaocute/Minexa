@@ -44,7 +44,6 @@ import com.mineserve.mobile.server.BackupManager
 import com.mineserve.mobile.server.CrashReportManager
 import com.mineserve.mobile.server.CrashReportAnalyzer
 import com.mineserve.mobile.server.CrashInsight
-import com.mineserve.mobile.server.CrashKnowledgeBase
 import com.mineserve.mobile.server.CrashLogView
 import com.mineserve.mobile.server.McServerController
 import com.mineserve.mobile.server.PlayerManager
@@ -78,6 +77,7 @@ import com.mineserve.mobile.ui.vm.formatSize
 import com.mineserve.mobile.ui.vm.formatSpeed
 import com.mineserve.mobile.ui.vm.DiagnosticsDelegate
 import com.mineserve.mobile.ui.vm.CrashDetailsDelegate
+import com.mineserve.mobile.ui.vm.CrashKnowledgeDelegate
 import com.mineserve.mobile.ui.vm.CrashReportFilesDelegate
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
@@ -2680,7 +2680,7 @@ class McViewModel(
             scope = viewModelScope,
             config = config,
             crashReportManager = crashReportManager,
-            refreshKnowledgeIfStale = { crashKnowledgeBase.refreshIfStale() },
+            refreshKnowledgeIfStale = { crashKnowledgeDelegate.refreshIfStale() },
             reportMessage = { _messageFlow.tryEmit(it) },
             reportError = { _errorFlow.tryEmit(it) }
         )
@@ -2727,7 +2727,13 @@ class McViewModel(
     }
 
     /** L3 在线规则包（懒加载，避免拖慢 ViewModel 构建） */
-    private val crashKnowledgeBase by lazy { CrashKnowledgeBase(app) }
+    private val crashKnowledgeDelegate by lazy {
+        CrashKnowledgeDelegate(
+            app = app,
+            scope = viewModelScope,
+            reportUpdated = { _messageFlow.tryEmit(it) }
+        )
+    }
 
     /** Shows a structured report when validation fails before a process can create its own crash file. */
     private fun showStartupFailureReport(error: Throwable) = crashDetailsDelegate.showStartupFailureReport(error)
@@ -2748,12 +2754,7 @@ class McViewModel(
     fun repairJavaTrustStore() = trustStoreRepairDelegate.repairJavaTrustStore()
 
     /** 手动刷新在线知识库规则包（分析页可选入口，失败静默）。 */
-    fun refreshCrashKnowledge() {
-        viewModelScope.launch(Dispatchers.IO) {
-            val updated = runCatching { crashKnowledgeBase.refresh() }.getOrDefault(false)
-            if (updated) _messageFlow.tryEmit(str(R.string.crash_knowledge_updated))
-        }
-    }
+    fun refreshCrashKnowledge() = crashKnowledgeDelegate.refreshCrashKnowledge()
 
     /** 关闭崩溃报告详情视图 */
     fun clearCrashContent() {
