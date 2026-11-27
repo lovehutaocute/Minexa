@@ -102,6 +102,7 @@ import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PlayerPresenceDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.RuntimeEnvironmentDelegate
+import com.mineserve.mobile.ui.vm.ScheduleSettingsDelegate
 import com.mineserve.mobile.ui.vm.RuntimeKinds
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
@@ -1277,17 +1278,21 @@ class McViewModel(
 
     // ── 定时开/停服与停止备份 ───────────────────────────────────
 
-    fun setDailyStartEnabled(v: Boolean) = updateScheduleConfig { it.copy(dailyStartEnabled = v) }
-
-    fun setDailyStartTime(hour: Int, minute: Int) = updateScheduleConfig {
-        it.copy(dailyStartHour = hour.coerceIn(0, 23), dailyStartMinute = minute.coerceIn(0, 59))
+    private val scheduleSettingsDelegate by lazy {
+        ScheduleSettingsDelegate(
+            app = app,
+            updateAndSaveConfig = repo::updateAndSaveConfig,
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
-    fun setDailyStopEnabled(v: Boolean) = updateScheduleConfig { it.copy(dailyStopEnabled = v) }
+    fun setDailyStartEnabled(v: Boolean) = scheduleSettingsDelegate.setDailyStartEnabled(v)
 
-    fun setDailyStopTime(hour: Int, minute: Int) = updateScheduleConfig {
-        it.copy(dailyStopHour = hour.coerceIn(0, 23), dailyStopMinute = minute.coerceIn(0, 59))
-    }
+    fun setDailyStartTime(hour: Int, minute: Int) = scheduleSettingsDelegate.setDailyStartTime(hour, minute)
+
+    fun setDailyStopEnabled(v: Boolean) = scheduleSettingsDelegate.setDailyStopEnabled(v)
+
+    fun setDailyStopTime(hour: Int, minute: Int) = scheduleSettingsDelegate.setDailyStopTime(hour, minute)
 
     fun setStopAutoBackup(v: Boolean) = updateConfig { it.copy(stopAutoBackup = v) }
 
@@ -1315,18 +1320,6 @@ class McViewModel(
     /** 手动立即执行一次任务（交由前台服务在自身作用域内完成）。 */
     fun runAutomationTaskNow(id: String) = automationTasksDelegate.runAutomationTaskNow(id)
 
-    /** 变更定时计划时同步保存并重注册下一次闹钟。 */
-    private fun updateScheduleConfig(transform: (McConfig) -> McConfig) {
-        // 基于仓库权威内存态读改写并原子入队，不用 UI 侧 config.value（可能是陈旧快照，
-        // 写回会覆盖用户此间做的其他修改）。ScheduleManager 用的是落盘后的最终值。
-        val updated = try {
-            repo.updateAndSaveConfig(transform)
-        } catch (e: Exception) {
-            _errorFlow.tryEmit(str(R.string.s191, e.message))
-            return
-        }
-        com.mineserve.mobile.data.ScheduleManager.register(app, updated)
-    }
     fun setKeepWifiLock(v: Boolean) = updateConfig { it.copy(keepWifiLock = v) }
     fun setKeepCpuWakelock(v: Boolean) = updateConfig { it.copy(keepCpuWakelock = v) }
     fun setKeepScreenOnWhileRunning(v: Boolean) = updateConfig { it.copy(keepScreenOnWhileRunning = v) }
