@@ -1,16 +1,21 @@
 # Git 仓库规范
 
-> 适用范围：`MCServerManager`（工作仓库）与 `MCServerManager.git-backup`（本地裸镜像）。
-> 最后更新：2026-10-19
+> 适用范围：`MCServerManager`（工作仓库）。
+> 最后更新：2026-11-28
+>
+> ⚠️ **本地裸镜像 `../MCServerManager.git-backup` 已于 2026-11-28 停用**（目录被删除，
+> `.githooks/` 下的三个同步钩子与 `core.hooksPath` 配置一并移除）。本文件里凡提到
+> 「镜像 / 同步钩子 / sync-git-backup」的步骤都只作历史记录，不要再照着执行。
+> 现在本地只有 `.git` 一份历史，远端 `origin` 是唯一异机副本。
 
 ## 1. 仓库结构
 
 | 路径 | 作用 |
 |---|---|
 | `MCServerManager/` | 工作仓库，日常开发、提交、打标签都在这里 |
-| `MCServerManager.git-backup/` | 裸镜像（bare），只做备份，**不要在其中直接改文件或提交** |
+| `MCServerManager.git-backup/` | **已删除**（原为本地裸镜像，仅作第二份历史备份） |
 
-镜像由 `.githooks/` 下的钩子自动维护，是本地第二份完整历史，不是工作副本。
+镜像当年由 `.githooks/` 下的钩子自动维护；钩子已移除，仓库不再有本地第二份历史。
 
 ## 2. 分支
 
@@ -54,26 +59,27 @@ fix(port): 端口真源统一到服务端配置文件，修复界面显示连不
 规则：
 
 - 新发布标签必须 `v` 开头；CI 仅在 `v*` 标签上触发构建。
-- 发布标签指向“可发布状态”：一般是版本号提交；若发布后补了同版本修复，允许前移标签，但必须 force-push，并立即运行 `tools/sync-git-backup.ps1`（`git tag -f` 不触发任何钩子）。
+- 发布标签指向“可发布状态”：一般是版本号提交；若发布后补了同版本修复，允许前移标签，但必须 force-push（`git tag -f` 不触发任何钩子，以前靠 `pre-push` 兜底，现在没有钩子了，改完标签要自己确认远端已更新）。
 - 旧式无 `v` 标签（`1.0.9` / `1.1.0` / `1.1.1` / `1.1.3` / `1.1.5` / `1.1.6` / `1.1.7`）已推送且有远端引用，**冻结保留**，不删除、不改名，避免 CI 与外部下载链接失效。
 - 标签消息写清原因，方便 `git tag -n` 直接阅读；不要用标签承载可变的构建产物。
 
-## 5. 备份镜像
+## 5. 备份镜像（已停用）
 
-- 路径：`../MCServerManager.git-backup`（裸仓库）。
-- 钩子（`.githooks/`，`core.hooksPath` 已指向该目录）：
-  - `post-commit`：每次提交后同步；
-  - `post-rewrite`：amend / rebase 后同步；
-  - `pre-push`：推送前同步，覆盖 `git tag -f` 这类不触发提交钩子的操作。
-- 同步内容：`refs/heads/*`、`refs/tags/*`，以及 `refs/stash → refs/backup/stash`。
-- 日志：仓库根目录 `.git-backup.log`（已 gitignore）。
-- 手动同步与校验：
+- 路径：`../MCServerManager.git-backup`（裸仓库）—— **2026-11-28 已删除**。
+- 原钩子（`.githooks/`，`core.hooksPath` 指向该目录）：`post-commit` / `post-rewrite` /
+  `pre-push`，负责每次提交、amend、推送后把 `refs/heads/*`、`refs/tags/*`、
+  `refs/stash → refs/backup/stash` 同步到镜像，日志写在 `.git-backup.log`。
+- 现状：钩子脚本与 `core.hooksPath` 均已移除（镜像不存在时它们每次提交都会打一行
+  `fatal: not a git repository`，且备份实际已失效）。
+- ⚠️ **不要重建这个裸镜像** —— 它是作者主动删掉的，也**不要**再把这三个钩子装回去。
+  需要额外副本时另选方案（远端仓库 / 手工导出 bundle），不要恢复 `.githooks/`。
+  下面两个脚本只在镜像确实存在时才有意义，现在跑会直接失败，属预期行为。
 
 ```powershell
-pwsh tools/sync-git-backup.ps1   # 拉取并逐引用比对，不一致时返回 1
-pwsh tools/list-git-nodes.ps1    # 列出主库与镜像的全部节点
-pwsh tools/list-git-nodes.ps1 -BackupOnly   # 只看备份/检查点/stash
+pwsh tools/sync-git-backup.ps1   # 需要 ../MCServerManager.git-backup 存在
+pwsh tools/list-git-nodes.ps1    # 列出主库（镜像存在时连带镜像）的全部节点
 ```
+
 
 恢复方式：
 
@@ -89,12 +95,12 @@ pwsh tools/list-git-nodes.ps1 -BackupOnly   # 只看备份/检查点/stash
 1. 修改 `app/build.gradle.kts` 的 `versionCode` / `versionName`。
 2. 提交：`git commit -m "release(x.y.z): ..."`。
 3. 打标签：`git tag -a vX.Y.Z -m "Release x.y.z"`。
-4. 推送：`git push origin master --follow-tags`（pre-push 会先同步镜像）。
-5. 校验：`pwsh tools/sync-git-backup.ps1`。
+4. 推送：`git push origin master --follow-tags`。
+5. 校验：`git ls-remote --tags origin | grep vX.Y.Z`（确认标签真的到了远端；
+   镜像已停用，本地没有第二份副本可对照）。
 
 ## 7. 仓库配置
 
-- `core.hooksPath = .githooks`
 - `fetch.prune = true`
 - 已移除失效的 `http.proxy = http://127.0.0.1:7897`（直连 GitHub 正常）。需要代理时再执行：
   `git config http.proxy http://127.0.0.1:7897`

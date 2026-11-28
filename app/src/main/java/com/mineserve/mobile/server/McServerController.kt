@@ -27,6 +27,7 @@ import com.mineserve.mobile.data.StartupPhase
 import com.mineserve.mobile.data.isProotGuestRuntime
 import com.mineserve.mobile.data.provides
 import com.mineserve.mobile.runtime.TermuxRuntime
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -35,7 +36,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -131,7 +134,11 @@ internal fun explainInstallerFailure(
             "connect timed out", "connection timed out", "no route to host") ->
             "无法连接依赖下载源（多为 maven.neoforged.net / maven.minecraftforge.net 被墙）。" +
                 "请换网络或代理后重试；NeoForge 建议先确认预下载的依赖库是否全部就绪。"
-        hit("404", "not found", "http 403", "http 500", "http 502", "http 503") ->
+        // 只认「带 HTTP 语义」的形态。以前裸 `"404"` / `"not found"` 都算命中，
+        // 结果 `ClassNotFoundException: ... could not be found`、路径里带 404 的
+        // 下载地址都会把「依赖库缺失」误报成「源返回 4xx」，方向就指错了。
+        hit("http 404", "http 403", "http 410", "http 429", "http 500", "http 502", "http 503",
+            "404 not found", "403 forbidden", "410 gone", "status code 404", "response code: 404") ->
             "依赖下载源返回 4xx/5xx，该文件在源上不存在或源不可用。" +
                 "请换网络重试；若始终失败，说明这个版本在当前源上没有构建。"
         hit("outofmemoryerror", "java heap space") ->
@@ -484,18 +491,48 @@ class McServerController(
         var lastCode = 1
         // 最后一次执行的输出尾部：失败归因全靠它（installer 只吐一个 exit code 等于没说）。
         var lastTail = ""
+        // 总时长预算：单次 900s × 4 次 = 最坏一小时，界面全程「安装中」，体验上等于死机。
+        // 改成「总预算 20 分钟，单次仍封顶 900s，后面的尝试按剩余时间递减」：
+        // 既保留了「第一次给足时间慢慢拉库」的宽容度，又保证最坏 20 分钟必出结论。
+        val budgetStartMs = System.currentTimeMillis()
+        var lastAttemptTimeoutMs = INSTALLER_TIMEOUT_MS
         for (attempt in 1..maxAttempts) {
+            val remainingMs = INSTALLER_TOTAL_BUDGET_MS - (System.currentTimeMillis() - budgetStartMs)
+            if (remainingMs <= 0L) {
+                termux.emitLog(
+                    "[install] $label 安装总时长已超过 ${INSTALLER_TOTAL_BUDGET_MS / 60_000} 分钟，" +
+                        "停止重试（最后一次 exit=$lastCode）"
+                )
+                return InstallerOutcome(
+                    code = 124,
+                    tail = lastTail,
+                    timeoutMinutes = INSTALLER_TOTAL_BUDGET_MS / 60_000
+                )
+            }
+            // 最后一次尝试给足剩余时间；但每次都不少于 2 分钟，否则「剩余 10 秒」这种
+            // 尝试等于必然失败，白白多写一份误导人的日志。
+            val attemptTimeoutMs = remainingMs
+                .coerceAtMost(INSTALLER_TIMEOUT_MS)
+                .coerceAtLeast(INSTALLER_MIN_ATTEMPT_MS)
+            lastAttemptTimeoutMs = attemptTimeoutMs
             val effectiveMirror = if (useMirror) mirrorUrl else null
             // jopt 的 --mirror <URL>；镜像失效时 installer 自己会回落官方源。
             val mirrorArgs = effectiveMirror?.let { arrayOf("--mirror", it) } ?: emptyArray<String>()
             lastCode = when {
-                prootGuest ->
-                    termux.runProotInstaller(
+                // 容器分支以前只回一个退出码，失败归因直接断在这里 —— 而 PRoot 容器
+                // 恰恰是 NeoForge 最容易「卡在拉库」的那条路。它内部已经用带捕获的
+                // exec，所以执行完把那条命令的尾部取回来即可。
+                prootGuest -> {
+                    val code = termux.runProotInstaller(
                         jarPath,
                         serverDir,
+                        timeoutMs = attemptTimeoutMs,
                         profile = termux.resolveProotProfile(javaVendor, javaVersion),
                         mirrorUrl = effectiveMirror
                     )
+                    lastTail = termux.lastExecTail()
+                    code
+                }
                 // FCL 的 java 不在 Termux PATH 里（在 filesDir/jvm-fcl），execOnce("java")
                 // 只会 127；必须走带 Fcl 专用环境（LD_LIBRARY_PATH 不含 Termux 目录）的命令。
                 // 信任库只在 FCL 自带 cacerts 不可读时才注入并集库：并集库可能缺新根证书
@@ -513,7 +550,7 @@ class McServerController(
                     val result = termux.runFclJavaCommandCapturing(
                         javaVersion, serverDir,
                         listOf(*injected, "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs),
-                        timeoutMs = INSTALLER_TIMEOUT_MS
+                        timeoutMs = attemptTimeoutMs
                     )
                     lastTail = result.tail
                     result.code
@@ -527,7 +564,7 @@ class McServerController(
                     // installer 卡在拉某个慢库时会一直挂着，界面永远停在「安装中」，
                     // 用户只能杀 App（PRoot/FCL 两条分支一直有 900s，唯独最常见的宿主没有）。
                     val result = termux.execOnceWithTimeoutCapture(
-                        INSTALLER_TIMEOUT_MS,
+                        attemptTimeoutMs,
                         "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
                         *props(),
                         "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
@@ -552,11 +589,16 @@ class McServerController(
                 delay(attempt * 2_000L)
             }
         }
-        return InstallerOutcome(lastCode, lastTail)
+        return InstallerOutcome(lastCode, lastTail, lastAttemptTimeoutMs / 60_000)
     }
 
     /** 一次 installer 执行的结果：退出码 + 输出尾部（尾部用于失败归因）。 */
-    private data class InstallerOutcome(val code: Int, val tail: String)
+    private data class InstallerOutcome(
+        val code: Int,
+        val tail: String,
+        /** 最后一次尝试实际允许的时长（分钟），超时文案里要报真实值而不是固定 15。 */
+        val timeoutMinutes: Long = 15
+    )
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -895,6 +937,10 @@ class McServerController(
         try {
             downloadCoreLocked(config, customName, onProgress, onPhase)
         } catch (t: Throwable) {
+            // 用户点「取消」不是故障：既不写失败现场，也不该把它算成一次「装不上」。
+            // 判断必须放在最前面 —— CancellationException 也是 Throwable，
+            // 顺手落盘会让 crash-logs 里堆满「取消」记录，把真正的故障埋掉。
+            if (t is CancellationException) throw t
             persistInstallFailure(config, t, termux.endInstallCapture())
             throw t
         } finally {
@@ -994,7 +1040,8 @@ class McServerController(
                         // 点开就报「启动文件缺失」的幽灵服务器。BDS 路径一直这么做。
                         FileOps.deleteRecursively(serverDir)
                         throw RuntimeException(explainInstallerFailure(
-                            normalizedConfig.selectedCore.displayName, outcome.code, outcome.tail
+                            normalizedConfig.selectedCore.displayName, outcome.code, outcome.tail,
+                            outcome.timeoutMinutes
                         ))
                     }
                 }
@@ -1017,7 +1064,8 @@ class McServerController(
                         // 失败原因要写清方向：jar 损坏 → 重下核心；库拉不到 → 换网络/重试。
                         val hint = buildString {
                             append(explainInstallerFailure(
-                                normalizedConfig.selectedCore.displayName, outcome.code, outcome.tail
+                                normalizedConfig.selectedCore.displayName, outcome.code, outcome.tail,
+                                outcome.timeoutMinutes
                             ))
                             if (report.manifestError != null) {
                                 append("；installer 包无法解析（${report.manifestError}），请重新下载核心")
@@ -1100,16 +1148,25 @@ class McServerController(
             File(jarPath).renameTo(phar)
             phar.name
         } else "server.jar"
-        // 统一的「安装完成」判据：所有核心都要过一遍启动产物冒烟检查。
+        // 统一的「安装完成」判据：凡是**启动文件就是 server.jar** 的核心，都过一遍冒烟检查。
         // 以前只有 installer 系（Forge/NeoForge/Quilt）检查，其余核心下完就算成功；
         // 一旦某个 CDN 把错误页当 200 返回、或被截断的包刚好超过 1KB，
         // 用户要等到点「启动」才看到 `Invalid or corrupt jarfile`，而那时已离开安装页。
-        runCatching { requireDownloadedCoreLaunchable(normalizedConfig.selectedCore, serverDir, serverFileName) }
-            .onFailure { e ->
-                FileOps.deleteRecursively(serverDir)
-                throw e
-            }
-        termux.emitLog("[install] 启动产物检查通过：$serverFileName")
+        //
+        // 两类核心要排除：
+        //  - installer 系：此时 server.jar 里躺的是 **installer 包本身**，检查它等于自欺欺人
+        //    （真正的产物判据是上面那次 requireInstallerLaunchArtifacts）；
+        //  - BDS：启动文件是 bedrock_server，走的是另一条下载/解压链路。
+        val serverJarIsLaunchArtifact = !normalizedConfig.selectedCore.needsInstaller &&
+            normalizedConfig.selectedCore != ServerCore.Bds
+        if (serverJarIsLaunchArtifact) {
+            runCatching { requireDownloadedCoreLaunchable(normalizedConfig.selectedCore, serverDir, serverFileName) }
+                .onFailure { e ->
+                    FileOps.deleteRecursively(serverDir)
+                    throw e
+                }
+            termux.emitLog("[install] 启动产物检查通过：$serverFileName")
+        }
         // 添加到已安装列表。
         //
         // 注意：这里刻意**不使用调用方传入的 [config]** 来拼接新列表。
@@ -1817,11 +1874,18 @@ class McServerController(
      * 本次版本列表加载是否回退到了内置列表。
      *
      * 用成员标记，而不是把 7 个 `fetch*Versions` 的返回类型全改成「列表 + 来源」：
-     * 这些函数只在 [fetchVersionOptions] 的 `when` 里各被调用一次，而 UI 侧用 token
-     * 把加载串行化了，所以「置位 → 读取」之间不会被另一次调用插入。
+     * 这些函数只在 [fetchVersionOptions] 的 `when` 里各被调用一次。
+     *
+     * **读写必须串行**：版本列表不止一个入口（下载页、MCP 工具 `fetchVersions`），
+     * 两次请求不同核心时会交错执行 —— 不加锁的话，A 的「兜底」标记会被 B 的
+     * `false` 冲掉（提示不显示），或者把 B 的正常列表标成兜底（误报）。
+     * 那个锁就是下面的 [versionFetchMutex]，代价可忽略（一次网络请求量级的操作）。
      */
     @Volatile
     private var lastVersionsWereFallback = false
+
+    /** 串行化版本列表加载：保证 [lastVersionsWereFallback] 的「置位 → 读取」不被穿插。 */
+    private val versionFetchMutex = Mutex()
 
     /** 内置兜底版本列表：接口不可达 / 返回空时使用，并置位给 [CoreVersionOption.isFallback]。 */
     private fun builtinFallbackVersions(): List<String> {
@@ -1830,32 +1894,37 @@ class McServerController(
     }
 
     suspend fun fetchVersionOptions(core: ServerCore): List<CoreVersionOption> = withContext(Dispatchers.IO) {
-        lastVersionsWereFallback = false
-        val options = when (core) {
-            ServerCore.Paper -> fetchPaperVersions().map(::CoreVersionOption)
-            ServerCore.Purpur -> fetchPurpurVersions().map(::CoreVersionOption)
-            ServerCore.Leaves -> fetchLeavesVersions().map(::CoreVersionOption)
-            ServerCore.Leaf -> fetchLeafVersions().map(::CoreVersionOption)
-            ServerCore.Spigot, ServerCore.CraftBukkit -> DEFAULT_MC_VERSIONS.map(::CoreVersionOption)
-            ServerCore.Vanilla -> fetchVanillaVersions().map(::CoreVersionOption)
-            ServerCore.Fabric -> fetchFabricVersions().map(::CoreVersionOption)
-            ServerCore.Forge -> fetchForgeVersions().map(::CoreVersionOption)
-            ServerCore.NeoForge -> fetchNeoForgeVersions().map(::CoreVersionOption)
-            ServerCore.Quilt -> fetchQuiltVersions().map(::CoreVersionOption)
-            ServerCore.Velocity -> fetchVelocityVersions().map(::CoreVersionOption)
-            ServerCore.BungeeCord -> fetchBungeeVersions().map(::CoreVersionOption)
-            ServerCore.PowerNukkitX -> fetchPowerNukkitXVersionOptions()
-            ServerCore.PocketMine -> fetchPocketMineVersions()
-            ServerCore.Allay -> fetchAllayVersionOptions()
-            // BDS：列出**全部可选版本**（内置历史存档清单 + 官方接口 + 带摘要的远端清单），
-            // 用户在下拉里选哪个就下哪个。之前这里只返回「官方当前最新」一项，
-            // 想装旧版本只能自己找包、自己解压。
-            ServerCore.Bds -> fetchBdsVersionOptions()
-            ServerCore.Unknown -> emptyList()
+        versionFetchMutex.withLock {
+            lastVersionsWereFallback = false
+            val options = when (core) {
+                ServerCore.Paper -> fetchPaperVersions().map(::CoreVersionOption)
+                ServerCore.Purpur -> fetchPurpurVersions().map(::CoreVersionOption)
+                ServerCore.Leaves -> fetchLeavesVersions().map(::CoreVersionOption)
+                ServerCore.Leaf -> fetchLeafVersions().map(::CoreVersionOption)
+                ServerCore.Spigot, ServerCore.CraftBukkit -> DEFAULT_MC_VERSIONS.map(::CoreVersionOption)
+                ServerCore.Vanilla -> fetchVanillaVersions().map(::CoreVersionOption)
+                ServerCore.Fabric -> fetchFabricVersions().map(::CoreVersionOption)
+                ServerCore.Forge -> fetchForgeVersions().map(::CoreVersionOption)
+                ServerCore.NeoForge -> fetchNeoForgeVersions().map(::CoreVersionOption)
+                ServerCore.Quilt -> fetchQuiltVersions().map(::CoreVersionOption)
+                ServerCore.Velocity -> fetchVelocityVersions().map(::CoreVersionOption)
+                ServerCore.BungeeCord -> fetchBungeeVersions().map(::CoreVersionOption)
+                ServerCore.PowerNukkitX -> fetchPowerNukkitXVersionOptions()
+                ServerCore.PocketMine -> fetchPocketMineVersions()
+                ServerCore.Allay -> fetchAllayVersionOptions()
+                // BDS：列出**全部可选版本**（内置历史存档清单 + 官方接口 + 带摘要的远端清单），
+                // 用户在下拉里选哪个就下哪个。之前这里只返回「官方当前最新」一项，
+                // 想装旧版本只能自己找包、自己解压。
+                ServerCore.Bds -> fetchBdsVersionOptions()
+                ServerCore.Unknown -> emptyList()
+            }
+            if (!lastVersionsWereFallback) {
+                options
+            } else {
+                termux.emitLog("[version] ${core.displayName} 版本列表接口不可用，已回退到内置列表")
+                options.map { it.copy(isFallback = true) }
+            }
         }
-        if (!lastVersionsWereFallback) return@withContext options
-        termux.emitLog("[version] ${core.displayName} 版本列表接口不可用，已回退到内置列表")
-        options.map { it.copy(isFallback = true) }
     }
 
     private fun fetchPurpurVersions(): List<String> {
@@ -2267,6 +2336,8 @@ class McServerController(
         try {
             downloadCoreToLocked(jarPath, config, dirName, onProgress)
         } catch (t: Throwable) {
+            // 取消不是故障：不落失败现场（同 downloadCore 里的理由）。
+            if (t is CancellationException) throw t
             persistInstallFailure(config, t, termux.endInstallCapture())
             throw t
         } finally {
@@ -2327,6 +2398,10 @@ class McServerController(
                 termux.emitLog("[download] 下载完成: ${outFile.length() / 1024 / 1024}MB")
                 Log.i(TAG, "downloadCoreTo: success, saved to $jarPath (${outFile.length()} bytes)")
                 return@withContext} catch (e: Exception) {
+                // 用户取消（或协程被取消）不是「这个下载源坏了」：既不能给源记失败，
+                // 也不能在这里 sleep 重试。CancellationException 是 Exception 的子类，
+                // 不先挡掉的话，每点一次取消就把源往黑名单里推一档。
+                if (e is CancellationException) throw e
                 Log.w(TAG, "downloadCoreTo attempt ${attempt + 1} failed: ${e.message}")
                 termux.emitLog("[download] 第 ${attempt + 1} 次失败: ${e.message}")
                 lastError = e
@@ -2389,15 +2464,17 @@ class McServerController(
         }
 
         if (core == ServerCore.PowerNukkitX) {
-            JarFile(file).use { jar ->
-                check(
+            // 必须抛 CoreVerifyException（而不是 check 的 IllegalStateException）：
+            // 重试循环只对 CoreVerifyException 做「删文件 + 清续传状态」。类型不对的话，
+            // 坏包会留在原地，下一次重试就变成「在坏文件上再拼一遍」。
+            val ok = runCatching {
+                JarFile(file).use { jar ->
                     jar.getEntry("org/powernukkitx/Server.class") != null ||
                         jar.getEntry("org/powernukkitx/JarStart.class") != null ||
                         jar.getEntry("cn/nukkit/Server.class") != null
-                ) {
-                    "PowerNukkitX 下载内容不是有效核心 JAR"
                 }
-            }
+            }.getOrDefault(false)
+            if (!ok) throw CoreVerifyException("PowerNukkitX 下载内容不是有效核心 JAR")
         }
 
         // PocketMine 是 .phar（不是 zip/jar），BDS 走另一条链路，两者跳过结构校验。
@@ -3571,6 +3648,23 @@ class McServerController(
          * 继续等只会让用户以为 App 死了。超时后按 exit=124 处理并给出可执行建议。
          */
         private const val INSTALLER_TIMEOUT_MS = 900_000L
+
+        /**
+         * installer 重试的**总**时长预算（20 分钟）。
+         *
+         * 单次 900s 是对的（首次要拉几十个库），但重试是把 900s 乘上去的：带镜像的
+         * Forge 路径最多 4 次，最坏一小时都在「安装中」，用户只会认为 App 挂了。
+         * 这里给整次安装一个总预算，超出就直接按超时收尾并告诉他该换网络。
+         */
+        private const val INSTALLER_TOTAL_BUDGET_MS = 20 * 60_000L
+
+        /**
+         * 单次尝试的最小时间窗（2 分钟）。
+         *
+         * 预算只剩十几秒时再起一次 installer 是纯浪费：必然超时，还会把「总预算耗尽」
+         * 掩盖成「installer 超时」。给个下限，让最后一次尝试至少有意义。
+         */
+        private const val INSTALLER_MIN_ATTEMPT_MS = 120_000L
 
         /**
          * 依赖库预下载的并发路数。

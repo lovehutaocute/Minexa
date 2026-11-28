@@ -72,4 +72,29 @@ class InstallerFailureExplanationTest {
         val msg = explain(tail = "")
         assertFalse(msg, msg.contains("原始信息"))
     }
+
+    @Test
+    fun `HTTP 层 404 指向源不可用`() {
+        val tail = "java.io.IOException: Server returned HTTP response code: 404 " +
+            "for URL: https://maven.neoforged.net/releases/net/neoforged/neoforge/x.jar"
+        val msg = explain(tail = tail)
+        assertTrue(msg, msg.contains("4xx"))
+    }
+
+    @Test
+    fun `裸 not found 不再被误判成源返回 4xx`() {
+        // 真实的依赖库缺失日志里常出现 "not found"，以前裸关键词会把方向指成
+        // 「源返回 4xx，请换网络」，而真正该做的是把库补齐。
+        val tail = "Caused by: java.lang.IllegalStateException: module handler not found"
+        val msg = explain(tail = tail)
+        assertFalse(msg, msg.contains("4xx"))
+    }
+
+    @Test
+    fun `超时文案报真实时长而不是固定 15 分钟`() {
+        assertTrue(explain(code = 124, tail = ""), explain(code = 124, tail = "").contains("15 分钟"))
+        assertTrue(
+            explainInstallerFailure("NeoForge", 124, "", timeoutMinutes = 20).contains("20 分钟")
+        )
+    }
 }

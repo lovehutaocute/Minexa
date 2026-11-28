@@ -1091,12 +1091,12 @@ private fun DownloadProgressContent(
 ) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            // 有阶段文本时优先显示它：此时百分比不动（installer 没有字节进度），
-            // 「依赖库 12/70 · 17%」比一个静止的 100% 更能说明还在干活。
+            // 有阶段文本时**只**显示它：installer 阶段没有字节进度，那个百分比是主包
+            // 已经下完留下的 100%，并排写成「安装中 · 100%」读起来像在自相矛盾。
             val label = if (phase.isBlank()) {
                 stringResource(R.string.s485) + " " + percent + "%"
             } else {
-                phase + " · " + percent + "%"
+                phase
             }
             Text(
                 label,

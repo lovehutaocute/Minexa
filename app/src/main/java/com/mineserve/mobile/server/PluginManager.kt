@@ -47,6 +47,14 @@ class PluginManager(
         /** 历史版本遗留的禁用后缀（缺 .jar 的变体） */
         private const val LEGACY_DISABLED_SUFFIX = ".disabled"
 
+        /**
+         * 单个文件的下载尝试次数。
+         *
+         * 2 次而不是 3 次：第一次失败通常拿到的是「分片断流」，第二次能续传的就续上了；
+         * 两次都失败基本是源不可用，再多试只是让用户多等。
+         */
+        private const val DOWNLOAD_ATTEMPTS = 2
+
         /** 忽略大小写地剥离后缀（removeSuffix 区分大小写，会漏掉 .JAR 等变体）。 */
         private fun stripSuffixIgnoreCase(name: String, suffix: String): String {
             if (name.length < suffix.length) return name
@@ -686,17 +694,42 @@ class PluginManager(
         return SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(Date(ts))
     }
 
+    /**
+     * 下载到 [target]，失败重试一次。
+     *
+     * 为什么要自带重试：下载层在「分片中途断流」时会把失败交回调用方（保留分片等续传），
+     * 而这里是插件/模组下载**唯一**的下载入口、没有外层重试循环。以前下载层会自己回退
+     * 单流兜住，现在不兜了 —— 不在这一层补一次重试，就是「网络抖一下插件就装不上」。
+     *
+     * 两次都失败就清掉续传残留：plugins/ 和 mods/ 是用户会自己翻的目录，
+     * 不该留一堆 `.part<偏移>` 的碎文件。
+     */
     private fun downloadTo(
         url: String,
         target: File,
         onProgress: (Long, Long, Long) -> Unit
     ) = kotlinx.coroutines.runBlocking {
-        MultiThreadDownloader.download(
-            url = url,
-            target = target,
-            onProgress = onProgress,
-            onLog = { logMsg -> Log.i(TAG, "download: $logMsg") }
-        )
+        var last: Exception? = null
+        for (attempt in 1..DOWNLOAD_ATTEMPTS) {
+            try {
+                MultiThreadDownloader.download(
+                    url = url,
+                    target = target,
+                    onProgress = onProgress,
+                    onLog = { logMsg -> Log.i(TAG, "download: $logMsg") }
+                )
+                return@runBlocking
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // 用户取消/页面销毁：不重试，也不清理（下次下载还能续传）。
+                throw e
+            } catch (e: Exception) {
+                last = e
+                Log.w(TAG, "download attempt $attempt/$DOWNLOAD_ATTEMPTS failed: ${e.message}")
+                if (attempt < DOWNLOAD_ATTEMPTS) kotlinx.coroutines.delay(1_500L)
+            }
+        }
+        MultiThreadDownloader.clearResumeState(target)
+        throw last ?: RuntimeException("下载失败")
     }
 
     // ── 模组管理（Fabric/Forge 的 mods/ 目录） ─────────────────────

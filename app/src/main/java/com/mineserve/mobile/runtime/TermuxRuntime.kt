@@ -2828,6 +2828,15 @@ class TermuxRuntime(context: Context) {
     ): CommandExecutor.ExecResult =
         executor.execOnceWithTimeoutCapture(timeoutMs, *command, env = env)
 
+    /**
+     * 最近一次命令（宿主或 PRoot 容器）的输出尾部。
+     *
+     * 为什么需要它：容器里的 installer 走的是 `runProotInstaller(): Int`，只回一个退出码；
+     * 但底层 [runUbuntu] 其实一直是用带捕获的 exec 跑的，尾巴就在 executor 里。
+     * 之前没人取，于是 PRoot 分支的失败归因整段是空的（只报 exit=1）。
+     */
+    fun lastExecTail(): String = executor.lastTail
+
 
     /**
      * apt-get 执行前强制自愈 + 校验（幂等，毫秒级）。

@@ -2,6 +2,7 @@ package com.mineserve.mobile.data
 
 // 性能修改理由：移动网络断流时自动重试，并在分片下载失败后回退单流，避免误判整源不可用。
 import android.util.Log
+import kotlinx.coroutines.delay
 import java.io.Closeable
 import java.io.File
 import java.io.FileOutputStream
@@ -53,6 +54,17 @@ object MultiThreadDownloader {
 
     /** 每个分片的最小尺寸，避免分片过多 */
     private const val MIN_CHUNK_BYTES = 256 * 1024L
+
+    /**
+     * 分片下载最多走几遍。
+     *
+     * 第 1 遍中途断流且已有进展时，第 2 遍直接复用已落盘的分片续传（不重下已下部分）。
+     * 只走两遍：再失败说明这个源此刻确实不稳，交回调用方按自己的策略换源/重试比死等更划算。
+     */
+    private const val MULTI_PART_PASSES = 2
+
+    /** 两遍之间的间隔：给移动网络一个恢复的窗口，也不至于让用户觉得卡住。 */
+    private const val RESUME_RETRY_DELAY_MS = 1_000L
 
     /** 所有请求共用的 UA，与明文通道（[CleartextHttp]）保持一致 */
     private const val USER_AGENT = CleartextHttp.DEFAULT_USER_AGENT
@@ -139,89 +151,113 @@ object MultiThreadDownloader {
         target.parentFile?.mkdirs()
         onLog?.invoke("多线程下载：$chunkCount 线程，总大小 ${total / 1024 / 1024}MB")
 
-        // ── 断点续传 ───────────────────────────────────────────────
-        // 只有在能证明「上次下的是同一个实体」时才复用已下载的分片：分片里是上次
-        // 落盘的字节，本次无法再校验其内容；如果 CDN 中途换过文件，把新旧两版拼在
-        // 一起会得到「长度正确、内容错乱」的坏包 —— 比从头下载危险得多。
-        // 判据用 ETag（拿不到 ETag 的源一律不续传，宁可重下）。
-        val resumeMeta = readPartMeta(target)
-        val canResume = canResumeFrom(resumeMeta?.total, resumeMeta?.etag, total, entity.etag)
-        val resumeBytes = if (canResume) {
-            ranges.sumOf { (start, end) ->
-                partFile(target, start).length().coerceIn(0L, end - start + 1)
+        // 分片这一轮最多走 [MULTI_PART_PASSES] 遍：中途断流时保留已下分片，立刻续传一遍。
+        //
+        // 为什么要自己再试一遍，而不是直接抛给调用方：上一版在「有进展但断流」时直接
+        // 抛异常，把「回退单流」这条兜底彻底去掉了 —— 调用方里有重试循环的（核心下载、
+        // bootstrap）没事，但插件/模组下载是**单次调用**，一次抖动就从「以前能自动兜住」
+        // 变成「直接失败」，还会在目录里留下永远没人清理的 .part 文件。
+        // 在这里自己续传一遍，所有调用点都受益，也不必逼着每个调用点各写一套重试。
+        var lastResumeError: Exception? = null
+        for (pass in 1..MULTI_PART_PASSES) {
+            // ── 断点续传 ───────────────────────────────────────────────
+            // 只有在能证明「上次下的是同一个实体」时才复用已下载的分片：分片里是上次
+            // 落盘的字节，本次无法再校验其内容；如果 CDN 中途换过文件，把新旧两版拼在
+            // 一起会得到「长度正确、内容错乱」的坏包 —— 比从头下载危险得多。
+            // 判据用 ETag（拿不到 ETag 的源一律不续传，宁可重下）。
+            val resumeMeta = readPartMeta(target)
+            val canResume = canResumeFrom(resumeMeta?.total, resumeMeta?.etag, total, entity.etag)
+            val resumeBytes = if (canResume) {
+                ranges.sumOf { (start, end) ->
+                    partFile(target, start).length().coerceIn(0L, end - start + 1)
+                }
+            } else 0L
+            if (canResume && resumeBytes > 0) {
+                onLog?.invoke("续传：复用已下载的 ${resumeBytes / 1024 / 1024}MB 分片")
+            } else {
+                clearParts(target, ranges)
+                writePartMeta(target, PartMeta(total, entity.etag, entity.lastModified))
             }
-        } else 0L
-        if (canResume && resumeBytes > 0) {
-            onLog?.invoke("续传：复用已下载的 ${resumeBytes / 1024 / 1024}MB 分片")
-        } else {
-            clearParts(target, ranges)
-            writePartMeta(target, PartMeta(total, entity.etag, entity.lastModified))
-        }
 
-        val pool: ExecutorService = Executors.newFixedThreadPool(chunkCount)
-        session?.setExecutor(pool)
-        val done = AtomicLong(resumeBytes)
-        val errors = java.util.concurrent.ConcurrentLinkedQueue<Exception>()
-        val speedSamples = mutableListOf<DownloadSpeedSample>()
-        var merged = false
+            val pool: ExecutorService = Executors.newFixedThreadPool(chunkCount)
+            session?.setExecutor(pool)
+            val done = AtomicLong(resumeBytes)
+            val errors = java.util.concurrent.ConcurrentLinkedQueue<Exception>()
+            val speedSamples = mutableListOf<DownloadSpeedSample>()
+            var merged = false
+            // 本遍是否需要「保留分片、马上再来一遍」
+            var retryPass = false
 
-        try {
-            ranges.forEach { range ->
-                pool.execute {
-                    try {
-                        val resumeFrom = if (canResume) {
-                            partFile(target, range.first).length()
-                                .coerceIn(0L, range.second - range.first + 1)
-                        } else 0L
-                        downloadRange(
-                            url, target, total, range.first, range.second,
-                            onProgress, done, session, entity, resumeFrom
-                        )
-                    } catch (e: Exception) {
-                        errors.add(e)
-                        Log.w(TAG, "range ${range.first}-${range.second} failed: ${e.message}")
+            try {
+                ranges.forEach { range ->
+                    pool.execute {
+                        try {
+                            val resumeFrom = if (canResume) {
+                                partFile(target, range.first).length()
+                                    .coerceIn(0L, range.second - range.first + 1)
+                            } else 0L
+                            downloadRange(
+                                url, target, total, range.first, range.second,
+                                onProgress, done, session, entity, resumeFrom
+                            )
+                        } catch (e: Exception) {
+                            errors.add(e)
+                            Log.w(TAG, "range ${range.first}-${range.second} failed: ${e.message}")
+                        }
                     }
                 }
-            }
-            // 等待所有分片完成
-            pool.shutdown()
-            while (!pool.awaitTermination(200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
-                checkCancelled(session)
-                reportSpeed(done.get(), total, speedSamples, onProgress)
-            }
-            checkCancelled(session)
-            if (!errors.isEmpty()) {
-                val mismatch = errors.firstOrNull { it is RangeMismatchException }
-                // 已经有进展、且不是「协议层面不一致」→ 分片本身是好的，保留下来给
-                // 下一次重试续传；回退单流会把已下的几 MB 全部作废。
-                if (mismatch == null && done.get() > 0) {
-                    onLog?.invoke("分片下载中断，已保留 ${done.get() / 1024 / 1024}MB，重试时继续")
-                    throw RuntimeException(
-                        "多线程下载中断：${errors.peek()?.message ?: "未知错误"}"
-                    )
+                // 等待所有分片完成
+                pool.shutdown()
+                while (!pool.awaitTermination(200, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                    checkCancelled(session)
+                    reportSpeed(done.get(), total, speedSamples, onProgress)
                 }
-                // 协议不一致或毫无进展：分片不可信，回退单流全量重下。
-                val reason = mismatch?.message ?: errors.peek()?.message ?: "未知错误"
-                onLog?.invoke("多线程下载中断，改用单流下载：$reason")
-                target.delete()
-                clearParts(target, ranges)
-                singleStreamWithRetry(url, target, total, onProgress, onLog, session)
-                return
+                checkCancelled(session)
+                if (!errors.isEmpty()) {
+                    val mismatch = errors.firstOrNull { it is RangeMismatchException }
+                    // 已经有进展、且不是「协议层面不一致」→ 分片本身是好的，保留下来
+                    // 续传；回退单流会把已下的几 MB 全部作废。
+                    if (mismatch == null && done.get() > 0) {
+                        lastResumeError = errors.peek()
+                        // 只有「下次能真续传」才值得再来一遍：这个源不给 ETag 时，
+                        // 第二遍会从 0 重新下，等于把同一份文件白下两次（移动流量很贵）。
+                        // 这种情况直接把失败交回调用方，让它自己决定换源还是放弃。
+                        retryPass = pass < MULTI_PART_PASSES && entity.etag != null
+                        onLog?.invoke(
+                            if (retryPass) {
+                                "分片下载中断，已保留 ${done.get() / 1024 / 1024}MB，正在续传重试"
+                            } else {
+                                "分片下载中断，已保留 ${done.get() / 1024 / 1024}MB，下次重试时继续"
+                            }
+                        )
+                    } else {
+                        // 协议不一致或毫无进展：分片不可信，回退单流全量重下。
+                        val reason = mismatch?.message ?: errors.peek()?.message ?: "未知错误"
+                        onLog?.invoke("多线程下载中断，改用单流下载：$reason")
+                        target.delete()
+                        clearParts(target, ranges)
+                        singleStreamWithRetry(url, target, total, onProgress, onLog, session)
+                        return
+                    }
+                } else {
+                    // 合并分片为最终文件
+                    mergeRanges(target, ranges)
+                    if (target.length() != total) {
+                        throw RuntimeException("多线程下载文件不完整: ${target.length()}/$total 字节")
+                    }
+                    merged = true
+                    onProgress(target.length(), total, 0L)
+                    return
+                }
+            } finally {
+                pool.shutdownNow()
+                session?.setExecutor(null)
+                // 成功才清分片；失败时保留，下一遍/下一次重试接着下。
+                if (merged) clearParts(target, ranges)
             }
-
-            // 合并分片为最终文件
-            mergeRanges(target, ranges)
-            if (target.length() != total) {
-                throw RuntimeException("多线程下载文件不完整: ${target.length()}/$total 字节")
-            }
-            merged = true
-            onProgress(target.length(), total, 0L)
-        } finally {
-            pool.shutdownNow()
-            session?.setExecutor(null)
-            // 成功才清分片；失败时保留，下一次同一个源会接着下。
-            if (merged) clearParts(target, ranges)
+            if (retryPass) delay(RESUME_RETRY_DELAY_MS)
         }
+        throw RuntimeException("多线程下载中断：${lastResumeError?.message ?: "未知错误"}")
     }
 
     // ── 断点续传的落盘状态 ────────────────────────────────────────
@@ -231,6 +267,10 @@ object MultiThreadDownloader {
      *
      * 只有 [total] 与 [etag] 都对得上才允许续传 —— 这条规则宁可让续传失效，
      * 也不允许把两次不同 revision 的字节拼成一个文件。
+     *
+     * [lastModified] **只做诊断记录，不参与判定**：它精度只到秒、且不同镜像的
+     * 格式化方式不一样，拿它当续传依据等于给自己开一条「可能拼错版本」的口子。
+     * 保留在文件里是为了出现「明明没换文件却不肯续传」时能一眼看出服务器给了什么。
      */
     private data class PartMeta(val total: Long, val etag: String?, val lastModified: String?)
 
