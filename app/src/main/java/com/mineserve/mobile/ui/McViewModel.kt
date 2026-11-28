@@ -108,6 +108,7 @@ import com.mineserve.mobile.ui.vm.ScheduleSettingsDelegate
 import com.mineserve.mobile.ui.vm.RuntimeKinds
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerExportDelegate
+import com.mineserve.mobile.ui.vm.ServerCommandDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
 import com.mineserve.mobile.ui.vm.ServerResourcesDelegate
@@ -1598,32 +1599,20 @@ class McViewModel(
     /** 复制任意公网地址（FRP 与 STUN 卡片各自传入自己那条通道的地址）。 */
     fun copyPublicUrl(context: android.content.Context, url: String) = tunnelControlsDelegate.copyPublicUrl(context, url)
 
-    fun sendCommand(line: String) {
-        try {
-            controller.sendCommand(line)
-        } catch (e: Exception) {
-            _errorFlow.tryEmit(str(R.string.s211, e.message))
-        }
+    private val serverCommandDelegate by lazy {
+        ServerCommandDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            controller = controller,
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
-    /**
-     * 「保存世界」统一入口。
-     *
-     * 基岩版没有 `save-all`：要发 `save hold` + `save resume` 一对，只发 `hold`
-     * 世界就此不再落盘（真机实测）。
-     */
-    fun saveWorld() {
-        val core = config.value.installedCores
-            .firstOrNull { it.name == config.value.activeCoreName }?.core
-        val commands = core?.consoleSaveCommands ?: listOf("save-all")
-        sendCommand(commands.first())
-        commands.drop(1).forEachIndexed { index, cmd ->
-            viewModelScope.launch {
-                kotlinx.coroutines.delay(800L * (index + 1))
-                sendCommand(cmd)
-            }
-        }
-    }
+    fun sendCommand(line: String) = serverCommandDelegate.sendCommand(line)
+
+    /** 保存世界；基岩版按核心定义发送完整的保存命令序列。 */
+    fun saveWorld() = serverCommandDelegate.saveWorld()
 
     // ── 插件管理（新版） ──────────────────────────────────────────
 
