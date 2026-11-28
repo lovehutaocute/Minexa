@@ -69,6 +69,7 @@ import com.mineserve.mobile.ui.vm.BackupSettingsDelegate
 import com.mineserve.mobile.ui.vm.BootstrapDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.ConsoleEntryDelegate
+import com.mineserve.mobile.ui.vm.CrashReportingDelegateGraph
 import com.mineserve.mobile.ui.vm.ConsoleLineDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
@@ -79,9 +80,6 @@ import com.mineserve.mobile.ui.vm.EventNotifyDelegate
 import com.mineserve.mobile.ui.vm.formatSize
 import com.mineserve.mobile.ui.vm.formatSpeed
 import com.mineserve.mobile.ui.vm.DiagnosticsDelegate
-import com.mineserve.mobile.ui.vm.CrashDetailsDelegate
-import com.mineserve.mobile.ui.vm.CrashKnowledgeDelegate
-import com.mineserve.mobile.ui.vm.CrashReportFilesDelegate
 import com.mineserve.mobile.ui.vm.CuratedPluginUpdatesDelegate
 import com.mineserve.mobile.ui.vm.EasyTierEngineDelegate
 import com.mineserve.mobile.ui.vm.ExternalBackupsDelegate
@@ -2121,29 +2119,30 @@ class McViewModel(
 
     private val crashReportManager = CrashReportManager(repo.termuxRuntime)
 
-    private val crashReportFilesDelegate by lazy {
-        CrashReportFilesDelegate(
+    private val crashReportingDelegates by lazy {
+        CrashReportingDelegateGraph(
             app = app,
             scope = viewModelScope,
             config = config,
             crashReportManager = crashReportManager,
-            refreshKnowledgeIfStale = { crashKnowledgeDelegate.refreshIfStale() },
+            termuxRuntime = repo.termuxRuntime,
+            timeNow = ::timeNow,
             reportMessage = { _messageFlow.tryEmit(it) },
             reportError = { _errorFlow.tryEmit(it) }
         )
     }
 
-    val crashReports: StateFlow<List<CrashReportManager.CrashReport>> get() = crashReportFilesDelegate.crashReports
+    val crashReports: StateFlow<List<CrashReportManager.CrashReport>> get() = crashReportingDelegates.files.crashReports
 
     /** 加载崩溃报告列表 */
-    fun loadCrashReports() = crashReportFilesDelegate.loadCrashReports()
+    fun loadCrashReports() = crashReportingDelegates.files.loadCrashReports()
 
     /** 当前查看的崩溃报告全文（供 UI 展示） */
-    val currentCrashContent: StateFlow<String?> get() = crashDetailsDelegate.currentCrashContent
-    val currentCrashAnalysis: StateFlow<CrashReportAnalyzer.Analysis?> get() = crashDetailsDelegate.currentCrashAnalysis
+    val currentCrashContent: StateFlow<String?> get() = crashReportingDelegates.details.currentCrashContent
+    val currentCrashAnalysis: StateFlow<CrashReportAnalyzer.Analysis?> get() = crashReportingDelegates.details.currentCrashAnalysis
 
     /** 结构化报告（分析页主数据源）；生成失败时为 null，UI 退回纯规则归因 */
-    val currentCrashInsight: StateFlow<CrashInsight?> get() = crashDetailsDelegate.currentCrashInsight
+    val currentCrashInsight: StateFlow<CrashInsight?> get() = crashReportingDelegates.details.currentCrashInsight
 
     private val trustStoreRepairDelegate by lazy {
         TrustStoreRepairDelegate(
@@ -2158,41 +2157,19 @@ class McViewModel(
     val trustStoreRepair: StateFlow<TrustStoreRepairUi> get() = trustStoreRepairDelegate.trustStoreRepair
 
     /** 本次启动的日志视图（关键日志 / 全部日志）；与报告 sidecar 一一对应 */
-    val currentCrashLog: StateFlow<CrashLogView?> get() = crashDetailsDelegate.currentCrashLog
-
-    private val crashDetailsDelegate by lazy {
-        CrashDetailsDelegate(
-            app = app,
-            scope = viewModelScope,
-            config = config,
-            crashReportManager = crashReportManager,
-            termuxRuntime = repo.termuxRuntime,
-            timeNow = ::timeNow,
-            crashReportPath = { fileName -> crashReports.value.firstOrNull { it.fileName == fileName }?.path },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
-
-    /** L3 在线规则包（懒加载，避免拖慢 ViewModel 构建） */
-    private val crashKnowledgeDelegate by lazy {
-        CrashKnowledgeDelegate(
-            app = app,
-            scope = viewModelScope,
-            reportUpdated = { _messageFlow.tryEmit(it) }
-        )
-    }
+    val currentCrashLog: StateFlow<CrashLogView?> get() = crashReportingDelegates.details.currentCrashLog
 
     /** Shows a structured report when validation fails before a process can create its own crash file. */
-    private fun showStartupFailureReport(error: Throwable) = crashDetailsDelegate.showStartupFailureReport(error)
+    private fun showStartupFailureReport(error: Throwable) = crashReportingDelegates.details.showStartupFailureReport(error)
 
     private fun showStartupFailureReport(failure: McServerController.StartupFailure) =
-        crashDetailsDelegate.showStartupFailureReport(failure)
+        crashReportingDelegates.details.showStartupFailureReport(failure)
 
     /** 读取崩溃报告全文。 */
-    fun readCrashReport(fileName: String) = crashDetailsDelegate.readCrashReport(fileName)
+    fun readCrashReport(fileName: String) = crashReportingDelegates.details.readCrashReport(fileName)
 
     /** 用户反馈：回写 L2 案例库，让后续相似崩溃的建议更准。 */
-    fun recordCrashFeedback(resolved: Boolean) = crashDetailsDelegate.recordCrashFeedback(resolved)
+    fun recordCrashFeedback(resolved: Boolean) = crashReportingDelegates.details.recordCrashFeedback(resolved)
 
     /**
      * 崩溃弹窗里的「一键修复」：重装当前 Java + ca-certificates，必要时用本机证书包
@@ -2201,25 +2178,25 @@ class McViewModel(
     fun repairJavaTrustStore() = trustStoreRepairDelegate.repairJavaTrustStore()
 
     /** 手动刷新在线知识库规则包（分析页可选入口，失败静默）。 */
-    fun refreshCrashKnowledge() = crashKnowledgeDelegate.refreshCrashKnowledge()
+    fun refreshCrashKnowledge() = crashReportingDelegates.knowledge.refreshCrashKnowledge()
 
     /** 关闭崩溃报告详情视图 */
     fun clearCrashContent() {
-        crashDetailsDelegate.clearCrashContent()
+        crashReportingDelegates.details.clearCrashContent()
         trustStoreRepairDelegate.clearResult()
     }
 
     /** 删除崩溃报告 */
-    fun deleteCrashReport(fileName: String) = crashReportFilesDelegate.deleteCrashReport(fileName)
+    fun deleteCrashReport(fileName: String) = crashReportingDelegates.files.deleteCrashReport(fileName)
 
     /** 读取应用自身崩溃日志（全局 uncaught handler 写入），无则返回 null */
-    fun appCrashLog(): String? = crashReportFilesDelegate.appCrashLog()
+    fun appCrashLog(): String? = crashReportingDelegates.files.appCrashLog()
 
     /** 清空应用崩溃日志文件 */
-    fun clearAppCrashLog() = crashReportFilesDelegate.clearAppCrashLog()
+    fun clearAppCrashLog() = crashReportingDelegates.files.clearAppCrashLog()
 
     /** 清空所有崩溃报告 */
-    fun clearCrashReports() = crashReportFilesDelegate.clearCrashReports()
+    fun clearCrashReports() = crashReportingDelegates.files.clearCrashReports()
 
     // ── 定时备份配置 ────────────────────────────────────────────────
 
