@@ -24,6 +24,11 @@ internal class InstalledCoresDelegate(
     private val reportMessage: (String) -> Unit,
     private val reportError: (String) -> Unit
 ) {
+    /** 只切核心，不动运行模式 —— 运行模式由用户在运行环境选择中独立决定。 */
+    fun setActiveCore(name: String) {
+        updateConfig { it.copy(activeCoreName = name) }
+    }
+
     fun updateServerDisplayInfo(
         oldName: String,
         newName: String,

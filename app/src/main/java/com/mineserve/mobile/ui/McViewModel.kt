@@ -2346,10 +2346,7 @@ class McViewModel(
     fun downloadCore(customName: String) = coreDownloadDelegate.downloadCore(customName)
 
     /** 选择要启动的核心（按名称） */
-    fun setActiveCore(name: String) {
-        // 只切核心，不动运行模式 —— 运行模式由用户在「运行环境」弹窗里决定并完全生效。
-        updateConfig { it.copy(activeCoreName = name) }
-    }
+    fun setActiveCore(name: String) = installedCoresDelegate.setActiveCore(name)
 
     /** 删除一个已安装的核心（按名称） */
     /** 校验已安装核心；未知核心只检查原文件，绝不自动下载或覆盖。 */
