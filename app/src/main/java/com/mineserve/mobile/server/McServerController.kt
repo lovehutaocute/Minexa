@@ -1110,7 +1110,12 @@ class McServerController(
                     // 之前宿主链路是裸 execOnce（`process.waitFor()` 无超时），Quilt installer
                     // 卡在拉依赖时会永久停在「安装中」，而失败只回一句 exit=1 ——
                     // a220c47 补归因时只覆盖了 Forge/NeoForge，漏了这一条。
-                    val timeoutMinutes = INSTALLER_TIMEOUT_MS / 60_000
+                    //
+                    // 时长用「总预算」而不是 Forge 的单次上限：Quilt 这条链路不重试，
+                    // 一次失败就得重下 installer 包，所以把 20 分钟整块给一次尝试，
+                    // 与 Forge 最坏情况（900s + 重试补足）对齐，慢网用户不至于 15 分钟被砍。
+                    val quiltTimeoutMs = INSTALLER_TOTAL_BUDGET_MS
+                    val timeoutMinutes = quiltTimeoutMs / 60_000
                     val quiltOutcome: InstallerOutcome = if (isProotGuestRuntime(
                             normalizedConfig.selectedJavaVendor,
                             normalizedConfig.selectedJavaVersion
@@ -1133,7 +1138,7 @@ class McServerController(
                                 "exec ${profile.guestJavaBinaryCandidates.first()} " +
                                 "-Djava.io.tmpdir=/tmp \$TSARGS -jar '$guestJar' " +
                                 "install server '${normalizedConfig.mcVersion}' --install-dir=${TermuxRuntime.GUEST_SERVER_DIR} --download-server",
-                            timeoutMs = INSTALLER_TIMEOUT_MS,
+                            timeoutMs = quiltTimeoutMs,
                             profile = profile
                         )
                         val tailAfter = termux.lastExecTail()
@@ -1157,12 +1162,12 @@ class McServerController(
                                 "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
                                 "--install-dir=${serverDir.absolutePath}", "--download-server"
                             ),
-                            timeoutMs = INSTALLER_TIMEOUT_MS
+                            timeoutMs = quiltTimeoutMs
                         )
                         InstallerOutcome(result.code, result.tail, timeoutMinutes)
                     } else {
                         val result = termux.execOnceWithTimeoutCapture(
-                            INSTALLER_TIMEOUT_MS,
+                            quiltTimeoutMs,
                             "java", "-Djava.io.tmpdir=${installerTempDir.absolutePath}",
                             *termux.installerTrustStoreProps(normalizedConfig.selectedJavaVersion),
                             "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,

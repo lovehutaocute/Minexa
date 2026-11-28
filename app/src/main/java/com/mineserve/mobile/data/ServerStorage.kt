@@ -239,4 +239,24 @@ object ServerStorage {
         if (!dir.isDirectory) return false
         return !containsAnyFile(dir)
     }
+
+    /**
+     * 目录是不是「下载到一半被系统杀掉」留下的空壳。
+     *
+     * 多线程下载器会写 `server.jar.partmeta` + `server.jar.part<offset>`。正常失败由
+     * 下载方 catch 掉并删目录；但**进程被杀**（后台被回收、用户划掉 App）时那段 catch
+     * 不会执行，分片就留在磁盘上。而 [containsAnyFile] 只判「有没有文件」，这种目录
+     * 会被登记成一台 Unknown 核心，用户点启动才看到「启动文件缺失」。
+     *
+     * 判据刻意收紧：根目录有 `*.partmeta`，且**没有任何** `*.jar` / `*.phar`。
+     * 用户自己拖进来的整合包不会被误判（它们至少有 jar）。
+     */
+    fun looksLikeInterruptedDownload(dir: File): Boolean {
+        if (!dir.isDirectory) return false
+        val children = dir.listFiles() ?: return false
+        if (children.none { it.isFile && it.name.endsWith(".partmeta") }) return false
+        return children.none {
+            it.isFile && (it.name.endsWith(".jar") || it.name.endsWith(".phar"))
+        }
+    }
 }
