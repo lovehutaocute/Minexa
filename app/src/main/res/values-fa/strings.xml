@@ -2431,6 +2431,7 @@
     <string name="dl2_not_ready">محيط آماده نیست</string>
     <string name="dl2_target_hint">در پوشهٔ ذخیره‌سازی مشترک، یک پوشه برای هر هسته</string>
     <string name="dl2_versions_count">%1$d نسخهٔ موجود</string>
+    <string name="dl2_versions_fallback">شبکه در دسترس نیست؛ فهرست جایگزین داخلی نمایش داده می‌شود و ممکن است به‌روز نباشد</string>
     <string name="dl2_name_ph">نام هسته، مثلاً Survival-1.20.4</string>
     <string name="dl_bds_short_warning">نیازمند PRoot + box64</string>
 

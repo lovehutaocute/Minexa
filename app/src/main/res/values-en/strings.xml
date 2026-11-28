@@ -2459,6 +2459,7 @@
     <string name="dl2_not_ready">Env. not ready</string>
     <string name="dl2_target_hint">Saved to the shared storage folder, one folder per core</string>
     <string name="dl2_versions_count">%1$d versions available</string>
+    <string name="dl2_versions_fallback">Network unavailable — showing a built-in fallback list, which may not be up to date</string>
     <string name="dl2_name_ph">Core name, e.g. Survival-1.20.4</string>
     <string name="dl_bds_short_warning">Needs PRoot + box64</string>
 

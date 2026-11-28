@@ -2475,6 +2475,7 @@
     <string name="dl2_not_ready">環境未就緒</string>
     <string name="dl2_target_hint">儲存到統一儲存目錄，每個核心獨立資料夾</string>
     <string name="dl2_versions_count">共 %1$d 個可選版本</string>
+    <string name="dl2_versions_fallback">網路不可用，以下為內建備援清單，可能不是最新版本</string>
     <string name="dl2_name_ph">核心名稱，如 生存服-1.20.4</string>
     <string name="dl_bds_short_warning">需 PRoot + box64 轉譯</string>
 

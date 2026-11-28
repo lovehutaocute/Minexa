@@ -2148,6 +2148,9 @@ class McViewModel(
     /** 可用版本列表（从 API 获取，供 DownloadScreen 选择） */
     val availableVersions: StateFlow<List<String>> get() = coreVersionsDelegate.availableVersions
 
+    /** 当前版本列表是否为接口失败后的内置兜底（UI 需要明确告知用户） */
+    val versionsAreFallback: StateFlow<Boolean> get() = coreVersionsDelegate.versionsAreFallback
+
     val versionHints: StateFlow<Map<String, String?>> get() = coreVersionsDelegate.versionHints
 
     fun supportedGameVersion(coreVersion: String): String? = coreVersionsDelegate.supportedGameVersion(coreVersion)
@@ -2174,7 +2177,14 @@ class McViewModel(
     data class DownloadProgress(
         val downloadedBytes: Long = 0L,
         val totalBytes: Long = -1L,
-        val speedBytesPerSec: Long = 0L
+        val speedBytesPerSec: Long = 0L,
+        /**
+         * 当前阶段的人话描述，如「依赖库 12/70」。
+         *
+         * installer 阶段没有字节进度：主包已经下完，进度条会停在 100% 不动，
+         * 用户看到的是「卡住了」。给一句阶段文本，比一个静止的百分比有用得多。
+         */
+        val phase: String = ""
     ) {
         /** 速度的格式化文本，如 "2.35 MB/s" 或 "128 KB/s" */
         val speedText: String

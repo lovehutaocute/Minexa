@@ -42,6 +42,15 @@ internal class CoreVersionsDelegate(
     val isLoadingVersions: StateFlow<Boolean> = _isLoadingVersions.asStateFlow()
 
     /**
+     * 最近一次列表是否来自内置兜底。
+     *
+     * 只在「列表非空且每项都标了兜底」时为 true —— 空列表另有「获取失败」提示，
+     * 两者同时出现会互相矛盾。
+     */
+    private val _versionsAreFallback = MutableStateFlow(false)
+    val versionsAreFallback: StateFlow<Boolean> = _versionsAreFallback.asStateFlow()
+
+    /**
      * 加载指定核心的可用版本列表。
      *
      * 除了拉列表，还负责把「当前选中版本」校正到该核心真实存在的版本上 ——
@@ -59,6 +68,7 @@ internal class CoreVersionsDelegate(
         }
         val token = ++versionsLoadToken
         _availableVersions.value = emptyList()
+        _versionsAreFallback.value = false
         _versionHints.value = emptyMap()
         _isLoadingVersions.value = true
         scope.launch {
@@ -67,6 +77,7 @@ internal class CoreVersionsDelegate(
                 if (token != versionsLoadToken) return@launch
                 val versions = options.map { it.version }
                 _availableVersions.value = versions
+                _versionsAreFallback.value = versions.isNotEmpty() && options.all { it.isFallback }
                 _versionHints.value = options.associate { it.version to it.supportedGameVersion }
                 lastLoadedVersionsCore = core
                 reconcileSelectedVersion(core, versions)
@@ -74,6 +85,7 @@ internal class CoreVersionsDelegate(
                 if (token != versionsLoadToken) return@launch
                 reportError(str(R.string.s294, e.message))
                 _availableVersions.value = emptyList()
+                _versionsAreFallback.value = false
                 _versionHints.value = emptyMap()
                 // 记下失败的核心：否则重试会被缓存判断拦掉（列表为空时不会命中缓存，
                 // 这里显式复位是为了让 lastVersionFamily 的「首次加载」判定保持准确）

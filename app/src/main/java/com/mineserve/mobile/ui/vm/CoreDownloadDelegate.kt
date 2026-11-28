@@ -53,9 +53,19 @@ internal class CoreDownloadDelegate(
         _downloadProgress.value = DownloadProgress()
         scope.launch {
             try {
-                controller.downloadCore(config.value, customName.trim()) { downloaded, total, speed ->
-                    _downloadProgress.value = DownloadProgress(downloaded, total, speed)
-                }
+                // 阶段文本与字节进度分开走：installer 阶段没有字节可报，只更新 phase。
+                var phase = ""
+                controller.downloadCore(
+                    config.value,
+                    customName.trim(),
+                    { downloaded, total, speed ->
+                        _downloadProgress.value = DownloadProgress(downloaded, total, speed, phase)
+                    },
+                    { p ->
+                        phase = p
+                        _downloadProgress.value = _downloadProgress.value.copy(phase = p)
+                    }
+                )
                 reportMessage(str(R.string.s296, customName.trim()))
             } catch (e: Exception) {
                 reportError(str(R.string.s297, e.message))

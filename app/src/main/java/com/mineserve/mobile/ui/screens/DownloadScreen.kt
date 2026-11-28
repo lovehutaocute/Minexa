@@ -173,6 +173,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
     val availableVersions by vm.availableVersions.collectAsState()
     val versionHints by vm.versionHints.collectAsState()
     val isLoadingVersions by vm.isLoadingVersions.collectAsState()
+    val versionsAreFallback by vm.versionsAreFallback.collectAsState()
     val isDownloadingCore by vm.isDownloadingCore.collectAsState()
     // 性能修改理由（2026-11-15）：这里**不再** collect downloadProgress / consolePreviewLines /
     // importProgress。三者都是高频流（进度每 500ms 回调一次，预览每 750ms 且下载日志持续推进，
@@ -316,6 +317,7 @@ fun DownloadScreen(vm: McViewModel, onShowDownloadHelp: () -> Unit = {}) {
             selected = config.mcVersion,
             usesCoreVersion = usesCoreVersion,
             loading = isLoadingVersions,
+            fallback = versionsAreFallback,
             customVersion = customVersion,
             onCustomVersionChange = { customVersion = it },
             onPick = { vm.setMcVersion(it) },
@@ -1073,7 +1075,8 @@ private fun DownloadProgressBlock(vm: McViewModel) {
         percent = progress.percent,
         speedText = progress.speedText,
         downloadedText = progress.downloadedText,
-        totalText = progress.totalText
+        totalText = progress.totalText,
+        phase = progress.phase
     )
 }
 
@@ -1083,12 +1086,20 @@ private fun DownloadProgressContent(
     percent: Int,
     speedText: String,
     downloadedText: String,
-    totalText: String
+    totalText: String,
+    phase: String = ""
 ) {
     Column {
         Row(verticalAlignment = Alignment.CenterVertically) {
+            // 有阶段文本时优先显示它：此时百分比不动（installer 没有字节进度），
+            // 「依赖库 12/70 · 17%」比一个静止的 100% 更能说明还在干活。
+            val label = if (phase.isBlank()) {
+                stringResource(R.string.s485) + " " + percent + "%"
+            } else {
+                phase + " · " + percent + "%"
+            }
             Text(
-                stringResource(R.string.s485) + " " + percent + "%",
+                label,
                 color = Indigo,
                 fontSize = 10.sp,
                 fontWeight = FontWeight.Bold
@@ -1404,6 +1415,7 @@ private fun VersionSheet(
     selected: String,
     usesCoreVersion: Boolean,
     loading: Boolean,
+    fallback: Boolean,
     customVersion: String,
     onCustomVersionChange: (String) -> Unit,
     onPick: (String) -> Unit,
@@ -1457,6 +1469,16 @@ private fun VersionSheet(
                 TextButton(onClick = close) {
                     Text(stringResource(R.string.s402), color = Muted, fontSize = 12.sp)
                 }
+            }
+            // 兜底列表必须明示：否则用户会以为这就是官方全集，选到不存在的版本后
+            // 在下载阶段吃 404，而报错位置离真因（接口挂了）很远。
+            if (fallback && versions.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    stringResource(R.string.dl2_versions_fallback),
+                    color = warnInk(),
+                    fontSize = 11.sp
+                )
             }
             Spacer(Modifier.height(8.dp))
 
