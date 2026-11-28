@@ -103,6 +103,7 @@ import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
 import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PlayerPresenceDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
+import com.mineserve.mobile.ui.vm.PluginManagementDelegate
 import com.mineserve.mobile.ui.vm.RuntimeEnvironmentDelegate
 import com.mineserve.mobile.ui.vm.ScheduleSettingsDelegate
 import com.mineserve.mobile.ui.vm.RuntimeKinds
@@ -1539,9 +1540,21 @@ class McViewModel(
     val curatedPlugins: List<PluginManager.CuratedPlugin>
         get() = pluginManager.curatedPlugins
 
+    private val pluginManagementDelegate by lazy {
+        PluginManagementDelegate(
+            app = app,
+            scope = viewModelScope,
+            pluginManager = pluginManager,
+            activeDirName = ::activeDirName,
+            serverDirFor = repo.termuxRuntime::serverDirFor,
+            requireServerStopped = ::requireServerStopped,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     /** 真实已安装插件列表 */
-    private val _installedPlugins = MutableStateFlow<List<PluginManager.InstalledPlugin>>(emptyList())
-    val installedPlugins: StateFlow<List<PluginManager.InstalledPlugin>> = _installedPlugins.asStateFlow()
+    val installedPlugins: StateFlow<List<PluginManager.InstalledPlugin>> get() = pluginManagementDelegate.installedPlugins
 
     private val modsDelegate by lazy {
         ModsDelegate(
@@ -1581,19 +1594,7 @@ class McViewModel(
     val isPluginDownloading: StateFlow<Boolean> get() = pluginDownloadsDelegate.isPluginDownloading
 
     /** 扫描当前核心的 plugins 目录 */
-    fun refreshInstalledPlugins() {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                _installedPlugins.value = pluginManager.scan(dirName)
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s213, e.message))
-            }
-        }
-    }
+    fun refreshInstalledPlugins() = pluginManagementDelegate.refreshInstalledPlugins()
 
     // ── 模组管理 ──────────────────────────────────────────────────
 
@@ -1701,74 +1702,18 @@ class McViewModel(
     fun installCuratedPlugin(curated: PluginManager.CuratedPlugin) = pluginDownloadsDelegate.installCuratedPlugin(curated)
 
     /** 从本地 Uri 上传插件 */
-    fun installPluginFromUri(uri: Uri) {
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val fileName = pluginManager.installFromUri(uri, dirName)
-                _messageFlow.tryEmit(str(R.string.s231, fileName))
-                refreshInstalledPlugins()
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s232, e.message))
-            }
-        }
-    }
+    fun installPluginFromUri(uri: Uri) = pluginManagementDelegate.installPluginFromUri(uri)
 
     /** 删除插件 */
-    fun deletePlugin(fileName: String, alsoRemoveDataDir: Boolean = false) {
-        // VM 侧兜底：运行中删除插件（尤其含 removeDataDir）会与正在加载的插件文件竞争
-        if (!requireServerStopped("删除插件")) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val ok = pluginManager.delete(fileName, dirName, alsoRemoveDataDir)
-                if (ok) {
-                    val msg = if (alsoRemoveDataDir) str(R.string.msg_deleted_with_data, fileName) else str(R.string.msg_deleted, fileName)
-                    _messageFlow.tryEmit(msg)
-                    refreshInstalledPlugins()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s235))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s236, e.message))
-            }
-        }
-    }
+    fun deletePlugin(fileName: String, alsoRemoveDataDir: Boolean = false) =
+        pluginManagementDelegate.deletePlugin(fileName, alsoRemoveDataDir)
 
     /** 切换插件启用/禁用 */
-    fun togglePluginEnabled(fileName: String) {
-        // VM 侧兜底：运行中重命名 jar 可能让服务端读到半截文件
-        if (!requireServerStopped("启用或停用插件")) return
-        val dirName = activeDirName() ?: run {
-            _errorFlow.tryEmit(str(R.string.s212))
-            return
-        }
-        viewModelScope.launch {
-            try {
-                val newName = pluginManager.toggleEnabled(fileName, dirName)
-                if (newName != null) {
-                    val action = if (newName.startsWith("-")) str(R.string.msg_disabled) else str(R.string.msg_enabled)
-                    _messageFlow.tryEmit("$action $fileName")
-                    refreshInstalledPlugins()
-                } else {
-                    _errorFlow.tryEmit(str(R.string.s239))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s240, e.message))
-            }
-        }
-    }
+    fun togglePluginEnabled(fileName: String) = pluginManagementDelegate.togglePluginEnabled(fileName)
 
     /** 判断精选插件是否已安装（用于 UI 显示徽章） */
-    fun isCuratedPluginInstalled(curated: PluginManager.CuratedPlugin): Boolean {
-        return pluginManager.isCuratedInstalled(curated, _installedPlugins.value)
-    }
+    fun isCuratedPluginInstalled(curated: PluginManager.CuratedPlugin): Boolean =
+        pluginManagementDelegate.isCuratedPluginInstalled(curated)
 
     // ── 精选插件更新检测 ──
 
@@ -1808,10 +1753,7 @@ class McViewModel(
     fun customUrlDownloadProgress(): PluginDownloadProgress? = pluginDownloadsDelegate.customUrlDownloadProgress()
 
     /** 获取当前核心的 plugins 目录路径（用于 UI 显示） */
-    fun currentPluginsPath(): String? {
-        val dirName = activeDirName() ?: return null
-        return java.io.File(repo.termuxRuntime.serverDirFor(dirName), "plugins").absolutePath
-    }
+    fun currentPluginsPath(): String? = pluginManagementDelegate.currentPluginsPath()
 
 
     /** 获取当前选用核心的 dirName，未选择时返回 null */
