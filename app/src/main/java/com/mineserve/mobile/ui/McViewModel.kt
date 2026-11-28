@@ -109,6 +109,7 @@ import com.mineserve.mobile.ui.vm.RuntimeKinds
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerExportDelegate
 import com.mineserve.mobile.ui.vm.ServerCommandDelegate
+import com.mineserve.mobile.ui.vm.ServerLifecycleDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
 import com.mineserve.mobile.ui.vm.ServerResourcesDelegate
@@ -1378,138 +1379,36 @@ class McViewModel(
 
     fun installDependencies() = baseDependenciesDelegate.installDependencies()
 
-    /**
-     * 「停止」请求是否仍在飞行中。
-     *
-     * 优雅停止可能要等十几秒（服务端要落盘），期间界面必须能区分
-     * 「还没停完」与「停完了但仍显示运行」。旧实现把这个状态放在 Composable 的
-     * 局部 `remember` 里，靠 isRunning 翻转来复位；现在停止可能**失败**（超时不强杀），
-     * isRunning 不翻转，局部态会永远卡住 —— 因此上提到 VM。
-     */
-    private val _stopInFlight = MutableStateFlow(false)
-    val stopInFlight: StateFlow<Boolean> = _stopInFlight.asStateFlow()
-
-    /** 「强制停止」请求是否仍在飞行中（强杀很快，仅用于禁用重复点击）。 */
-    private val _forceStopInFlight = MutableStateFlow(false)
-    val forceStopInFlight: StateFlow<Boolean> = _forceStopInFlight.asStateFlow()
-
-    fun startServer() {
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.s192))
-            return
-        }
-        // 运行模式由用户选择，启动前只做一致性校验：不匹配就报错，绝不替用户改选择。
-        runtimeKindMismatchMessage()?.let {
-            _errorFlow.tryEmit(it)
-            return
-        }
-        viewModelScope.launch {
-            try {
-                lastJavaCompatibilityWarning = null
-                // 阶段推进已是"只增不减"的无状态规则，无需清理任何防抖残留；
-                // 新一次启动的阶段由 updateServerState 里显式重置为 PreparingEnvironment。
-                _lastRunLog.value = ""
-                // 从点下按钮这一刻就进入「启动在途」：下面的重读配置、端口探测也是耗时操作，
-                // 期间看门狗探不到进程，不能让它把状态改回已停止。
-                repo.termuxRuntime.markStartInFlight()
-                // 启动前重读配置文件里的端口：用户可能刚在文件管理器里改过 server-port
-                // （或 pnx.yml 的 settings.port），而 [McConfig.localPort] 还停在旧值。
-                // 不重读的话，PNX / Allay 的启动链路会拿旧值**覆写**配置文件里的新端口，
-                // 等于用户改了白改；地址栏与穿透也会指向服务端并不监听的端口。
-                refreshServerPropertiesNow()
-                val current = config.value
-                // localPort 是「镜像字段」，以配置文件为准（[realServerPort] 现算，不经缓存）。
-                val detectedPort = realServerPort()
-                if (detectedPort != current.localPort) {
-                    repo.termuxRuntime.emitLog(
-                        "[startMc] 配置文件端口 $detectedPort 与本地记录 ${current.localPort} 不一致，本次按配置文件启动"
-                    )
-                }
-                val startConfig = current.copy(localPort = detectedPort)
-                repo.updateServerState {
-                    it.copy(
-                        isRunning = true,
-                        runningSinceMs = 0L,
-                        startupPhase = StartupPhase.PreparingEnvironment
-                    )
-                }
-                _messageFlow.tryEmit(str(R.string.s196))
-                controller.start(startConfig, userInitiated = true)
-                // 准备阶段被用户取消时 start() 会直接返回（此时状态已被复位为未运行），
-                // 不能再把保活服务拉起来——否则会出现「没在跑却常驻前台服务」。
-                if (repo.serverState.value.isRunning) {
-                    startKeepAliveService()
-                }
-            } catch (e: Exception) {
-                // 启动失败：撤掉在途保护，让看门狗能如实把状态落回已停止。
-                repo.termuxRuntime.clearStartInFlight()
-                repo.updateServerState {
-                    it.copy(isRunning = false, runningSinceMs = 0L, startupPhase = StartupPhase.Failed)
-                }
-                repo.termuxRuntime.emitLog("[startMc] 启动失败: ${e.message}")
-                showStartupFailureReport(e)
-                _errorFlow.tryEmit(str(R.string.s197, e.message))
-            }
-        }
+    private val serverLifecycleDelegate by lazy {
+        ServerLifecycleDelegate(
+            app = app,
+            scope = viewModelScope,
+            config = config,
+            isBootstrapped = isBootstrapped,
+            repo = repo,
+            controller = controller,
+            backupManager = backupManager,
+            activeDirName = ::activeDirName,
+            runtimeKindMismatchMessage = ::runtimeKindMismatchMessage,
+            refreshServerPropertiesNow = ::refreshServerPropertiesNow,
+            realServerPort = ::realServerPort,
+            clearLastRunLog = { _lastRunLog.value = "" },
+            resetJavaCompatibilityWarning = { lastJavaCompatibilityWarning = null },
+            showStartupFailureReport = ::showStartupFailureReport,
+            startKeepAliveService = ::startKeepAliveService,
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
 
-    /**
-     * 停止服务器（优雅停止，不强杀）。
-     *
-     * 停止期间 `stopInFlight = true`，界面显示「停止中…」；若服务端在宽限期内
-     * 仍未退出，则**保持运行态**并提示用户可改用「强制停止」——
-     * 是否要承担未落盘数据的风险由用户决定（见 [forceStopServer]）。
-     */
-    fun stopServer() {
-        if (_stopInFlight.value) return
-        _stopInFlight.value = true
-        viewModelScope.launch {
-            try {
-                val stopped = controller.stopGracefully()
-                if (!stopped) {
-                    _errorFlow.tryEmit(str(R.string.dash_stop_timeout_hint))
-                    return@launch
-                }
-                _messageFlow.tryEmit(str(R.string.s198))
-                if (config.value.stopAutoBackup) {
-                    val dirName = activeDirName() ?: return@launch
-                    val path = withContext(Dispatchers.IO) {
-                        backupManager.backupWorldToExternal(
-                            dirName, BackupManager.BackupOrigin.Automatic, config.value.maxSnapshots
-                        )
-                    }
-                    if (path != null) _messageFlow.tryEmit(str(R.string.msg_stop_backup_done))
-                }
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s199, e.message))
-            } finally {
-                _stopInFlight.value = false
-            }
-        }
-    }
+    val stopInFlight: StateFlow<Boolean> get() = serverLifecycleDelegate.stopInFlight
+    val forceStopInFlight: StateFlow<Boolean> get() = serverLifecycleDelegate.forceStopInFlight
 
-    /**
-     * 强制停止服务器：立即结束进程，不等待世界落盘。
-     *
-     * 调用方必须先拿到用户的显式确认（UI 上是警告弹窗）。这里不再做二次询问，
-     * 因为「用户已经点过确认」这件事只有 UI 知道。
-     */
-    fun forceStopServer() {
-        if (_forceStopInFlight.value) return
-        _forceStopInFlight.value = true
-        viewModelScope.launch {
-            try {
-                controller.forceStop()
-                _messageFlow.tryEmit(str(R.string.dash_force_stop_done))
-            } catch (e: Exception) {
-                _errorFlow.tryEmit(str(R.string.s199, e.message))
-            } finally {
-                _forceStopInFlight.value = false
-                // 强杀也会让正在等待的优雅停止立刻结束（进程没了），复位以免界面卡在「停止中…」
-                _stopInFlight.value = false
-            }
-        }
-    }
+    fun startServer() = serverLifecycleDelegate.startServer()
+
+    fun stopServer() = serverLifecycleDelegate.stopServer()
+
+    fun forceStopServer() = serverLifecycleDelegate.forceStopServer()
 
     // ── 内网穿透 ──────────────────────────────────────────────
     //
