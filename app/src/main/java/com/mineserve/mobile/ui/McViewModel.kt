@@ -261,12 +261,13 @@ class McViewModel(
 
     val bdsVersionsState: StateFlow<BdsVersionListState> get() = bdsCoreUpdateDelegate.bdsVersionsState
 
+    /** 当前激活核心的单一配置快照；多个读取点共用，避免重复且不一致地解析选择项。 */
+    private fun activeInstalledCore(config: McConfig): InstalledCore? =
+        config.installedCores.firstOrNull { it.name == config.activeCoreName }
+
     /** 当前选中的服务器若为官方 BDS，返回它的登记信息 */
-    private fun activeBdsCore(): InstalledCore? {
-        val cfg = config.value
-        val core = cfg.installedCores.firstOrNull { it.name == cfg.activeCoreName } ?: return null
-        return core.takeIf { it.core == ServerCore.Bds }
-    }
+    private fun activeBdsCore(): InstalledCore? =
+        activeInstalledCore(config.value)?.takeIf { it.core == ServerCore.Bds }
 
     /**
      * 检测官方 BDS 版本（当前 / 稳定 / Preview）。
@@ -1441,8 +1442,7 @@ class McViewModel(
     /** 当前激活核心的 MC 版本（用于版本匹配判断） */
     private fun currentServerVersion(): String {
         val cfg = config.value
-        return cfg.installedCores.find { it.name == cfg.activeCoreName }?.version
-            ?: cfg.mcVersion
+        return activeInstalledCore(cfg)?.version ?: cfg.mcVersion
     }
 
     /** 检测已安装插件冲突（同名 / 同主类） */
@@ -1539,15 +1539,11 @@ class McViewModel(
 
 
     /** 获取当前选用核心的 dirName，未选择时返回 null */
-    private fun activeDirName(): String? {
-        return config.value.installedCores.find { it.name == config.value.activeCoreName }?.dirName
-    }
+    private fun activeDirName(): String? = activeInstalledCore(config.value)?.dirName
 
     /** 当前核心是否 Paper（含分叉核心均支持 tps 指令）。 */
     private fun isActiveCorePaper(): Boolean =
-        config.value.installedCores
-            .firstOrNull { it.name == config.value.activeCoreName }
-            ?.core == ServerCore.Paper
+        activeInstalledCore(config.value)?.core == ServerCore.Paper
 
     private val externalBackupsDelegate by lazy {
         ExternalBackupsDelegate(
