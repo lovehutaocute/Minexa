@@ -72,7 +72,7 @@ import com.mineserve.mobile.ui.vm.ConsoleEntryDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLineDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
-import com.mineserve.mobile.ui.vm.CoreSelection
+import com.mineserve.mobile.ui.vm.CoreSelectionDelegate
 import com.mineserve.mobile.ui.vm.DownloadMirrorDelegate
 import com.mineserve.mobile.ui.vm.DownloadPrefsDelegate
 import com.mineserve.mobile.ui.vm.EventNotifyDelegate
@@ -1027,6 +1027,21 @@ class McViewModel(
     /** 重装依赖 = 先删除再安装 */
     fun reinstallDependencies() = baseDependenciesDelegate.reinstallDependencies()
 
+    private val coreSelectionDelegate by lazy {
+        CoreSelectionDelegate(
+            config = config,
+            updateConfig = ::updateConfig,
+            showVersionReselectMessage = { core ->
+                _messageFlow.tryEmit(str(R.string.msg_version_reselect, core.displayName))
+            },
+            showVersionCorrectedMessage = { core, trimmed, normalized ->
+                _messageFlow.tryEmit(
+                    str(R.string.msg_version_corrected, core.displayName, trimmed, normalized)
+                )
+            }
+        )
+    }
+
     /**
      * 选择服务端核心。
      *
@@ -1036,30 +1051,9 @@ class McViewModel(
      * 服务端与预期不符，排查成本很高。清空后界面上版本位显示「请选择版本」，
      * 下载按钮随之禁用，直到用户在下拉里重新挑一个。
      */
-    fun selectCore(core: ServerCore) {
-        val previous = config.value.selectedCore
-        val coreChanged = previous != core
-        updateConfig {
-            CoreSelection.select(it, core, coreChanged)
-        }
-        // 版本号已被清空，必须让用户重新选：给一句明确提示，而不是让他对着
-        // 「请选择版本」猜是不是加载失败。
-        // BDS 例外：它只有官方当前构建这一项，界面上没有可选版本行，
-        // 提示「请重新选择版本」等于把用户带进一个点不动的死胡同。
-        if (core != ServerCore.Bds) {
-            _messageFlow.tryEmit(str(R.string.msg_version_reselect, core.displayName))
-        }
-    }
+    fun selectCore(core: ServerCore) = coreSelectionDelegate.selectCore(core)
 
-    fun setMcVersion(version: String) =
-        CoreSelection.setVersion(version, config.value.selectedCore) { core, trimmed, normalized ->
-            updateConfig { it.copy(mcVersion = normalized) }
-            // 版本纠正提示移到 updateConfig 之后：底层 _config.updateAndGet 是 CAS 循环，
-            // transform 失败会被重放，副作用写在里面会在并发写配置时重复弹窗，也破坏重放语义。
-            if (normalized != trimmed) {
-                _messageFlow.tryEmit(str(R.string.msg_version_corrected, core.displayName, trimmed, normalized))
-            }
-        }
+    fun setMcVersion(version: String) = coreSelectionDelegate.setMcVersion(version)
 
     fun setLocalPort(port: Int) = updateConfig { it.copy(localPort = port) }
     fun setDomain(d: String) = updateConfig { it.copy(customDomain = d) }
