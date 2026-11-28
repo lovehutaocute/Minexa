@@ -8,9 +8,29 @@ import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.RuntimeKind
 import com.mineserve.mobile.data.ServerCore
+import kotlinx.coroutines.flow.StateFlow
 
-internal object RuntimeKinds {
-    fun mismatchMessage(config: McConfig, str: (Int, List<Any?>) -> String): String? {
+internal class RuntimeSelectionDelegate(
+    private val config: StateFlow<McConfig>,
+    private val updateConfig: ((McConfig) -> McConfig) -> Unit,
+    private val formatMessage: (Int, List<Any?>) -> String
+) {
+    fun setPhpVersion(version: PhpVersion) = updateConfig { it.copy(selectedPhpVersion = version) }
+
+    fun setRuntimeKind(kind: RuntimeKind) = updateConfig { withRuntimeKind(it, kind) }
+
+    fun setJavaRuntime(runtime: JavaRuntime) = updateConfig { withJavaRuntime(it, runtime) }
+
+    fun applyRuntimeSelection(
+        kind: RuntimeKind,
+        javaRuntime: JavaRuntime,
+        phpVersion: PhpVersion,
+        prootDistro: ProotDistro?
+    ) = updateConfig { applySelection(it, kind, javaRuntime, phpVersion, prootDistro) }
+
+    fun runtimeKindMismatchMessage(): String? = mismatchMessage(config.value, formatMessage)
+
+    private fun mismatchMessage(config: McConfig, format: (Int, List<Any?>) -> String): String? {
         val core = config.installedCores.firstOrNull { it.name == config.activeCoreName } ?: return null
         val required = when (core.core) {
             ServerCore.PocketMine -> RuntimeKind.Php
@@ -23,27 +43,25 @@ internal object RuntimeKinds {
         }
         if (config.runtimeKind == required) return null
         val requiredLabel = when (required) {
-            RuntimeKind.Java -> str(R.string.dash_runtime_java, emptyList())
-            RuntimeKind.Php -> str(R.string.dash_runtime_php, emptyList())
+            RuntimeKind.Java -> format(R.string.dash_runtime_java, emptyList())
+            RuntimeKind.Php -> format(R.string.dash_runtime_php, emptyList())
         }
-        return str(R.string.err_runtime_kind_mismatch, listOf(core.name, requiredLabel))
+        return format(R.string.err_runtime_kind_mismatch, listOf(core.name, requiredLabel))
     }
 
-    fun withRuntimeKind(config: McConfig, kind: RuntimeKind): McConfig {
-        return when (kind) {
-            RuntimeKind.Java -> {
-                // Java 模式下 selectedJavaVersion 本身就是 JavaVersion，天然合法，
-                // 只需保证 runtimeKind 落位。
-                config.copy(runtimeKind = RuntimeKind.Java)
-            }
-            RuntimeKind.Php -> {
-                val valid = config.selectedPhpVersion.takeIf { it in PhpVersion.entries } ?: PhpVersion.Default
-                config.copy(runtimeKind = RuntimeKind.Php, selectedPhpVersion = valid)
-            }
+    private fun withRuntimeKind(config: McConfig, kind: RuntimeKind): McConfig = when (kind) {
+        RuntimeKind.Java -> {
+            // Java 模式下 selectedJavaVersion 本身就是 JavaVersion，天然合法，
+            // 只需保证 runtimeKind 落位。
+            config.copy(runtimeKind = RuntimeKind.Java)
+        }
+        RuntimeKind.Php -> {
+            val valid = config.selectedPhpVersion.takeIf { it in PhpVersion.entries } ?: PhpVersion.Default
+            config.copy(runtimeKind = RuntimeKind.Php, selectedPhpVersion = valid)
         }
     }
 
-    fun withJavaRuntime(config: McConfig, runtime: JavaRuntime): McConfig {
+    private fun withJavaRuntime(config: McConfig, runtime: JavaRuntime): McConfig {
         // Proot 来源的版本必须落在**当前发行版**提供的范围内。界面上点不到
         // 置灰项（见 JavaRuntimeGroupList），这里是第二道保险：
         // 写进 config 的组合一旦装不上，用户要到启动失败时才会发现。
@@ -57,7 +75,7 @@ internal object RuntimeKinds {
         return config.copy(selectedJavaVendor = runtime.vendor, selectedJavaVersion = version)
     }
 
-    fun applySelection(
+    private fun applySelection(
         config: McConfig,
         kind: RuntimeKind,
         javaRuntime: JavaRuntime,

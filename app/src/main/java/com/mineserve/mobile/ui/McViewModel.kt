@@ -105,7 +105,7 @@ import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.PluginManagementDelegate
 import com.mineserve.mobile.ui.vm.RuntimeEnvironmentDelegate
 import com.mineserve.mobile.ui.vm.ScheduleSettingsDelegate
-import com.mineserve.mobile.ui.vm.RuntimeKinds
+import com.mineserve.mobile.ui.vm.RuntimeSelectionDelegate
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerExportDelegate
 import com.mineserve.mobile.ui.vm.ServerCommandDelegate
@@ -906,8 +906,16 @@ class McViewModel(
 
     fun refreshPhp() = phpRuntimeDelegate.refreshPhp()
 
+    private val runtimeSelectionDelegate by lazy {
+        RuntimeSelectionDelegate(
+            config = config,
+            updateConfig = ::updateConfig,
+            formatMessage = { id, args -> str(id, *args.toTypedArray()) }
+        )
+    }
+
     /** 选择 PHP 版本（依赖管理页与启动控制卡片共用） */
-    fun setPhpVersion(version: PhpVersion) = updateConfig { it.copy(selectedPhpVersion = version) }
+    fun setPhpVersion(version: PhpVersion) = runtimeSelectionDelegate.setPhpVersion(version)
 
     /** 安装指定 PHP 运行环境（~10MB，含 PMMP 必需扩展） */
     fun installPhp(version: PhpVersion = config.value.selectedPhpVersion) = phpRuntimeDelegate.installPhp(version)
@@ -928,8 +936,7 @@ class McViewModel(
      * 立即写入 config（UI 会自动重组刷新运行环境按钮与版本列表，无需刷新页面），
      * 并确保当前所选版本属于该模式 —— 不属于时回退到该模式的默认版本。
      */
-    fun setRuntimeKind(kind: RuntimeKind) =
-        updateConfig { cfg -> RuntimeKinds.withRuntimeKind(cfg, kind) }
+    fun setRuntimeKind(kind: RuntimeKind) = runtimeSelectionDelegate.setRuntimeKind(kind)
 
     /**
      * 切换运行环境（来源 + 版本），见 [JavaRuntime]。
@@ -941,8 +948,7 @@ class McViewModel(
      * 来源与版本必须一次写入：分两次 set 会因为 config 落盘的 300ms debounce 撞在一起，
      * 第二次读到的还是旧快照（与 [applyRuntimeSelection] 注释里那个竞态同源）。
      */
-    fun setJavaRuntime(runtime: JavaRuntime) =
-        updateConfig { cfg -> RuntimeKinds.withJavaRuntime(cfg, runtime) }
+    fun setJavaRuntime(runtime: JavaRuntime) = runtimeSelectionDelegate.setJavaRuntime(runtime)
 
     /**
      * 兼容层依赖的 `libipv6fix.so` 是否真的随 APK 打包。
@@ -971,19 +977,14 @@ class McViewModel(
         javaRuntime: JavaRuntime,
         phpVersion: PhpVersion,
         prootDistro: ProotDistro? = null
-    ) {
-        updateConfig { cfg ->
-            RuntimeKinds.applySelection(cfg, kind, javaRuntime, phpVersion, prootDistro)
-        }
-    }
+    ) = runtimeSelectionDelegate.applyRuntimeSelection(kind, javaRuntime, phpVersion, prootDistro)
 
     /**
      * 校验运行模式与当前核心是否匹配，返回不匹配时的提示文案，匹配则返回 null。
      *
      * 只用于启动前提醒，**不修改**用户的任何选择 —— 用户选择优先。
      */
-    fun runtimeKindMismatchMessage(): String? =
-        RuntimeKinds.mismatchMessage(config.value) { id, args -> str(id, *args.toTypedArray()) }
+    fun runtimeKindMismatchMessage(): String? = runtimeSelectionDelegate.runtimeKindMismatchMessage()
 
     fun setJavaCardAtBottom(atBottom: Boolean) =
         updateConfig { it.copy(javaCardAtBottom = atBottom) }
