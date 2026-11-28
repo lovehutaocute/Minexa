@@ -42,6 +42,20 @@ internal class JavaAddonsDelegate(
     private val _resourcePackIssues = MutableStateFlow<List<String>>(emptyList())
     val resourcePackIssues: StateFlow<List<String>> = _resourcePackIssues.asStateFlow()
 
+    /** 只刷新当前 Java 世界的维度目录。 */
+    fun refreshJavaDimensions() {
+        val dirName = activeDirName() ?: return
+        if (!isJavaCore()) return
+        scope.launch {
+            val world = withContext(Dispatchers.IO) {
+                runCatching { worldManager.readLevelName(dirName) }.getOrNull()
+            } ?: return@launch
+            setJavaDimensions(withContext(Dispatchers.IO) {
+                runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
+            })
+        }
+    }
+
     /** 读 Java 侧的世界附加内容（数据包 + 资源包 + 维度）。 */
     fun loadJavaAddons() {
         refreshActiveCore()

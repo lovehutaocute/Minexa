@@ -2068,24 +2068,8 @@ class McViewModel(
     /** 当前世界可单独重置的维度。 */
     val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> get() = worldListDelegate.javaDimensions
 
-    /**
-     * 只刷新「维度」这一块（数据包 / 资源包不动）。
-     *
-     * 抽出来是因为它必须跟着**当前世界**走：只靠 [loadJavaAddons] 的
-     * `LaunchedEffect(isBootstrapped)` 触发，切世界后维度列表会残留上一个世界的
-     * 下界 / 末地，露出一个点了没反应的「重置维度」按钮（真机实测）。
-     */
-    fun refreshJavaDimensions() {
-        val dirName = activeDirName() ?: return
-        if (!isJavaCore()) return
-        viewModelScope.launch {
-            val world = withContext(Dispatchers.IO) { runCatching { worldManager.readLevelName(dirName) }.getOrNull() }
-                ?: return@launch
-            worldListDelegate.setJavaDimensions(withContext(Dispatchers.IO) {
-                runCatching { worldManager.javaDimensionDirs(dirName, world) }.getOrDefault(emptyList())
-            })
-        }
-    }
+    /** 只刷新「维度」这一块（数据包 / 资源包不动）。 */
+    fun refreshJavaDimensions() = javaAddonsDelegate.refreshJavaDimensions()
 
     /** 读 Java 侧的世界附加内容（数据包 + 资源包 + 维度）。 */
     fun loadJavaAddons() = javaAddonsDelegate.loadJavaAddons()
