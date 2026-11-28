@@ -95,6 +95,14 @@ class TermuxRuntime(context: Context) {
     /** 应用侧日志落盘队列上限：异常刷屏时丢弃多余条目，避免内存膨胀。 */
     private val APP_LOG_QUEUE_LIMIT = 4096
 
+    /**
+     * 单次安装现场最多保留的行数。
+     *
+     * installer 正常输出几百行；异常栈刷屏时可能上万。保留尾部即可覆盖真正的失败原因，
+     * 4000 行 ≈ 400KB，一次性写盘不会造成卡顿。
+     */
+    private val INSTALL_CAPTURE_MAX_LINES = 4000
+
     /** 库缺失只提示一次，避免每次启动命令都刷日志。 */
     private val heapTagFixWarned = java.util.concurrent.atomic.AtomicBoolean(false)
 
@@ -360,11 +368,53 @@ class TermuxRuntime(context: Context) {
     }
 
     private fun persistAppLog(line: String) {
+        captureInstallLine(line)
         // 只留诊断价值高的行；其余（例如进度百分比）不入队
         if (APP_LOG_KEEP_MARKERS.none { line.contains(it) }) return
         startAppLogWriterIfNeeded()
         // offer 不阻塞：队列满时直接丢弃，绝不反压调用方
         appLogQueue.offer(line)
+    }
+
+    // ── 安装/下载失败现场（仅内存，失败时才落盘） ─────────────────────
+    //
+    // 为什么单独留一个缓冲：`mineserve.log` 按关键字过滤，installer 的诊断行
+    // （`[install]` 段落、HTTPS 异常栈、依赖库逐个失败）大多不在过滤表里；
+    // 用户反馈「装不上」时又只有控制台可翻，翻不全也导不出来。
+    // 这里把整段时间窗内的**全部**行留一份，失败时一次性写成独立文件。
+
+    private val installCaptureLock = Any()
+    private var installCaptureDepth = 0
+    private var installCaptureLines: ArrayDeque<String>? = null
+
+    /** 开启一段安装日志捕获；可嵌套，只有最外层负责清空与导出。 */
+    fun beginInstallCapture() {
+        synchronized(installCaptureLock) {
+            if (installCaptureDepth++ == 0) installCaptureLines = ArrayDeque()
+        }
+    }
+
+    /**
+     * 结束捕获并取出本段全部日志。
+     *
+     * 只有最外层调用会拿到内容（内层返回空列表），避免嵌套调用把同一段日志导出两次。
+     */
+    fun endInstallCapture(): List<String> = synchronized(installCaptureLock) {
+        if (installCaptureDepth == 0) return emptyList()
+        installCaptureDepth--
+        if (installCaptureDepth > 0) return emptyList()
+        val out = installCaptureLines?.toList().orEmpty()
+        installCaptureLines = null
+        out
+    }
+
+    private fun captureInstallLine(line: String) {
+        synchronized(installCaptureLock) {
+            val buffer = installCaptureLines ?: return
+            // 上限保护：异常刷屏时不能把内存吃光；保留尾部（真正的原因在最后）
+            if (buffer.size >= INSTALL_CAPTURE_MAX_LINES) buffer.removeFirst()
+            buffer.addLast(line)
+        }
     }
 
     private fun startAppLogWriterIfNeeded() {
@@ -2171,10 +2221,19 @@ class TermuxRuntime(context: Context) {
     ): Int {
         val guestDir = GUEST_SERVER_DIR
         val guestJar = "$guestDir/${File(jarPath).relativeTo(serverDir).invariantSeparatorsPath}"
+        val guestJava = profile.guestJavaBinaryCandidates.first()
+        // 容器内没有宿主那套「一键修证书库」。openjdk 的 cacerts 依赖
+        // ca-certificates-java 的 postinst 生成，PRoot 下这一步失败很常见 ⇒
+        // lib/security/cacerts 成了空链，installer 第一次 HTTPS 握手就抛
+        // `trustAnchors parameter must be non-empty`（2026-11 NeoForge 1.21.1 反馈）。
+        // 这里把宿主生成的并集库铺进 serverDir（已 bind 成 /srv/mineserve），
+        // 再由**容器自己的 keytool** 复检：读得动才注入，读不动保持默认。
+        val trustStoreClause = stageGuestTrustStore(serverDir, profile)
         val command = "export JAVA_HOME=${profile.javaHomeInGuest}; " +
             "export PATH=\"${profile.javaHomeInGuest}/bin:\$PATH\"; " +
             "export TMPDIR=/tmp; export HOME=/root; cd '$guestDir' && " +
-            "exec ${profile.guestJavaBinaryCandidates.first()} -Djava.io.tmpdir=/tmp -jar '$guestJar' " +
+            trustStoreClause +
+            "exec $guestJava -Djava.io.tmpdir=/tmp \$TSARGS -jar '$guestJar' " +
             "--installServer" + (mirrorUrl?.let { " --mirror '$it'" } ?: "")
         return execProotBound(
             serverDir,
@@ -2182,6 +2241,82 @@ class TermuxRuntime(context: Context) {
             timeoutMs,
             profile
         )
+    }
+
+    /**
+     * 把宿主并集信任库铺到容器可见位置，返回一段 shell 前置语句（定义 `$TSARGS`）。
+     *
+     * 即使宿主侧拿不到并集库，返回的也**不是空串**：容器 cacerts 为空的原因通常是
+     * `ca-certificates-java` 的 postinst 在 PRoot 下没跑成功，而它失败后不会自愈。
+     * 这种情况下会返回一段「在容器内重建 JDK cacerts」的语句，见
+     * [containerCacertsRepairClause]。
+     *
+     * 并集库必须由容器内 keytool 复检：App 进程（Conscrypt）写的 PKCS12 与 glibc
+     * OpenJDK 的读法不是同一套实现，读不动时注入只会把错误从「库为空」变成「路径非法」。
+     */
+    fun stageGuestTrustStore(serverDir: File, profile: ProotContainerProfile): String {
+        val version = profile.version
+        val repair = containerCacertsRepairClause(profile)
+        if (version == JavaVersion.Java8) return repair
+        val host = runCatching { ensureRuntimeTrustStore(version, forceUnion = true) }.getOrNull()
+            ?: return repair
+        val relative = ".mineserve/ca/java-truststore.p12"
+        val dst = File(serverDir, relative)
+        val copied = runCatching {
+            dst.parentFile?.mkdirs()
+            java.nio.file.Files.copy(
+                File(host).toPath(),
+                dst.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING
+            )
+            true
+        }.getOrDefault(false)
+        if (!copied) {
+            emitLog("[ca] 并集信任库复制到服务器目录失败（$dst），改为在容器内重建 JDK cacerts")
+            return repair
+        }
+        val guestPath = "$GUEST_SERVER_DIR/$relative"
+        emitLog("[ca] 容器 installer 并集信任库：$guestPath")
+        val pass = TrustStoreRepairer.DEFAULT_PASSWORD
+        val keytool = "${profile.javaHomeInGuest}/bin/keytool"
+        return "TS='$guestPath'; " +
+            "if [ -s \"\$TS\" ] && '$keytool' -list -keystore \"\$TS\" -storepass $pass 2>/dev/null | grep -q trustedCertEntry; then " +
+            "TSARGS=\"-Djavax.net.ssl.trustStore=\$TS -Djavax.net.ssl.trustStoreType=PKCS12 " +
+            "-Djavax.net.ssl.trustStorePassword=$pass\"; " +
+            "echo '[ca] 容器 installer 使用并集信任库'; " +
+            "else TSARGS=; echo '[ca] 并集信任库不可用，改为在容器内重建 JDK cacerts'; " +
+            repair +
+            "fi; "
+    }
+
+    /**
+     * 在容器内重建 `$JAVA_HOME/lib/security/cacerts` 的 shell 语句。
+     *
+     * 三层兜底，按代价从低到高：Debian 已经生成好的库（`ca-certificates-java` 的产物）
+     * → 触发一次 `update-ca-certificates` 再查 → 用容器自己的 keytool 逐张导入系统 CA。
+     * 顺序不能换：第三层要启动一百多次 JVM，在 PRoot 下是几十秒的量级，只在真没别的
+     * 办法时才做。任何一步失败都不中断后续步骤（`|| true`），最终以 keytool 复检为准。
+     */
+    private fun containerCacertsRepairClause(profile: ProotContainerProfile): String {
+        val pass = TrustStoreRepairer.DEFAULT_PASSWORD
+        val keytool = "${profile.javaHomeInGuest}/bin/keytool"
+        return "CAC=\"\$JAVA_HOME/lib/security/cacerts\"; " +
+            "if command -v update-ca-certificates >/dev/null 2>&1; then " +
+            "update-ca-certificates -f >/dev/null 2>&1 || true; fi; " +
+            "if [ -s /etc/ssl/certs/java/cacerts ]; then " +
+            "mkdir -p \"\$(dirname \"\$CAC\")\"; cp -f /etc/ssl/certs/java/cacerts \"\$CAC\" 2>/dev/null; " +
+            "echo '[ca] 复用 ca-certificates-java 生成的 cacerts'; " +
+            "elif [ -s /etc/ssl/certs/ca-certificates.crt ]; then " +
+            "mkdir -p \"\$(dirname \"\$CAC\")\"; rm -f \"\$CAC\"; rm -rf /tmp/mx-ca; mkdir -p /tmp/mx-ca; " +
+            "awk '/BEGIN CERTIFICATE/{n++; f=sprintf(\"/tmp/mx-ca/%04d.pem\", n)} {print >> f}' " +
+            "/etc/ssl/certs/ca-certificates.crt; " +
+            "for f in /tmp/mx-ca/*.pem; do [ -e \"\$f\" ] || continue; " +
+            "'$keytool' -importcert -noprompt -alias \"mx-\$(basename \"\$f\" .pem)\" -file \"\$f\" " +
+            "-keystore \"\$CAC\" -storepass $pass >/dev/null 2>&1 || true; done; " +
+            "rm -rf /tmp/mx-ca; echo '[ca] 已用容器 keytool 从系统 CA 重建 cacerts'; fi; " +
+            "if '$keytool' -list -keystore \"\$CAC\" -storepass $pass 2>/dev/null | grep -q trustedCertEntry; then " +
+            "echo '[ca] 容器 JDK cacerts 现在可用'; " +
+            "else echo '[ca] 容器 JDK cacerts 重建失败，installer 可能无法完成 HTTPS'; fi; "
     }
 
     /** 兼容历史调用点：focal 容器里的 Java 8 installer。 */
@@ -2226,14 +2361,28 @@ class TermuxRuntime(context: Context) {
         serverDir: File,
         vararg args: String,
         timeoutMs: Long = 900_000
-    ): Int {
+    ): Int = runFclJavaCommandCapturing(javaVersion, serverDir, args.toList(), timeoutMs).code
+
+    /**
+     * 同 [runFclJavaCommand]，但把输出尾部一并带回，供调用方做失败归因。
+     *
+     * 为什么不是给原函数加一个可选回调：Kotlin 的 `vararg` 必须是最后一个参数，
+     * 追加任何参数都会破坏现有调用点；改用显式 List 更稳。
+     */
+    fun runFclJavaCommandCapturing(
+        javaVersion: JavaVersion,
+        serverDir: File,
+        args: List<String>,
+        timeoutMs: Long = 900_000
+    ): CommandExecutor.ExecResult {
         val javaBin = fclJre.javaBinary(javaVersion)
         if (!fclJre.isInstalled(javaVersion)) {
             emitLog("[install] Pojav JRE ${javaVersion.displayName} 未安装，无法执行 installer")
-            return 127
+            return CommandExecutor.ExecResult(127, "Pojav JRE ${javaVersion.displayName} 未安装")
         }
         emitLog("[install] Pojav JRE 路径: $javaBin")
-        val jvmHome = javaBin.parentFile?.parentFile ?: return 127
+        val jvmHome = javaBin.parentFile?.parentFile
+            ?: return CommandExecutor.ExecResult(127, "无法解析 Pojav JRE 目录")
         val jvmLib = File(jvmHome, "lib")
         val jvmTmp = serverTmpDirFor(serverDir).apply { mkdirs() }
         val quote = fun(value: String) = "'" + value.replace("'", "'\\''") + "'"
@@ -2260,13 +2409,20 @@ class TermuxRuntime(context: Context) {
             pb.start()
         } catch (e: Exception) {
             emitLog("[install] 启动 Pojav JRE 失败：${e.message}")
-            return 127
+            return CommandExecutor.ExecResult(127, "启动 Pojav JRE 失败：${e.message}")
         }
         process.outputStream.close()
+        val tail = ArrayDeque<String>()
         val reader = Thread {
             runCatching {
                 process.inputStream.bufferedReader().useLines { lines ->
-                    lines.forEach { emitLog(it) }
+                    lines.forEach { line ->
+                        emitLog(line)
+                        synchronized(tail) {
+                            tail.addLast(line)
+                            while (tail.size > 80) tail.removeFirst()
+                        }
+                    }
                 }
             }
         }.also { it.start() }
@@ -2276,10 +2432,13 @@ class TermuxRuntime(context: Context) {
             process.destroy()
             if (!process.waitFor(2, TimeUnit.SECONDS)) process.destroyForcibly()
             reader.join(2_000)
-            return 124
+            return CommandExecutor.ExecResult(124, synchronized(tail) { tail.joinToString("\n") })
         }
         reader.join(2_000)
-        return process.exitValue()
+        return CommandExecutor.ExecResult(
+            process.exitValue(),
+            synchronized(tail) { tail.joinToString("\n") }
+        )
     }
 
     /** 在容器里执行调用方给定的命令（用于 installer 后续步骤与探测）。 */
@@ -2655,6 +2814,19 @@ class TermuxRuntime(context: Context) {
         vararg command: String,
         env: Map<String, String> = emptyMap()
     ): Int = executor.execOnceWithTimeout(timeoutMs, *command, env = env)
+
+    /**
+     * 同 [execOnceWithTimeout]，但把输出尾部一并带回。
+     *
+     * installer 的失败原因几乎全在最后十几行（`trustAnchors` / `Could not connect` /
+     * `Unsupported class file major version`），只拿一个 exit code 等于什么都没说。
+     */
+    fun execOnceWithTimeoutCapture(
+        timeoutMs: Long,
+        vararg command: String,
+        env: Map<String, String> = emptyMap()
+    ): CommandExecutor.ExecResult =
+        executor.execOnceWithTimeoutCapture(timeoutMs, *command, env = env)
 
 
     /**
@@ -3763,10 +3935,12 @@ class TermuxRuntime(context: Context) {
      * 避免给正常环境增加变量）；否则生成并集库并注入。库不够好时返回 null ——
      * **绝不能传一个读不了的路径**，那会让本来正常的 HTTPS 也一起失败。
      */
-    fun ensureRuntimeTrustStore(version: JavaVersion): String? {
+    fun ensureRuntimeTrustStore(version: JavaVersion, forceUnion: Boolean = false): String? {
         val jdkCacerts = cacertsFile(version)
         val jdkHealth = jdkCacerts?.let { TrustStoreRepairer.inspect(it) }
-        if (jdkHealth?.usable == true && jdkCacerts != null) {
+        // forceUnion = installer 调用点：那里证明不了「这份 cacerts 就是 installer 会用的
+        // 那一份」（见 [installerTrustStoreProps]），所以不做健康短路，一律走并集库。
+        if (!forceUnion && jdkHealth?.usable == true && jdkCacerts != null) {
             // 体检通过 ≠ 子 JVM 读得到：写库的是 App 进程（Conscrypt 的 PKCS12），
             // OpenJDK 未必认同一份文件；`-Djavax.net.ssl.trustStore` 指错也是一样静默变空库。
             // 结论按 mtime 缓存，正常环境每个文件只多 fork 一次 keytool。
@@ -3785,7 +3959,12 @@ class TermuxRuntime(context: Context) {
         emitLog("[ca] JDK cacerts 体检：${jdkHealth?.describe() ?: "未找到"}，改用并集信任库")
 
         val sources = mutableListOf<String>()
-        jdkCacerts?.let { jdk -> TrustStoreRepairer.exportPem(jdk)?.let(sources::add) }
+        // 不只导出「本次选的版本」那一份：installer 由 `$PREFIX/bin/java` 包装器启动，
+        // 它最终指向哪套 JDK 不受调用方控制（装了多个版本时包装器可能指向最后一个）。
+        // 把所有已装宿主 JDK 的 cacerts 都并进来，注入的库才不会在别的 JVM 上缺锚点。
+        installedJavaVersions().filter { it != JavaVersion.Java8 }.forEach { v ->
+            cacertsFile(v)?.let { jdk -> TrustStoreRepairer.exportPem(jdk)?.let(sources::add) }
+        }
         sources += readLocalCertificatePemSources()
 
         val certs = TrustStoreRepairer.collectCertificates(sources)
@@ -3878,6 +4057,43 @@ class TermuxRuntime(context: Context) {
 
     /** 并集信任库的复检结论缓存：路径 → 通过复检时的 mtime。 */
     private val trustStoreVerified = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * **installer 专用**信任库属性：与 [javaTrustStoreProps] 的区别是不做
+     * 「所选版本的 cacerts 体检健康 ⇒ 不注入」这条短路。
+     *
+     * 为什么必须分开：installer 是 `execOnce("java", …)` 起的，实际执行的是
+     * `$PREFIX/bin/java` 包装器，它指向哪套 JDK 由「最后装过哪个版本」决定，
+     * 与用户选的 [version] 不是一回事。只体检 `lib/jvm/<version>/lib/security/cacerts`
+     * 就放行，等于在另一套 JVM 上跑 HTTPS —— 那份库坏了照样
+     * `trustAnchors parameter must be non-empty`，而日志里看不出任何异常
+     * （2026-11 的 NeoForge 1.21.1 反馈：三次重试全挂在第一次握手上）。
+     *
+     * 所以这里无条件构建并集库（**所有**已装 JDK 的 cacerts + 本机全部 PEM），
+     * 只有 keytool 复检数得出足够条目才注入；读不动就返回空数组、保持默认行为，
+     * 绝不把一份 JVM 读不了的文件塞进子进程（那会把本来能用的 HTTPS 一起弄坏）。
+     */
+    fun installerTrustStoreProps(version: JavaVersion): Array<String> {
+        if (version == JavaVersion.Java8) return emptyArray()
+        val path = runCatching { ensureRuntimeTrustStore(version, forceUnion = true) }.getOrNull()
+        if (path == null) {
+            emitLog("[ca] installer 并集信任库不可用，installer 将使用 JDK 自带 cacerts")
+            return emptyArray()
+        }
+        val mtime = runCatching { File(path).lastModified() }.getOrDefault(0L)
+        val verified = if (trustStoreVerified[path] == mtime) true
+        else verifyStoreWithJvm(version, path).also { if (it == true) trustStoreVerified[path] = mtime }
+        if (verified != true) {
+            emitLog("[ca] installer 信任库复检未通过（$path），installer 将使用 JDK 自带 cacerts")
+            return emptyArray()
+        }
+        emitLog("[ca] installer 注入并集信任库：$path")
+        return arrayOf(
+            "-Djavax.net.ssl.trustStore=$path",
+            "-Djavax.net.ssl.trustStoreType=PKCS12",
+            "-Djavax.net.ssl.trustStorePassword=${TrustStoreRepairer.DEFAULT_PASSWORD}"
+        )
+    }
 
     /**
      * 诊断单个命令的执行环境（Termux 会话命令失败时输出，便于定位根因）。

@@ -141,4 +141,61 @@ class MultiThreadDownloaderInternalsTest {
         // （不能把「无法比较」误判成「不一致」，否则所有无 ETag 的镜像都会被拒）。
         assertTrue(tag(etag = "a").matches(tag(lastModified = "t")))
     }
+
+    // ── canResumeFrom（断点续传闸门）──────────────────────────
+
+    @Test
+    fun `长度与 ETag 都一致才允许续传`() {
+        assertTrue(MultiThreadDownloader.canResumeFrom(1000L, "v1", 1000L, "v1"))
+    }
+
+    @Test
+    fun `长度相同但 ETag 变了不许续传`() {
+        // 这条是整条续传护栏的核心：镜像回源换了文件，长度常常一模一样。
+        assertFalse(MultiThreadDownloader.canResumeFrom(1000L, "v1", 1000L, "v2"))
+    }
+
+    @Test
+    fun `长度不同不许续传`() {
+        assertFalse(MultiThreadDownloader.canResumeFrom(1000L, "v1", 2000L, "v1"))
+    }
+
+    @Test
+    fun `没有记录过 ETag 一律不续传`() {
+        assertFalse(MultiThreadDownloader.canResumeFrom(1000L, null, 1000L, "v1"))
+    }
+
+    @Test
+    fun `本次响应没有 ETag 也不续传`() {
+        // 「拿不到 ETag 的源宁可重下」：否则无法证明分片与本次内容是同一实体。
+        assertFalse(MultiThreadDownloader.canResumeFrom(1000L, "v1", 1000L, null))
+    }
+
+    @Test
+    fun `从未下载过时不许续传`() {
+        assertFalse(MultiThreadDownloader.canResumeFrom(null, null, 1000L, "v1"))
+    }
+
+    // ── clearResumeState ─────────────────────────────────────
+
+    @Test
+    fun `clearResumeState 只删目标的分片与指纹`() {
+        val dir = java.nio.file.Files.createTempDirectory("mtd").toFile()
+        try {
+            val target = java.io.File(dir, "core.jar")
+            java.io.File(dir, "core.jar.part0").writeText("a")
+            java.io.File(dir, "core.jar.part100").writeText("b")
+            java.io.File(dir, "core.jar.partmeta").writeText("1000\nv1\n\n")
+            val other = java.io.File(dir, "other.jar.part0").apply { writeText("keep") }
+
+            MultiThreadDownloader.clearResumeState(target)
+
+            assertFalse(java.io.File(dir, "core.jar.part0").exists())
+            assertFalse(java.io.File(dir, "core.jar.part100").exists())
+            assertFalse(java.io.File(dir, "core.jar.partmeta").exists())
+            assertTrue("不能波及别的目标", other.exists())
+        } finally {
+            dir.deleteRecursively()
+        }
+    }
 }

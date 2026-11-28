@@ -15,6 +15,7 @@ import com.mineserve.mobile.data.MultiThreadDownloader
 import com.mineserve.mobile.data.FileOps
 import com.mineserve.mobile.data.BdsDigestStore
 import com.mineserve.mobile.data.BdsVersionCatalogLoader
+import com.mineserve.mobile.data.DownloadSourceHealth
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.ServerStorage
@@ -27,10 +28,15 @@ import com.mineserve.mobile.data.isProotGuestRuntime
 import com.mineserve.mobile.data.provides
 import com.mineserve.mobile.runtime.TermuxRuntime
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
@@ -53,6 +59,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.jar.JarFile
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * MC 版本号降序比较器：按数字段逐级比较，保证 `26.2 > 1.21.11 > 1.21.4 > 1.20.6` 这类
@@ -62,6 +69,90 @@ import java.util.Locale
  * 每次比较都新建两个 Regex 的话，几百个版本就是上万次正则编译。
  */
 private val VERSION_DIGITS = Regex("\\d+")
+
+/**
+ * 一个核心的下载描述：直链 + 官方随接口给出的摘要。
+ *
+ * 为什么要单独一个类型：以前 `resolveDownloadUrls` 只返回 `List<String>`，
+ * 摘要信息在解析阶段就被丢掉了 —— Paper/Velocity 的 `checksums.sha256`、
+ * Mojang 的 `downloads.server.sha1`、Leaves/Leaf 的 `sha256`、GitHub 资产的
+ * `digest` 全都读到了却没往外传，下载完成后只能靠「文件大于 1KB」当校验。
+ * 结果是运营商劫持页、CDN 截断包、反代落地页都能混过下载阶段，
+ * 直到用户点启动才报 `Invalid or corrupt jarfile`。
+ *
+ * 没有摘要的源（Spigot / CraftBukkit / Fabric / BungeeCord / Purpur / PocketMine）
+ * 两个字段都留 null，由调用方降级为「大小 + 结构」校验，而不是假装校验过。
+ */
+internal data class CoreDownload(
+    val url: String,
+    val sha1: String? = null,
+    val sha256: String? = null
+) {
+    /** 有摘要时的可读标签，用于日志；没有摘要返回 null。 */
+    val digestLabel: String?
+        get() = when {
+            sha256 != null -> "sha256"
+            sha1 != null -> "sha1"
+            else -> null
+        }
+}
+
+/**
+ * 把 installer 的退出码 + 输出尾部翻译成用户能照着做的原因。
+ *
+ * 以前只报 `exit=1`：用户拿不到任何方向，只能反复重试或换核心。而 installer 的
+ * 失败原因几乎全部写在最后十几行里，且高度集中 —— 证书库、网络、Java 版本、
+ * 依赖库、磁盘、包损坏，六类覆盖了绝大多数真实反馈。
+ *
+ * 只做「关键词 → 一句话」的映射，不改退出码语义：命不中时仍如实报原始退出码。
+ * 放在文件顶层是为了能被单测直接覆盖（不需要构造 Controller）。
+ */
+internal fun explainInstallerFailure(
+    label: String,
+    code: Int,
+    tail: String,
+    timeoutMinutes: Long = 15
+): String {
+    val base = "$label installer 执行失败 (exit=$code)"
+    if (code == 124) {
+        return "$base：安装超时（$timeoutMinutes 分钟内未完成），" +
+            "多为依赖库下载卡住。请换网络后重试，或改用 PRoot / Pojav 运行环境。"
+    }
+    val text = tail.lowercase()
+    fun hit(vararg keys: String) = keys.any { text.contains(it.lowercase()) }
+    val reason = when {
+        hit("trustanchors", "invalidalgorithmparameterexception", "pkix path building") ->
+            "Java 证书库（cacerts）为空或损坏，installer 无法完成 HTTPS 握手。" +
+                "去「崩溃报告 → 一键修复 Java 证书库」或重装该 Java 版本后重试。"
+        hit("unsupported class file major version", "unsupportedclassversionerror") ->
+            "所选 Java 版本与 installer 不匹配（类文件版本过高/过低）。" +
+                "请在「依赖与环境管理」里切换到该核心要求的 Java 版本后重试。"
+        hit("could not connect", "connection reset", "unknownhost", "sockettimeout",
+            "connect timed out", "connection timed out", "no route to host") ->
+            "无法连接依赖下载源（多为 maven.neoforged.net / maven.minecraftforge.net 被墙）。" +
+                "请换网络或代理后重试；NeoForge 建议先确认预下载的依赖库是否全部就绪。"
+        hit("404", "not found", "http 403", "http 500", "http 502", "http 503") ->
+            "依赖下载源返回 4xx/5xx，该文件在源上不存在或源不可用。" +
+                "请换网络重试；若始终失败，说明这个版本在当前源上没有构建。"
+        hit("outofmemoryerror", "java heap space") ->
+            "JVM 内存不足。installer 需要额外堆，请降低其他后台占用或换用内存更充裕的运行环境。"
+        hit("invalid or corrupt jarfile", "zip end header not found", "error while opening jar") ->
+            "installer 包本身损坏（多半是下载不完整）。请重新下载核心。"
+        hit("no space left", "not enough space", "enospc") ->
+            "存储空间不足，installer 无法写入依赖库。请清理空间后重试。"
+        hit("permission denied", "eacces", "operation not permitted") ->
+            "文件权限不足，installer 无法写入服务器目录。请确认存储权限后重试。"
+        hit("classnotfoundexception", "noclassdeffounderror", "no such file or directory") ->
+            "依赖库缺失（预下载未完成或 installer 自行下载失败）。请换网络重试。"
+        else -> null
+    }
+    if (reason == null) return base
+    // 尾部最后一行常是 `Caused by: ...`，直接带给用户，省得他再翻控制台。
+    val lastLine = tail.lineSequence()
+        .map { it.trim() }
+        .lastOrNull { it.isNotEmpty() && !it.startsWith("at ") && !it.startsWith("...") }
+    return if (lastLine.isNullOrBlank()) "$base：$reason" else "$base：$reason（原始信息：${lastLine.take(180)}）"
+}
 
 /**
  * 把 PaperMC v3 的 `versions` 字段平铺成字符串列表。
@@ -235,6 +326,33 @@ internal fun bukkitLaunchArguments(serverDir: File, coreJar: File): String? {
 }
 
 /**
+ * 启动产物的结构冒烟检查：返回失败原因，通过返回 null。
+ *
+ * 判据刻意宽松 —— 只判断「JVM 有没有可能加载它」：
+ *  - 文件存在且有实际内容（>1KB）：挡住 0 字节与半截包；
+ *  - jar/zip 能被 `JarFile` 打开：挡住运营商劫持页、CDN 错误响应、截断的 zip；
+ *  - 至少有一个 `.class` 或声明了 `Main-Class`：挡住「合法 zip 但内容不对」的空包。
+ *
+ * 不判断具体主类名：各核心的入口五花八门（paperclip / bundler / craftbukkit / 各种
+ * launcher），按名字白名单判会把正常核心误杀，代价远大于收益。
+ *
+ * `.phar` 是 zip 容器但带 PHP stub，JarFile 未必能解析，只做大小检查。
+ */
+internal fun coreArchiveSmokeCheck(file: File, isPhar: Boolean): String? {
+    if (!file.isFile) return "启动文件缺失（${file.name}），请重新下载"
+    val size = file.length()
+    if (size <= 1024) return "启动文件不完整（$size 字节），请重新下载"
+    if (isPhar) return null
+    val ok = runCatching {
+        JarFile(file).use { jar ->
+            val hasMainClass = jar.manifest?.mainAttributes?.getValue("Main-Class") != null
+            hasMainClass || jar.entries().asSequence().any { it.name.endsWith(".class") }
+        }
+    }.getOrDefault(false)
+    return if (ok) null else "启动文件不是有效的 JAR（很可能是错误页或被截断），请重新下载"
+}
+
+/**
  * MC 服务控制器（生产化）：
  *  - 一键安装依赖（JDK/tmux/wget 等）
  *  - 4 种服务端核心下载（Paper/Fabric/Forge/Vanilla），动态解析最新版本
@@ -252,6 +370,13 @@ class McServerController(
         "PowerNukkitX/PowerNukkitX",
         "PowerNukkitX/PowerNukkitX-Legacy"
     )
+
+    init {
+        // 源健康度需要落盘才有意义（进程重启后不该又回到「坏源优先」）。
+        DownloadSourceHealth.attach(
+            File(repo.context.filesDir, "download-source-health.tsv")
+        )
+    }
 
     /**
      * Forge installer 的 maven 镜像（BMCLAPI，与官方仓同步）。
@@ -302,7 +427,14 @@ class McServerController(
         val releaseTag: String? = null,
         val assetUrl: String? = null,
         val assetDigest: String? = null,
-        val publishedAt: String = ""
+        val publishedAt: String = "",
+        /**
+         * 该项来自内置兜底列表（接口不可达/返回空）。
+         *
+         * 以前兜底是静默的：列表看起来和正常一样，用户以为这就是官方全集，
+         * 选到不存在的版本再在下载阶段 404。带上标记后 UI 才有机会说清楚。
+         */
+        val isFallback: Boolean = false
     )
 
     private suspend fun runInstallerWithRetry(
@@ -313,7 +445,7 @@ class McServerController(
         javaVersion: JavaVersion,
         javaVendor: JavaVendor = JavaVendor.Termux,
         mirrorUrl: String? = null
-    ): Int {
+    ): InstallerOutcome {
         val prootGuest = isProotGuestRuntime(javaVendor, javaVersion)
         // Installer runs before start(), so repair the selected JDK wrapper here as well.
         // 来宾链路没有宿主侧的 java 包装器可修，跳过（容器内的 JDK 由 apt 管）。
@@ -342,11 +474,16 @@ class McServerController(
         var probedWithoutMirror = false
         val maxAttempts = if (canMirror) 4 else 3
         // 信任库属性整个方法只算一次：首次可能 fork 一个 JVM 做 keytool 校验（按 mtime 缓存）。
+        // 用 installerTrustStoreProps 而不是 javaTrustStoreProps：installer 由
+        // `$PREFIX/bin/java` 包装器启动，实际 JVM 未必是「所选版本」那一套，
+        // 后者「体检健康就不注入」的短路会让 installer 跑在另一套坏库上。
         var termuxProps: Array<String>? = null
-        fun props(): Array<String> = termuxProps ?: termux.javaTrustStoreProps(javaVersion).also {
+        fun props(): Array<String> = termuxProps ?: termux.installerTrustStoreProps(javaVersion).also {
             termuxProps = it
         }
         var lastCode = 1
+        // 最后一次执行的输出尾部：失败归因全靠它（installer 只吐一个 exit code 等于没说）。
+        var lastTail = ""
         for (attempt in 1..maxAttempts) {
             val effectiveMirror = if (useMirror) mirrorUrl else null
             // jopt 的 --mirror <URL>；镜像失效时 installer 自己会回落官方源。
@@ -373,23 +510,33 @@ class McServerController(
                             }
                         }
                     }
-                    termux.runFclJavaCommand(
+                    val result = termux.runFclJavaCommandCapturing(
                         javaVersion, serverDir,
-                        *injected,
-                        "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
+                        listOf(*injected, "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs),
+                        timeoutMs = INSTALLER_TIMEOUT_MS
                     )
+                    lastTail = result.tail
+                    result.code
                 }
-                else ->
+                else -> {
                     // 显式喂一份「并集」信任库：installer 下载 libraries 走 HTTPS，
                     // JDK 自带 cacerts 缺失/残缺时它会全部握手失败（PKIX / trustAnchors）。
                     // 属性能给就给，给不了（库不够好）就退回默认行为。
-                    termux.execOnce(
+                    //
+                    // 必须走带超时的版本：旧的 execOnce 收尾是裸 `process.waitFor()`，
+                    // installer 卡在拉某个慢库时会一直挂着，界面永远停在「安装中」，
+                    // 用户只能杀 App（PRoot/FCL 两条分支一直有 900s，唯独最常见的宿主没有）。
+                    val result = termux.execOnceWithTimeoutCapture(
+                        INSTALLER_TIMEOUT_MS,
                         "java", "-Djava.io.tmpdir=${tempDir.absolutePath}",
                         *props(),
                         "-jar", jarPath, "--installServer", serverDir.absolutePath, *mirrorArgs
                     )
+                    lastTail = result.tail
+                    result.code
+                }
             }
-            if (lastCode == 0) return 0
+            if (lastCode == 0) return InstallerOutcome(0, lastTail)
             if (attempt == 1 && canMirror) {
                 // 第一次失败：可能是参数不被识别，也可能是网络抖动 —— 摘一次镜像来区分
                 useMirror = false
@@ -405,8 +552,11 @@ class McServerController(
                 delay(attempt * 2_000L)
             }
         }
-        return lastCode
+        return InstallerOutcome(lastCode, lastTail)
     }
+
+    /** 一次 installer 执行的结果：退出码 + 输出尾部（尾部用于失败归因）。 */
+    private data class InstallerOutcome(val code: Int, val tail: String)
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -450,51 +600,71 @@ class McServerController(
     private suspend fun preDownloadInstallerLibraries(
         installerJar: File,
         serverDir: File,
-        mirrorsFor: (String) -> List<String>
-    ): PreDownloadReport {
+        mirrorsFor: (String) -> List<String>,
+        onPhase: (String) -> Unit = {}
+    ): PreDownloadReport = coroutineScope {
         val (libraries, manifestError) = installerLibraries(installerJar)
         if (libraries.isEmpty()) {
-            return PreDownloadReport(total = 0, manifestError = manifestError)
+            return@coroutineScope PreDownloadReport(total = 0, manifestError = manifestError)
         }
         termux.emitLog("[install] 依赖库清单 ${libraries.size} 个（install_profile + version json 合并）")
         // 规范化根目录：库路径来自远端 jar 内的 JSON，必须挡住 ../ 穿越写到 libraries/ 之外
         val libsRoot = File(serverDir, "libraries").canonicalFile
-        var ok = 0; var already = 0; var failed = 0
-        for ((index, lib) in libraries.withIndex()) {
-            currentCoroutineContext().ensureActive() // 用户点「取消安装」必须能立刻停下
-            // 规范化后必须仍在 libraries/ 下：path 来自远端 jar 内的 JSON，挡住 ../ 穿越
-            val target = InstallerLibraryManifest.resolveTarget(libsRoot, lib.path)
-            if (target == null) {
-                termux.emitLog("[install] 跳过越界的库路径：${lib.path}")
-                continue
-            }
-            if (target.exists() && lib.sha1 != null && sha1Of(target) == lib.sha1) { already++; continue }
-            var done = false
-            // 两轮重试：BMCLAPI 的短时限速/CDN 抖动是真机实测过的失败模式
-            // （70 个库挂 2 个），单个库多试一轮就能救回来。
-            for (round in 0 until 2) {
-                for (candidate in mirrorsFor(lib.url)) {
-                    currentCoroutineContext().ensureActive()
-                    if (!downloadSmallFile(candidate, target)) continue
-                    if (lib.sha1 == null || sha1Of(target) == lib.sha1) { done = true; break }
-                    target.delete() // 校验不过：换下一个源
+
+        // 串行下 70+ 个小文件时，RTT 累加成主耗时（NeoForge 安装慢的真因）。
+        // 6 路并发只压小文件整档下载，每文件的重试/校验语义完全不变。
+        val parallelism = minOf(LIB_DOWNLOAD_PARALLELISM, libraries.size).coerceAtLeast(1)
+        val permits = Semaphore(parallelism)
+        val ok = AtomicInteger(0)
+        val already = AtomicInteger(0)
+        val failed = AtomicInteger(0)
+        val finished = AtomicInteger(0)
+        termux.emitLog("[install] 依赖库预下载：$parallelism 路并发")
+        onPhase("依赖库 0/${libraries.size}")
+
+        libraries.mapIndexed { _, lib ->
+            async(Dispatchers.IO) {
+                permits.withPermit {
+                    currentCoroutineContext().ensureActive() // 用户点「取消安装」必须能立刻停下
+                    // 规范化后必须仍在 libraries/ 下：path 来自远端 jar 内的 JSON，挡住 ../ 穿越
+                    val target = InstallerLibraryManifest.resolveTarget(libsRoot, lib.path)
+                    if (target == null) {
+                        termux.emitLog("[install] 跳过越界的库路径：${lib.path}")
+                    } else if (target.exists() && lib.sha1 != null && sha1Of(target) == lib.sha1) {
+                        already.incrementAndGet()
+                    } else {
+                        var done = false
+                        // 两轮重试：BMCLAPI 的短时限速/CDN 抖动是真机实测过的失败模式
+                        // （70 个库挂 2 个），单个库多试一轮就能救回来。
+                        for (round in 0 until 2) {
+                            for (candidate in mirrorsFor(lib.url)) {
+                                currentCoroutineContext().ensureActive()
+                                if (!downloadSmallFile(candidate, target)) continue
+                                if (lib.sha1 == null || sha1Of(target) == lib.sha1) { done = true; break }
+                                target.delete() // 校验不过：换下一个源
+                            }
+                            if (done) break
+                            if (round == 0) delay(3_000)
+                        }
+                        if (done) ok.incrementAndGet() else {
+                            failed.incrementAndGet()
+                            termux.emitLog("[install] 依赖库下载失败：${lib.path}")
+                        }
+                    }
+                    val n = finished.incrementAndGet()
+                    if (n % 10 == 0 || n == libraries.size) {
+                        termux.emitLog("[install] 依赖库预下载进度：$n/${libraries.size}")
+                        onPhase("依赖库 $n/${libraries.size}")
+                    }
                 }
-                if (done) break
-                if (round == 0) delay(3_000)
             }
-            if (done) ok++ else {
-                failed++
-                termux.emitLog("[install] 依赖库下载失败：${lib.path}")
-            }
-            if ((index + 1) % 10 == 0 || index + 1 == libraries.size) {
-                termux.emitLog("[install] 依赖库预下载进度：${index + 1}/${libraries.size}")
-            }
-        }
+        }.awaitAll()
+
         termux.emitLog(
-            "[install] 依赖库预下载：新下 $ok、已存在 $already" +
-                (if (failed > 0) "、失败 $failed（installer 会用官方源重试）" else "，全部就绪")
+            "[install] 依赖库预下载：新下 ${ok.get()}、已存在 ${already.get()}" +
+                (if (failed.get() > 0) "、失败 ${failed.get()}（installer 会用官方源重试）" else "，全部就绪")
         )
-        return PreDownloadReport(failed, libraries.size, manifestError)
+        PreDownloadReport(failed.get(), libraries.size, manifestError)
     }
 
     private fun sha1Of(file: File): String? = runCatching {
@@ -707,7 +877,64 @@ class McServerController(
      * 下载服务端核心（带进度回调版本）。
      * @param onProgress 回调参数：(已下载字节, 总字节, 速度 bytes/s)，总字节为 -1 表示未知
      */
-    suspend fun downloadCore(config: McConfig, customName: String, onProgress: (Long, Long, Long) -> Unit) = withContext(Dispatchers.IO) {
+    suspend fun downloadCore(config: McConfig, customName: String, onProgress: (Long, Long, Long) -> Unit) =
+        downloadCore(config, customName, onProgress, onPhase = {})
+
+    /**
+     * 下载服务端核心（带进度回调版本）。
+     * @param onProgress 回调参数：(已下载字节, 总字节, 速度 bytes/s)，总字节为 -1 表示未知
+     * @param onPhase 非字节阶段的人话描述（installer 拉依赖库等），阶段结束传空串
+     */
+    suspend fun downloadCore(
+        config: McConfig,
+        customName: String,
+        onProgress: (Long, Long, Long) -> Unit,
+        onPhase: (String) -> Unit
+    ) = withContext(Dispatchers.IO) {
+        termux.beginInstallCapture()
+        try {
+            downloadCoreLocked(config, customName, onProgress, onPhase)
+        } catch (t: Throwable) {
+            persistInstallFailure(config, t, termux.endInstallCapture())
+            throw t
+        } finally {
+            // 成功路径也在这里收尾：不清空的话，下一次安装会复用到这次的日志尾巴。
+            termux.endInstallCapture()
+        }
+    }
+
+    /**
+     * 安装/下载失败时把本次全程日志写成独立文件。
+     *
+     * 落点故意选 `crash-logs/`：那里的文件在「崩溃报告」页已经可以预览和导出，用户不必
+     * 学一套新的路径。文件名用 `install_` 前缀与崩溃报告区分。
+     */
+    private fun persistInstallFailure(config: McConfig, cause: Throwable, lines: List<String>) {
+        if (lines.isEmpty()) return
+        runCatching {
+            val dir = File(termux.installer.rootDir, "home/crash-logs").apply { mkdirs() }
+            val now = Date()
+            val file = File(dir, "install_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(now)}.txt")
+            val header = buildString {
+                append("=== Minexa 安装失败现场 ===\n")
+                append("时间: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(now)}\n")
+                append("核心: ${config.selectedCore.displayName} (${config.selectedCore})\n")
+                append("MC 版本: ${config.mcVersion}\n")
+                append("Java: ${config.selectedJavaVersion.displayName} / ${config.selectedJavaVendor}\n")
+                append("失败原因: ${cause.message ?: cause::class.java.simpleName}\n")
+                append("=== 日志（本次安装全程，共 ${lines.size} 行）===\n")
+            }
+            file.writeText(header + lines.joinToString("\n"))
+            termux.emitLog("[install] 安装失败现场已保存：${file.absolutePath}（崩溃报告页可导出）")
+        }
+    }
+
+    private suspend fun downloadCoreLocked(
+        config: McConfig,
+        customName: String,
+        onProgress: (Long, Long, Long) -> Unit,
+        onPhase: (String) -> Unit
+    ) = withContext(Dispatchers.IO) {
         val normalizedConfig = config.copy(
             mcVersion = MinecraftVersionNormalizer.forCore(config.selectedCore, config.mcVersion)
         )
@@ -750,44 +977,52 @@ class McServerController(
         // NeoForge/Quilt：下载的是 installer.jar，执行安装命令生成启动环境（首次需下载依赖）
         if (normalizedConfig.selectedCore.needsInstaller) {
             termux.emitLog("[install] 正在执行 ${config.selectedCore.displayName} installer，首次安装需下载依赖，请耐心等待...")
+            // 主包已下完，字节进度不会再动：从这里开始改报阶段文本，否则进度条停在 100%
+            // 而 installer 可能还要跑 3~8 分钟，用户只会认为卡死。
+            onPhase("${normalizedConfig.selectedCore.displayName} 安装中")
             val installerTempDir = File(termux.installer.rootDir, "tmp").apply { mkdirs() }
             when (normalizedConfig.selectedCore) {
                 ServerCore.Forge -> {
-                    val code = runInstallerWithRetry(
+                    val outcome = runInstallerWithRetry(
                         jarPath, serverDir, normalizedConfig.selectedCore.displayName, installerTempDir,
                         normalizedConfig.selectedJavaVersion, normalizedConfig.selectedJavaVendor,
                         installerMavenMirror
                     )
-                    if (code != 0) {
+                    if (outcome.code != 0) {
                         // 半成品目录必须清掉：留着它，下次回前台 scanUnregisteredServers
                         // 会因「目录里有文件」把它登记成 Forge 核心，用户看到一台
                         // 点开就报「启动文件缺失」的幽灵服务器。BDS 路径一直这么做。
                         FileOps.deleteRecursively(serverDir)
-                        throw RuntimeException("Forge installer 执行失败 (exit=$code)")
+                        throw RuntimeException(explainInstallerFailure(
+                            normalizedConfig.selectedCore.displayName, outcome.code, outcome.tail
+                        ))
                     }
                 }
                 ServerCore.NeoForge -> {
                     // LegacyInstaller 不吃 --mirror（见 preDownloadInstallerLibraries 注释），
                     // 先把依赖库经 BMCLAPI 预下到位，installer 再离线校验。
                     val report = preDownloadInstallerLibraries(
-                        File(jarPath), serverDir, ::neoforgeLibraryMirrors
+                        File(jarPath), serverDir, ::neoforgeLibraryMirrors, onPhase
                     )
                     if (report.failed > 0) {
                         termux.emitLog("[install] 有 ${report.failed} 个依赖库未预下载成功，installer 将尝试官方源")
                     }
-                    val code = runInstallerWithRetry(
+                    onPhase("${normalizedConfig.selectedCore.displayName} installer 运行中")
+                    val outcome = runInstallerWithRetry(
                         jarPath, serverDir, normalizedConfig.selectedCore.displayName, installerTempDir,
                         normalizedConfig.selectedJavaVersion, normalizedConfig.selectedJavaVendor
                     )
-                    if (code != 0) {
+                    if (outcome.code != 0) {
                         FileOps.deleteRecursively(serverDir)
                         // 失败原因要写清方向：jar 损坏 → 重下核心；库拉不到 → 换网络/重试。
                         val hint = buildString {
-                            append("NeoForge installer 执行失败 (exit=$code)")
+                            append(explainInstallerFailure(
+                                normalizedConfig.selectedCore.displayName, outcome.code, outcome.tail
+                            ))
                             if (report.manifestError != null) {
                                 append("；installer 包无法解析（${report.manifestError}），请重新下载核心")
                             } else if (report.failed > 0) {
-                                append("；${report.failed}/${report.total} 个依赖库未能预下载，多为镜像不可达，可换网络或重试")
+                                append("；${report.failed}/${report.total} 个依赖库未能预下载，多为镜像不可达")
                             }
                         }
                         throw RuntimeException(hint)
@@ -813,22 +1048,30 @@ class McServerController(
                             "export JAVA_HOME=${profile.javaHomeInGuest}; " +
                                 "export PATH=\"${profile.javaHomeInGuest}/bin:\$PATH\"; " +
                                 "cd ${TermuxRuntime.GUEST_SERVER_DIR} && " +
+                                termux.stageGuestTrustStore(serverDir, profile) +
                                 "exec ${profile.guestJavaBinaryCandidates.first()} " +
-                                "-Djava.io.tmpdir=/tmp -jar '$guestJar' " +
+                                "-Djava.io.tmpdir=/tmp \$TSARGS -jar '$guestJar' " +
                                 "install server '${normalizedConfig.mcVersion}' --install-dir=${TermuxRuntime.GUEST_SERVER_DIR} --download-server",
                             profile = profile
                         )
                     } else if (normalizedConfig.selectedJavaVendor == JavaVendor.Fcl) {
                         // FCL：java 不在 Termux PATH（filesDir/jvm-fcl），同 Forge/NeoForge
                         // 一样必须走 Fcl 专用命令；Quilt installer 参数与 Termux 路径一致。
+                        // 自带 cacerts 可读时不注入（并集库可能缺新根证书，顶替反而更差）。
+                        val injected = if (termux.fclHasUsableCacerts(normalizedConfig.selectedJavaVersion)) {
+                            emptyArray()
+                        } else {
+                            termux.installerTrustStoreProps(normalizedConfig.selectedJavaVersion)
+                        }
                         termux.runFclJavaCommand(
                             normalizedConfig.selectedJavaVersion, serverDir,
+                            *injected,
                             "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
                             "--install-dir=${serverDir.absolutePath}", "--download-server"
                         )
                     } else {
                         termux.execOnce(
-                            "java", *termux.javaTrustStoreProps(normalizedConfig.selectedJavaVersion),
+                            "java", *termux.installerTrustStoreProps(normalizedConfig.selectedJavaVersion),
                             "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
                             "--install-dir=${serverDir.absolutePath}", "--download-server"
                         )
@@ -857,6 +1100,16 @@ class McServerController(
             File(jarPath).renameTo(phar)
             phar.name
         } else "server.jar"
+        // 统一的「安装完成」判据：所有核心都要过一遍启动产物冒烟检查。
+        // 以前只有 installer 系（Forge/NeoForge/Quilt）检查，其余核心下完就算成功；
+        // 一旦某个 CDN 把错误页当 200 返回、或被截断的包刚好超过 1KB，
+        // 用户要等到点「启动」才看到 `Invalid or corrupt jarfile`，而那时已离开安装页。
+        runCatching { requireDownloadedCoreLaunchable(normalizedConfig.selectedCore, serverDir, serverFileName) }
+            .onFailure { e ->
+                FileOps.deleteRecursively(serverDir)
+                throw e
+            }
+        termux.emitLog("[install] 启动产物检查通过：$serverFileName")
         // 添加到已安装列表。
         //
         // 注意：这里刻意**不使用调用方传入的 [config]** 来拼接新列表。
@@ -1063,26 +1316,26 @@ class McServerController(
      *  - Fabric: 调用 Fabric meta API 获取最新 loader/installer 版本
      *  - Forge: 调用 Forge maven-metadata.xml 获取推荐版本
      */
-    private fun resolveDownloadUrl(core: ServerCore, version: String): String {
+    private fun resolveDownload(core: ServerCore, version: String): CoreDownload {
         return when (core) {
             ServerCore.Paper -> resolvePaperUrl(version)
-            ServerCore.Purpur -> resolvePurpurUrl(version)
+            ServerCore.Purpur -> CoreDownload(resolvePurpurUrl(version))
             ServerCore.Leaves -> resolveLeavesUrl(version)
             ServerCore.Leaf -> resolveLeafUrl(version)
-            ServerCore.Spigot -> "https://cdn.getbukkit.org/spigot/spigot-$version.jar"
-            ServerCore.CraftBukkit -> "https://cdn.getbukkit.org/craftbukkit/craftbukkit-$version.jar"
-            ServerCore.Fabric -> resolveFabricUrl(version)
+            ServerCore.Spigot -> CoreDownload("https://cdn.getbukkit.org/spigot/spigot-$version.jar")
+            ServerCore.CraftBukkit -> CoreDownload("https://cdn.getbukkit.org/craftbukkit/craftbukkit-$version.jar")
+            ServerCore.Fabric -> CoreDownload(resolveFabricUrl(version))
             ServerCore.Forge -> resolveForgeUrl(version)
             ServerCore.NeoForge -> resolveNeoForgeUrl(version)
             ServerCore.Quilt -> resolveQuiltUrl(version)
             ServerCore.Vanilla -> resolveVanillaUrl(version)
             ServerCore.Velocity -> resolveVelocityUrl(version)
-            ServerCore.BungeeCord -> resolveBungeeUrl()
+            ServerCore.BungeeCord -> CoreDownload(resolveBungeeUrl())
             ServerCore.PowerNukkitX -> resolvePowerNukkitXUrl(version)
-            ServerCore.PocketMine -> resolvePocketMineUrl(version)
+            ServerCore.PocketMine -> CoreDownload(resolvePocketMineUrl(version))
             ServerCore.Allay -> resolveAllayUrl(version)
             // BDS 走 downloadBds（zip + 解压），这里的解析只在兜底路径上用
-            ServerCore.Bds -> resolveBdsUrl()
+            ServerCore.Bds -> CoreDownload(resolveBdsUrl())
             ServerCore.Unknown -> throw IllegalArgumentException("未知核心类型，无法解析下载地址")
         }
     }
@@ -1100,38 +1353,48 @@ class McServerController(
         return build.url
     }
 
-    private fun resolveDownloadUrls(core: ServerCore, version: String): List<String> {
-        val official = resolveDownloadUrl(core, version)
+    /**
+     * 官方地址 + 各镜像地址，全部继承官方的摘要。
+     *
+     * 镜像只是同一份文件的不同传输通道（BMCLAPI 的 maven 镜像、GitHub 反代都
+     * 不做二次打包），所以摘要可以照用。万一某个镜像真的换了文件，校验会失败并
+     * 自动换下一个源 —— 这正是要的行为。
+     */
+    private fun resolveDownloadUrls(core: ServerCore, version: String): List<CoreDownload> {
+        val official = resolveDownload(core, version)
+        val url = official.url
         val mirrors = when (core) {
             ServerCore.Vanilla -> listOf("https://bmclapi2.bangbang93.com/version/$version/server")
             ServerCore.Forge -> {
-                val coordinate = official.substringAfter("/forge/").substringBefore("/")
+                val coordinate = url.substringAfter("/forge/").substringBefore("/")
                 val forgeVersion = coordinate.removePrefix("$version-")
                 listOf("https://bmclapi2.bangbang93.com/forge/download?mcversion=$version&version=$forgeVersion&category=installer&format=jar")
             }
-            ServerCore.Fabric -> listOf(official.replace("https://meta.fabricmc.net/", "https://bmclapi2.bangbang93.com/fabric-meta/"))
+            ServerCore.Fabric -> listOf(url.replace("https://meta.fabricmc.net/", "https://bmclapi2.bangbang93.com/fabric-meta/"))
             // NeoForge 官方 maven（maven.neoforged.net）在国内常被 DNS 污染而不可达，
             // 用 BMCLAPI 的 maven 镜像兜底同一份 installer jar。
             ServerCore.NeoForge -> {
-                val ver = official.substringAfter("/neoforge/").substringBefore("/")
+                val ver = url.substringAfter("/neoforge/").substringBefore("/")
                 listOf("https://bmclapi2.bangbang93.com/maven/net/neoforged/neoforge/$ver/neoforge-$ver-installer.jar")
             }
             // PocketMine（.phar）与 Allay（.jar）的下载地址都落在 GitHub Release 资产上，
             // 套一层反代提高可达性。
-            ServerCore.PocketMine, ServerCore.Allay -> githubMirrors(official)
+            ServerCore.PocketMine, ServerCore.Allay -> githubMirrors(url)
             else -> emptyList()
         }
-        return if (core == ServerCore.PowerNukkitX) {
-            if (official.contains("maven.org") || official.contains("maven.aliyun.com") || official.contains("huaweicloud.com")) {
+        val ordered = if (core == ServerCore.PowerNukkitX) {
+            if (url.contains("maven.org") || url.contains("maven.aliyun.com") || url.contains("huaweicloud.com")) {
                 listOf(
-                    official,
-                    official.replace("https://repo1.maven.org/maven2", "https://maven.aliyun.com/repository/central"),
-                    official.replace("https://repo1.maven.org/maven2", "https://repo.huaweicloud.com/repository/maven")
+                    url,
+                    url.replace("https://repo1.maven.org/maven2", "https://maven.aliyun.com/repository/central"),
+                    url.replace("https://repo1.maven.org/maven2", "https://repo.huaweicloud.com/repository/maven")
                 ).distinct()
             } else {
-                githubMirrors(official)
+                githubMirrors(url)
             }
-        } else (mirrors + official).distinct()
+        } else (mirrors + url).distinct()
+        // 上次（近期）失败过的源往后放，其余保持原有优先级 —— 排序是稳定的。
+        return DownloadSourceHealth.rank(ordered).map { CoreDownload(it, official.sha1, official.sha256) }
     }
 
     /**
@@ -1150,7 +1413,7 @@ class McServerController(
 
     // ── PaperMC v3 API（fill.papermc.io）：动态获取最新 STABLE build 号 ───
 
-    private fun resolvePaperUrl(version: String): String {
+    private fun resolvePaperUrl(version: String): CoreDownload {
         // v3 API：返回 builds 数组，每个 build 有 channel（STABLE/ALPHA/BETA/RECOMMENDED）和 downloads.server:default.url
         val buildsUrl = "https://fill.papermc.io/v3/projects/paper/versions/$version/builds"
         val builds = fetchJsonElement(buildsUrl).jsonArray
@@ -1191,16 +1454,23 @@ class McServerController(
             ?.get("server:default")?.jsonObject
             ?.get("url")?.jsonPrimitive?.content
             ?: throw RuntimeException("PaperMC v3: no server download URL for version $version")
+        // v3 在同一个对象里就给了 sha256（`checksums.sha256`）。以前读到这里只取 url，
+        // 把摘要扔了 —— 这正是「下载了坏包要等启动才报」的来源。
+        val sha256 = bestEntry["downloads"]?.jsonObject
+            ?.get("server:default")?.jsonObject
+            ?.get("checksums")?.jsonObject
+            ?.get("sha256")?.jsonPrimitive?.content
+            ?.takeIf { it.length == 64 }
 
         val buildId = bestEntry["id"]?.jsonPrimitive?.content ?: "?"
         val channel = bestEntry["channel"]?.jsonPrimitive?.content ?: "?"
         Log.i(TAG, "PaperMC v3: selected build $buildId (channel=$channel) for $version")
-        return downloadUrl
+        return CoreDownload(downloadUrl, sha256 = sha256)
     }
 
     // ── Mojang Vanilla：version_manifest_v2.json → 版本 JSON → server.jar URL ─
 
-    private fun resolveVanillaUrl(version: String): String {
+    private fun resolveVanillaUrl(version: String): CoreDownload {
         // 1. 获取版本清单
         val manifest = fetchJson("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
         val versions = manifest["versions"]?.jsonArray
@@ -1219,13 +1489,13 @@ class McServerController(
             throw RuntimeException("Mojang: version $version not found in manifest")
         }
 
-        // 3. 获取版本元数据，提取 server.jar 下载 URL
+        // 3. 获取版本元数据，提取 server.jar 下载 URL（顺带 sha1，Mojang 一直提供）
         val versionMeta = fetchJson(versionMetaUrl)
-        val serverUrl = versionMeta["downloads"]?.jsonObject
-            ?.get("server")?.jsonObject
-            ?.get("url")?.jsonPrimitive?.content
+        val serverObj = versionMeta["downloads"]?.jsonObject?.get("server")?.jsonObject
+        val serverUrl = serverObj?.get("url")?.jsonPrimitive?.content
             ?: throw RuntimeException("Mojang: no server.jar URL for version $version")
-        return serverUrl
+        val sha1 = serverObj?.get("sha1")?.jsonPrimitive?.content?.takeIf { it.length == 40 }
+        return CoreDownload(serverUrl, sha1 = sha1)
     }
 
     // ── Fabric：动态获取最新 loader + installer 版本 ────────────────
@@ -1250,7 +1520,7 @@ class McServerController(
 
     // ── Forge：从 maven-metadata.xml 获取推荐版本号 ──────────────────
 
-    private fun resolveForgeUrl(version: String): String {
+    private fun resolveForgeUrl(version: String): CoreDownload {
         // Forge 没有标准 JSON API，用 maven-metadata.xml 解析
         // 简化：使用 Forge 官方 promotions API 获取推荐版本
         val promotionsUrl = "https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json"
@@ -1265,7 +1535,8 @@ class McServerController(
             ?: promos[latestKey]?.jsonPrimitive?.content
             ?: throw RuntimeException("Forge: no build for MC $version")
 
-        return "https://maven.minecraftforge.net/net/minecraftforge/forge/$version-$forgeVer/forge-$version-$forgeVer-installer.jar"
+        val url = "https://maven.minecraftforge.net/net/minecraftforge/forge/$version-$forgeVer/forge-$version-$forgeVer-installer.jar"
+        return CoreDownload(url, sha1 = fetchMavenSha1(url))
     }
 
     // ── Purpur：官方 API 直链（latest build 302 重定向到实际 jar） ──
@@ -1274,41 +1545,53 @@ class McServerController(
         return "https://api.purpurmc.org/v2/purpur/$version/latest/download"
     }
 
-    private fun resolveLeavesUrl(version: String): String {
+    private fun resolveLeavesUrl(version: String): CoreDownload {
         val build = fetchJson("https://api.leavesmc.org/v2/projects/leaves/versions/$version/builds/latest")
         val buildNumber = build["build"]?.jsonPrimitive?.content
             ?: throw RuntimeException("Leaves: no build for $version")
-        val name = build["downloads"]?.jsonObject?.get("application")?.jsonObject
-            ?.get("name")?.jsonPrimitive?.content
+        val application = build["downloads"]?.jsonObject?.get("application")?.jsonObject
+        val name = application?.get("name")?.jsonPrimitive?.content
             ?: throw RuntimeException("Leaves: no application download for $version")
-        return "https://api.leavesmc.org/v2/projects/leaves/versions/$version/builds/$buildNumber/downloads/$name"
+        val sha256 = application?.get("sha256")?.jsonPrimitive?.content?.takeIf { it.length == 64 }
+        return CoreDownload(
+            "https://api.leavesmc.org/v2/projects/leaves/versions/$version/builds/$buildNumber/downloads/$name",
+            sha256 = sha256
+        )
     }
 
-    private fun resolveLeafUrl(version: String): String {
+    private fun resolveLeafUrl(version: String): CoreDownload {
         val versions = fetchJson("https://api.leafmc.one/v2/projects/leaf/versions/$version")
         val build = versions["builds"]?.jsonArray
             ?.mapNotNull { it.jsonPrimitive.content.toIntOrNull() }
             ?.maxOrNull()
             ?: throw RuntimeException("Leaf: no build for $version")
         val buildJson = fetchJson("https://api.leafmc.one/v2/projects/leaf/versions/$version/builds/$build")
-        val name = buildJson["downloads"]?.jsonObject?.get("primary")?.jsonObject
-            ?.get("name")?.jsonPrimitive?.content
+        val primary = buildJson["downloads"]?.jsonObject?.get("primary")?.jsonObject
+        val name = primary?.get("name")?.jsonPrimitive?.content
             ?: throw RuntimeException("Leaf: no primary download for $version")
-        return "https://api.leafmc.one/v2/projects/leaf/versions/$version/builds/$build/downloads/$name"
+        val sha256 = primary?.get("sha256")?.jsonPrimitive?.content?.takeIf { it.length == 64 }
+        return CoreDownload(
+            "https://api.leafmc.one/v2/projects/leaf/versions/$version/builds/$build/downloads/$name",
+            sha256 = sha256
+        )
     }
 
     // ── Velocity：PaperMC v3 API（取最新 build 的 application 下载） ──
 
-    private fun resolveVelocityUrl(version: String): String {
+    private fun resolveVelocityUrl(version: String): CoreDownload {
         val buildsUrl = "https://fill.papermc.io/v3/projects/velocity/versions/$version/builds"
         val builds = fetchJsonElement(buildsUrl).jsonObject["builds"]?.jsonArray
             ?: throw RuntimeException("Velocity: no builds for version $version")
         val best = builds.lastOrNull()?.jsonObject
             ?: throw RuntimeException("Velocity: no build for version $version")
-        return best["downloads"]?.jsonObject
-            ?.get("application")?.jsonObject
-            ?.get("url")?.jsonPrimitive?.content
+        val download = best["downloads"]?.jsonObject?.get("application")?.jsonObject
+        val url = download?.get("url")?.jsonPrimitive?.content
             ?: throw RuntimeException("Velocity: no application download for version $version")
+        // v3 的 application 对象里同样带 checksums.sha256
+        val sha256 = download["checksums"]?.jsonObject
+            ?.get("sha256")?.jsonPrimitive?.content
+            ?.takeIf { it.length == 64 }
+        return CoreDownload(url, sha256 = sha256)
     }
 
     // ── BungeeCord：md-5 Jenkins 直链（无版本概念，取最新构建） ──
@@ -1330,7 +1613,7 @@ class McServerController(
 
     // ── Allay：GitHub Release 资产（优先 allay* 命名，带 sha256 校验值） ──
 
-    private fun resolveAllayUrl(version: String): String {
+    private fun resolveAllayUrl(version: String): CoreDownload {
         val release = fetchGithubJsonElement(
             "https://api.github.com/repos/AllayMC/Allay/releases/tags/$version"
         ).jsonObject
@@ -1339,28 +1622,37 @@ class McServerController(
         val asset = assets.firstOrNull {
             it["name"]?.jsonPrimitive?.content?.startsWith("allay", ignoreCase = true) == true
         } ?: assets.first()
-        return asset["browser_download_url"]?.jsonPrimitive?.content
+        val url = asset["browser_download_url"]?.jsonPrimitive?.content
             ?: throw RuntimeException("Allay $version: asset has no download url")
+        // GitHub 2025 起在 asset 上直接给 `digest: "sha256:<hex>"`，格式是固定的，
+        // 剥掉前缀即可；老接口没有该字段时保持 null，走大小兜底。
+        val sha256 = asset["digest"]?.jsonPrimitive?.content
+            ?.removePrefix("sha256:")
+            ?.takeIf { it.length == 64 }
+        return CoreDownload(url, sha256 = sha256)
     }
 
-    private fun resolvePowerNukkitXUrl(version: String): String {
+    private fun resolvePowerNukkitXUrl(version: String): CoreDownload {
         powerNukkitXVersionCache[version.trim().removePrefix("v").removePrefix("V").lowercase(Locale.ROOT)]
             ?.assetUrl
             ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
+            ?.let { return CoreDownload(it) }
         val normalized = version.trim().removePrefix("v").removePrefix("V")
         if (normalized.contains("-r") || normalized.endsWith("-PNX", ignoreCase = true)) {
-            return "https://repo1.maven.org/maven2/cn/powernukkitx/powernukkitx/$normalized/powernukkitx-$normalized-shaded.jar"
+            return CoreDownload(
+                "https://repo1.maven.org/maven2/cn/powernukkitx/powernukkitx/$normalized/powernukkitx-$normalized-shaded.jar"
+            )
         }
         val release = findPowerNukkitXRelease(version)
-        return powerNukkitXAsset(release)
+        val url = powerNukkitXAsset(release)
             ?.get("browser_download_url")?.jsonPrimitive?.content
             ?: throw RuntimeException("PowerNukkitX $version: release has no powernukkitx.jar asset")
+        return CoreDownload(url)
     }
 
     // ── NeoForge：maven-metadata 按所选 MC 版本匹配 NeoForge 版本 installer ──
 
-    private fun resolveNeoForgeUrl(version: String): String {
+    private fun resolveNeoForgeUrl(version: String): CoreDownload {
         val xml = fetchNeoForgeMavenMetadata()
         val versions = Regex("<version>([^<]+)</version>").findAll(xml).map { it.groupValues[1] }.toList()
         // 不再回退到 <release>：当所选 MC 版本没有对应 NeoForge 构建时，
@@ -1368,7 +1660,8 @@ class McServerController(
         // 用户拿到的是一个装不上的 jar。现在直接报错，让用户看到真实原因。
         val ver = selectNeoForgeVersion(version, versions)
             ?: throw RuntimeException("NeoForge: 没有适配 MC $version 的构建，请改用其他 MC 版本")
-        return "https://maven.neoforged.net/releases/net/neoforged/neoforge/$ver/neoforge-$ver-installer.jar"
+        val url = "https://maven.neoforged.net/releases/net/neoforged/neoforge/$ver/neoforge-$ver-installer.jar"
+        return CoreDownload(url, sha1 = fetchMavenSha1(url))
     }
 
     /**
@@ -1432,13 +1725,40 @@ class McServerController(
 
     // ── Quilt：meta API 取 installer 版本（quilt-installer 独立版本号，与 loader 不同） ──
 
-    private fun resolveQuiltUrl(version: String): String {
+    private fun resolveQuiltUrl(version: String): CoreDownload {
         val resp = fetchJson("https://meta.quiltmc.org/v3/versions/installer")
         val installerVer = resp.jsonArray.firstOrNull()?.jsonObject
             ?.get("version")?.jsonPrimitive?.content
             ?: throw RuntimeException("Quilt: no installer version")
-        return "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-installer/$installerVer/quilt-installer-$installerVer.jar"
+        val url = "https://maven.quiltmc.org/repository/release/org/quiltmc/quilt-installer/$installerVer/quilt-installer-$installerVer.jar"
+        return CoreDownload(url, sha1 = fetchMavenSha1(url))
     }
+
+    /**
+     * 取 Maven 仓库旁挂的 `.sha1`（与 jar 同路径加后缀）。
+     *
+     * 为什么单独实现而不复用 [fetchText]：`fetchText` 是 15s + 3 次重试，
+     * 用在「顺便取个校验值」上会让每次下载多等最多 45 秒 —— 而取不到摘要
+     * 只是失去一层保护，不该拖慢主流程。这里给 4 秒、不重试、失败返回 null。
+     */
+    private fun fetchMavenSha1(url: String, timeoutMs: Int = 4_000): String? = runCatching {
+        val conn = URL("$url.sha1").openConnection() as HttpURLConnection
+        conn.connectTimeout = timeoutMs
+        conn.readTimeout = timeoutMs
+        conn.setRequestProperty("User-Agent", "Minexa/1.0")
+        try {
+            if (conn.responseCode !in 200..299) return@runCatching null
+            // 内容可能是 "abc123..."、也可能是 "abc123...  neoforge-1.21.1-installer.jar"
+            conn.inputStream.bufferedReader().use { it.readText() }
+                .trim()
+                .split(Regex("\\s+"))
+                .firstOrNull()
+                ?.lowercase(Locale.ROOT)
+                ?.takeIf { it.length == 40 && it.all { c -> c in "0123456789abcdef" } }
+        } finally {
+            conn.disconnect()
+        }
+    }.getOrNull()
 
     /** 读取原始文本（用于 XML 等非 JSON 接口） */
     private fun fetchText(urlStr: String): String {
@@ -1493,8 +1813,25 @@ class McServerController(
             }
     }
 
+    /**
+     * 本次版本列表加载是否回退到了内置列表。
+     *
+     * 用成员标记，而不是把 7 个 `fetch*Versions` 的返回类型全改成「列表 + 来源」：
+     * 这些函数只在 [fetchVersionOptions] 的 `when` 里各被调用一次，而 UI 侧用 token
+     * 把加载串行化了，所以「置位 → 读取」之间不会被另一次调用插入。
+     */
+    @Volatile
+    private var lastVersionsWereFallback = false
+
+    /** 内置兜底版本列表：接口不可达 / 返回空时使用，并置位给 [CoreVersionOption.isFallback]。 */
+    private fun builtinFallbackVersions(): List<String> {
+        lastVersionsWereFallback = true
+        return DEFAULT_MC_VERSIONS
+    }
+
     suspend fun fetchVersionOptions(core: ServerCore): List<CoreVersionOption> = withContext(Dispatchers.IO) {
-        when (core) {
+        lastVersionsWereFallback = false
+        val options = when (core) {
             ServerCore.Paper -> fetchPaperVersions().map(::CoreVersionOption)
             ServerCore.Purpur -> fetchPurpurVersions().map(::CoreVersionOption)
             ServerCore.Leaves -> fetchLeavesVersions().map(::CoreVersionOption)
@@ -1516,6 +1853,9 @@ class McServerController(
             ServerCore.Bds -> fetchBdsVersionOptions()
             ServerCore.Unknown -> emptyList()
         }
+        if (!lastVersionsWereFallback) return@withContext options
+        termux.emitLog("[version] ${core.displayName} 版本列表接口不可用，已回退到内置列表")
+        options.map { it.copy(isFallback = true) }
     }
 
     private fun fetchPurpurVersions(): List<String> {
@@ -1526,7 +1866,7 @@ class McServerController(
             ?.filter { !it.contains("rc") && !it.contains("pre") }
             // 必须语义排序：纯字符串 sortedDescending 会把 1.21.4 排在 1.21.10 前面，
             // 下拉列表顶部因此显示的未必是真正的最新版。
-            ?.sortedWith(mcVersionComparator) ?: DEFAULT_MC_VERSIONS
+            ?.sortedWith(mcVersionComparator) ?: builtinFallbackVersions()
     }
 
     private fun fetchLeavesVersions(): List<String> = fetchProjectVersions("https://api.leavesmc.org/v2/projects/leaves")
@@ -1541,7 +1881,7 @@ class McServerController(
             ?.sortedWith(mcVersionComparator)
             ?.take(30)
             ?.takeIf { it.isNotEmpty() }
-    }.getOrNull() ?: DEFAULT_MC_VERSIONS
+    }.getOrNull() ?: builtinFallbackVersions()
 
     /**
      * Velocity：PaperMC v3 的 `versions` 结构与 Paper 相同，是**两层对象**
@@ -1556,7 +1896,7 @@ class McServerController(
         val all = parseVersionGroups(resp["versions"])
         // 快照版本（4.3.2-SNAPSHOT）不是可下载的发布版，留在列表里只会选到 404
         val stable = all.filter { it.isNotBlank() && !it.contains("SNAPSHOT", ignoreCase = true) }
-        return stable.sortedWith(mcVersionComparator).ifEmpty { DEFAULT_MC_VERSIONS }
+        return stable.sortedWith(mcVersionComparator).ifEmpty { builtinFallbackVersions() }
     }
 
     private fun fetchBungeeVersions(): List<String> = listOf("latest")
@@ -1813,7 +2153,7 @@ class McServerController(
             }
             mcVersions.add(mc)
         }
-        if (mcVersions.isEmpty()) return@runCatching DEFAULT_MC_VERSIONS
+        if (mcVersions.isEmpty()) return@runCatching builtinFallbackVersions()
         // 补回 MC 的 `1.` 前缀：NeoForge 的 21.4 对应 MC 1.21.4；26.x 属于新的版本编号体系，保持原样。
         mcVersions.map { mc ->
             if (mc.startsWith("21.") || mc.startsWith("20.") ||
@@ -1821,7 +2161,7 @@ class McServerController(
                 mc.startsWith("17.") || mc.startsWith("16.")
             ) "1.$mc" else mc
         }.sortedWith(mcVersionComparator)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MC_VERSIONS
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
 
     /**
      * Quilt：从 meta API 获取官方支持的 MC 版本列表。
@@ -1836,10 +2176,10 @@ class McServerController(
             .filter { it.jsonObject["stable"]?.jsonPrimitive?.content == "true" }
             .mapNotNull { it.jsonObject["version"]?.jsonPrimitive?.content }
             .filter { it.isNotBlank() }
-        if (versions.isEmpty()) return@runCatching DEFAULT_MC_VERSIONS
+        if (versions.isEmpty()) return@runCatching builtinFallbackVersions()
         // 按语义排序后再截断，保证 60 条里包含的是真正最新的版本。
         versions.sortedWith(mcVersionComparator).take(60)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MC_VERSIONS
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
 
     private fun fetchPaperVersions(): List<String> {
         // PaperMC v3 API：返回 {versions: {major: [subversions]}}，需平铺。
@@ -1849,13 +2189,13 @@ class McServerController(
             // 过滤掉 rc/pre 等非正式版
             .filter { it.isNotBlank() && !it.contains("rc") && !it.contains("pre") }
             .sortedWith(mcVersionComparator)
-            .ifEmpty { DEFAULT_MC_VERSIONS }
+            .ifEmpty { builtinFallbackVersions() }
     }
 
     private fun fetchVanillaVersions(): List<String> {
         val manifest = fetchJson("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
         val versions = manifest["versions"]?.jsonArray
-            ?: return DEFAULT_MC_VERSIONS
+            ?: return builtinFallbackVersions()
         // manifest 本身按新→旧排列，但过滤掉快照/pre/rc 后必须重新语义排序再截断，
         // 否则「只取前 30 个」会把 1.21.x 系列里的新版本切掉。
         // snapshot 也要过滤：26.x 起快照版本号是 `26.4-snapshot-6`，不带 pre/rc 字样，
@@ -1885,10 +2225,10 @@ class McServerController(
             .filter { it.jsonObject["stable"]?.jsonPrimitive?.boolean ?: false }
             .mapNotNull { it.jsonObject["version"]?.jsonPrimitive?.content }
             .filter { it.isNotBlank() }
-        if (versions.isEmpty()) return@runCatching DEFAULT_MC_VERSIONS
+        if (versions.isEmpty()) return@runCatching builtinFallbackVersions()
         // 按语义排序后再截断，保证 60 条里包含的是真正最新的版本。
         versions.sortedWith(mcVersionComparator).take(60)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MC_VERSIONS
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
 
     /**
      * Forge：从 promotions_slim.json 提取所有可用的 MC 版本。
@@ -1898,14 +2238,14 @@ class McServerController(
      */
     private fun fetchForgeVersions(): List<String> = runCatching {
         val resp = fetchJson("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
-        val promos = resp["promos"]?.jsonObject ?: return@runCatching DEFAULT_MC_VERSIONS
+        val promos = resp["promos"]?.jsonObject ?: return@runCatching builtinFallbackVersions()
         val mcVersions = promos.keys
             .map { it.substringBeforeLast('-') }
             .filter { it.isNotBlank() && it.count { c -> c == '.' } >= 1 }
             .toSet()
-        if (mcVersions.isEmpty()) return@runCatching DEFAULT_MC_VERSIONS
+        if (mcVersions.isEmpty()) return@runCatching builtinFallbackVersions()
         mcVersions.sortedWith(mcVersionComparator)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: DEFAULT_MC_VERSIONS
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
 
     /**
      * 下载服务端核心到指定路径（独立方法，供 DownloadScreen 调用）。
@@ -1923,26 +2263,58 @@ class McServerController(
      * @param onProgress 回调参数：(已下载字节, 总字节, 速度 bytes/s)，总字节为 -1 表示未知
      */
     suspend fun downloadCoreTo(jarPath: String, config: McConfig, dirName: String = "default", onProgress: (Long, Long, Long) -> Unit) = withContext(Dispatchers.IO) {
-        val urls = resolveDownloadUrls(config.selectedCore, config.mcVersion)
-        val expectedDigest = if (config.selectedCore == ServerCore.PowerNukkitX) {
+        termux.beginInstallCapture()
+        try {
+            downloadCoreToLocked(jarPath, config, dirName, onProgress)
+        } catch (t: Throwable) {
+            persistInstallFailure(config, t, termux.endInstallCapture())
+            throw t
+        } finally {
+            termux.endInstallCapture()
+        }
+    }
+
+    private suspend fun downloadCoreToLocked(jarPath: String, config: McConfig, dirName: String = "default", onProgress: (Long, Long, Long) -> Unit) = withContext(Dispatchers.IO) {
+        val sources = resolveDownloadUrls(config.selectedCore, config.mcVersion)
+        // PNX 的摘要还有一条独立来源（release 资产），与 CoreDownload 里的一致；两者取其一即可。
+        val pnxDigest = if (config.selectedCore == ServerCore.PowerNukkitX) {
             runCatching { resolvePowerNukkitXDigest(config.mcVersion) }.getOrNull()
         } else null
-        Log.i(TAG, "downloadCoreTo: core=${config.selectedCore}, version=${config.mcVersion}, urls=$urls")
+        Log.i(TAG, "downloadCoreTo: core=${config.selectedCore}, version=${config.mcVersion}, urls=$sources")
         termux.emitLog("[download] 开始下载 ${config.selectedCore.displayName} ${config.mcVersion}")
         termux.emitLog("[download] 保存路径: $jarPath")
+        sources.firstOrNull()?.digestLabel?.let {
+            termux.emitLog("[download] 官方随接口提供了 $it，下载完成后会校验")
+        }
+
+        // Spigot / CraftBukkit 的直链是「按版本号拼」出来的（getbukkit CDN），版本不存在就是 404。
+        // 下载前先探一次，把确定不存在的源剔除；全都不存在就直接给结论 ——
+        // 让用户看到「这个版本没有 Spigot 构建」，而不是三次重试后的「下载失败」。
+        val usable = if (config.selectedCore == ServerCore.Spigot ||
+            config.selectedCore == ServerCore.CraftBukkit
+        ) {
+            val probed = probeBukkitSources(sources)
+            if (probed.isEmpty()) {
+                throw RuntimeException(
+                    "MC ${config.mcVersion} 没有官方 ${config.selectedCore.displayName} 构建" +
+                        "（getbukkit 未收录该版本）。请换一个 MC 版本，或改用 Paper / Purpur。"
+                )
+            }
+            probed
+        } else sources
 
         val outFile = File(jarPath)
         outFile.parentFile?.mkdirs()
 
         var lastError: Exception? = null
         // Every candidate source is tried once before retrying the first source.
-        val maxAttempts = maxOf(3, urls.size)
+        val maxAttempts = maxOf(3, usable.size)
         repeat(maxAttempts) { attempt ->
-            val url = urls[attempt % urls.size]
+            val source = usable[attempt % usable.size]
             try {
-                termux.emitLog("[download] 通道 ${attempt + 1}/${urls.size}: $url")
+                termux.emitLog("[download] 通道 ${attempt + 1}/$maxAttempts: ${source.url}")
                 MultiThreadDownloader.download(
-                    url = url,
+                    url = source.url,
                     target = outFile,
                     onProgress = { downloaded, totalBytes, speedBytesPerSec ->
                         onProgress(downloaded, totalBytes, speedBytesPerSec)
@@ -1950,42 +2322,128 @@ class McServerController(
                     onLog = { msg -> termux.emitLog("[download] $msg") }
                 )
 
-                // 校验文件大小
-                val fileSize = outFile.length()
-                if (fileSize < 1024) {
-                    throw RuntimeException("下载文件过小 ($fileSize 字节)，可能下载失败")
-                }
-                if (config.selectedCore == ServerCore.PowerNukkitX) {
-                    JarFile(outFile).use { jar ->
-                        check(
-                            jar.getEntry("org/powernukkitx/Server.class") != null ||
-                                jar.getEntry("org/powernukkitx/JarStart.class") != null ||
-                                jar.getEntry("cn/nukkit/Server.class") != null
-                        ) {
-                            "PowerNukkitX 下载内容不是有效核心 JAR"
-                        }
-                    }
-                    if (expectedDigest != null) {
-                        check(sha256(outFile).equals(expectedDigest, ignoreCase = true)) {
-                            "PowerNukkitX SHA-256 校验失败"
-                        }
-                    }
-                }
-                termux.emitLog("[download] 下载完成: ${fileSize / 1024 / 1024}MB")
-                Log.i(TAG, "downloadCoreTo: success, saved to $jarPath (${fileSize} bytes)")
+                verifyDownloadedCore(outFile, source, config.selectedCore, pnxDigest)
+                DownloadSourceHealth.recordSuccess(source.url)
+                termux.emitLog("[download] 下载完成: ${outFile.length() / 1024 / 1024}MB")
+                Log.i(TAG, "downloadCoreTo: success, saved to $jarPath (${outFile.length()} bytes)")
                 return@withContext} catch (e: Exception) {
                 Log.w(TAG, "downloadCoreTo attempt ${attempt + 1} failed: ${e.message}")
                 termux.emitLog("[download] 第 ${attempt + 1} 次失败: ${e.message}")
                 lastError = e
-                outFile.delete()
-                if (attempt < 2) {
+                // 网络中断与内容校验失败都记为「这个源此刻不可信」：下次排序会自动后置。
+                DownloadSourceHealth.recordFailure(source.url)
+                // 校验不过（内容不对）才删；网络中断留下的分片由下载层自己管，
+                // 删掉反而会让断点续传失去意义。
+                if (e is CoreVerifyException) {
+                    outFile.delete()
+                    // 分片已经完整合并过一次却校验不过，说明这份内容本身是坏的。
+                    // 留着它下次会「续传」出同一个坏文件（每个分片都判定已完成），
+                    // 三次重试全打在同一个坏结果上。
+                    MultiThreadDownloader.clearResumeState(outFile)
+                }
+                if (attempt < maxAttempts - 1) {
                     termux.emitLog("[download] 等待 ${1500L * (attempt + 1)}ms 后重试...")
                     delay(1500L * (attempt + 1))
                 }
             }
         }
-        throw RuntimeException("下载失败（已重试3次）: ${lastError?.message}")
+        throw RuntimeException("下载失败（已尝试 $maxAttempts 次）: ${lastError?.message}")
     }
+
+    /** 校验失败时用这个类型，调用方据此判断「该删文件重下」而不是「该续传」。 */
+    private class CoreVerifyException(message: String) : RuntimeException(message)
+
+    /**
+     * 下载完成后的统一校验：大小 → 摘要 → 结构。
+     *
+     * 三步的顺序不能换：摘要最便宜也最确定，结构校验能在「没有摘要」的核心上
+     * 兜住最脏的一类错误 —— 运营商劫持返回的 HTML 错误页、CDN 截断的半个 jar。
+     * 这两类文件都能通过「大于 1KB」，过去要等用户点启动才暴露成
+     * `Invalid or corrupt jarfile`。
+     */
+    private fun verifyDownloadedCore(
+        file: File,
+        source: CoreDownload,
+        core: ServerCore,
+        pnxDigest: String?
+    ) {
+        val size = file.length()
+        if (size < 1024) throw CoreVerifyException("下载文件过小（$size 字节），可能下载失败")
+
+        val expectedSha256 = source.sha256 ?: pnxDigest
+        if (expectedSha256 != null) {
+            val actual = sha256(file)
+            if (!actual.equals(expectedSha256, ignoreCase = true)) {
+                throw CoreVerifyException(
+                    "SHA-256 校验失败（期望 ${expectedSha256.take(12)}…，实际 ${actual.take(12)}…），" +
+                        "下载内容不完整或源返回了错误页面"
+                )
+            }
+            termux.emitLog("[download] SHA-256 校验通过")
+        } else if (source.sha1 != null) {
+            val actual = sha1Of(file)
+            if (actual == null || !actual.equals(source.sha1, ignoreCase = true)) {
+                throw CoreVerifyException("SHA-1 校验失败，下载内容不完整或源返回了错误页面")
+            }
+            termux.emitLog("[download] SHA-1 校验通过")
+        }
+
+        if (core == ServerCore.PowerNukkitX) {
+            JarFile(file).use { jar ->
+                check(
+                    jar.getEntry("org/powernukkitx/Server.class") != null ||
+                        jar.getEntry("org/powernukkitx/JarStart.class") != null ||
+                        jar.getEntry("cn/nukkit/Server.class") != null
+                ) {
+                    "PowerNukkitX 下载内容不是有效核心 JAR"
+                }
+            }
+        }
+
+        // PocketMine 是 .phar（不是 zip/jar），BDS 走另一条链路，两者跳过结构校验。
+        if (core != ServerCore.PocketMine && core != ServerCore.Bds) {
+            val jarOk = runCatching { JarFile(file).use { it.manifest } }.isSuccess
+            if (!jarOk) {
+                throw CoreVerifyException("下载内容不是有效的 JAR（很可能是错误页或被截断），请重试或换源")
+            }
+        }
+    }
+
+    /**
+     * Spigot / CraftBukkit 下载前探测。
+     *
+     * 只把**确定不存在**（404/410）的源剔除：探测本身失败（超时、DNS）不代表源不可用，
+     * 一律保留交给正式下载去试，否则弱网下会把唯一可用的源也误杀。
+     */
+    private fun probeBukkitSources(sources: List<CoreDownload>): List<CoreDownload> {
+        val alive = sources.filter { source ->
+            val code = headStatus(source.url)
+            val keep = when {
+                code == null -> true
+                code in 200..299 -> true
+                code == 404 || code == 410 -> false
+                else -> true
+            }
+            if (!keep) termux.emitLog("[download] 预检 ${source.url} → HTTP $code，该源无此版本")
+            keep
+        }
+        termux.emitLog("[download] 预检结果：${alive.size}/${sources.size} 个源可用")
+        return alive
+    }
+
+    private fun headStatus(url: String): Int? = runCatching {
+        val conn = URL(url).openConnection() as HttpURLConnection
+        conn.requestMethod = "HEAD"
+        conn.connectTimeout = BUKKIT_PROBE_TIMEOUT_MS
+        conn.readTimeout = BUKKIT_PROBE_TIMEOUT_MS
+        conn.setRequestProperty("User-Agent", "Minexa/1.0")
+        conn.setRequestProperty("Accept-Encoding", "identity")
+        try {
+            conn.responseCode
+        } finally {
+            conn.disconnect()
+        }
+    }.getOrNull()
 
     private fun fetchJsonElement(urlStr: String): JsonElement {
         var lastError: Exception? = null
@@ -2921,7 +3379,7 @@ class McServerController(
         }
         if (installerJar != null) {
             termux.emitLog("[startMc] Forge 旧版安装产物不完整，正在重新部署服务端文件...")
-            val code = runInstallerWithRetry(
+            val outcome = runInstallerWithRetry(
                 installerJar.absolutePath,
                 serverDir,
                 "Forge",
@@ -2930,7 +3388,7 @@ class McServerController(
                 javaVendor,
                 mirrorUrl
             )
-            if (code == 0) {
+            if (outcome.code == 0) {
                 findLegacyForgeServerJar(serverDir, javaVersion)?.let { jar ->
                     termux.emitLog("[startMc] Forge 旧版服务端文件已修复: ${jar.name}")
                     return if (javaVersion == JavaVersion.Java8) {
@@ -3006,6 +3464,19 @@ class McServerController(
             ) == 0
         }
         return hasForgeInstallerMainClass(file)
+    }
+
+    /**
+     * 启动产物的结构性冒烟检查，失败时抛异常（调用方负责清理半成品目录）。
+     *
+     * 只做「能不能被 JVM 打开」这一层：真正的健康度要看启动日志，但「文件根本不是
+     * 一个 jar」「jar 里连 class 都没有」这两类是安装期就能确定失败的，
+     * 留到启动期暴露只会让报错位置离真因更远。
+     */
+    private fun requireDownloadedCoreLaunchable(core: ServerCore, serverDir: File, fileName: String) {
+        val file = File(serverDir, fileName)
+        val reason = coreArchiveSmokeCheck(file, isPhar = core == ServerCore.PocketMine)
+        check(reason == null) { "${core.displayName}：$reason" }
     }
 
     private fun hasForgeInstallerMainClass(file: File): Boolean = runCatching {
@@ -3091,6 +3562,32 @@ class McServerController(
          * 因此可兼容的最高 PocketMine 版本为 5.33.1（实测其 composer 要求）。
          */
         private const val PMMP_MAX_COMPAT_VERSION = "5.33.1"
+
+        /**
+         * installer 单次执行的硬超时。
+         *
+         * 与 PRoot / FCL 两条分支一直使用的 900s 对齐：Forge/NeoForge installer 首次要
+         * 拉几十个库，正常 3~8 分钟；超过 15 分钟基本可以判定为「卡在某个不可达的源上」，
+         * 继续等只会让用户以为 App 死了。超时后按 exit=124 处理并给出可执行建议。
+         */
+        private const val INSTALLER_TIMEOUT_MS = 900_000L
+
+        /**
+         * 依赖库预下载的并发路数。
+         *
+         * 70+ 个小文件串行时，每个 0.2~1s 的 RTT 会累加成几十秒到一两分钟，是 NeoForge
+         * 安装慢的主因。6 路既能吃掉大部分等待，又不会让镜像把我方当爬虫（真机实测
+         * BMCLAPI 在 8 路以上开始出现 429）。
+         */
+        private const val LIB_DOWNLOAD_PARALLELISM = 6
+
+        /**
+         * Spigot / CraftBukkit 的下载前置探测超时。
+         *
+         * 这两个核心没有版本 API，只能按「MC 版本号拼 getbukkit 直链」猜。猜错的代价
+         * 是白跑三次重试，所以下载前先用一次极短的 GET 确认该文件存在。
+         */
+        private const val BUKKIT_PROBE_TIMEOUT_MS = 12_000
 
         /**
          * 在 servers 目录下为 [base] 找一个未被占用的目录名（静态版，需自行传入已占用集合）。
