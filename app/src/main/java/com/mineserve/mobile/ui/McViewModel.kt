@@ -62,6 +62,7 @@ import com.mineserve.mobile.ui.vm.AptMirrorDelegate
 import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
 import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
+import com.mineserve.mobile.ui.vm.BdsEnvironmentDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
 import com.mineserve.mobile.ui.vm.BaseDependenciesDelegate
 import com.mineserve.mobile.ui.vm.BackupSettingsDelegate
@@ -179,11 +180,20 @@ class McViewModel(
     // `installedJava` 列表，也不参与 `selectedJavaRuntime` 的选择。
     // 界面上单独一栏「BDS 专属」，正是为了不让用户把它误认成某个 Java 版本。
 
+    private val bdsEnvironmentDelegate by lazy {
+        BdsEnvironmentDelegate(
+            app = app,
+            environment = bdsEnvironment,
+            isBootstrapped = { isBootstrapped.value },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
     /** BDS 运行环境（容器 + box64）的状态；跨页共享，切页不丢进度 */
-    val bdsEnvStatus: StateFlow<BdsEnvStatus> = bdsEnvironment.status
+    val bdsEnvStatus: StateFlow<BdsEnvStatus> get() = bdsEnvironmentDelegate.status
 
     /** 重新读一遍磁盘（进环境页、授权变化、安装结束后调用） */
-    fun refreshBdsEnvironment() = bdsEnvironment.refresh()
+    fun refreshBdsEnvironment() = bdsEnvironmentDelegate.refresh()
 
     /**
      * 用户手动触发初始化。
@@ -191,19 +201,12 @@ class McViewModel(
      * 刻意**不**在启动服务器时自动调用：首次要下几十兆、耗时几分钟，
      * 塞进启动路径只会让用户以为卡死。启动时若未就绪会直接报错并指到这里。
      */
-    fun initializeBdsEnvironment() {
-        // 未授权写公共存储时初始化必然失败，先给出可照做的提示
-        if (!isBootstrapped.value) {
-            _errorFlow.tryEmit(str(R.string.bds_env_need_bootstrap))
-            return
-        }
-        bdsEnvironment.startInitialize()
-    }
+    fun initializeBdsEnvironment() = bdsEnvironmentDelegate.initialize()
 
-    fun cancelBdsEnvironment() = bdsEnvironment.cancel()
+    fun cancelBdsEnvironment() = bdsEnvironmentDelegate.cancel()
 
     /** 只删 box64 与就绪标记，容器留给 Java 版继续用 */
-    fun removeBdsBox64() = bdsEnvironment.removeBox64()
+    fun removeBdsBox64() = bdsEnvironmentDelegate.removeBox64()
 
     // ── 在线模式（正版验证）出网自检 ───────────────────────────────
 
