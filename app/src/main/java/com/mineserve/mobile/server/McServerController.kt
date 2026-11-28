@@ -745,7 +745,9 @@ class McServerController(
             conn.setRequestProperty("User-Agent", "Minexa/1.0")
             conn.setRequestProperty("Accept-Encoding", "identity")
             try {
-                if (conn.responseCode != 200) return false
+                // 非 200 也走异常分支：catch 里统一删 .part，避免把 0 字节/半截文件
+                // 留在库里（下次启动被当成「已下载」）。
+                if (conn.responseCode != 200) throw RuntimeException("HTTP ${conn.responseCode}")
                 conn.inputStream.use { input ->
                     tmp.outputStream().use { output -> input.copyTo(output, 64 * 1024) }
                 }
@@ -1022,7 +1024,17 @@ class McServerController(
         val dirName = uniqueDirNameIn(autoDirName(normalizedConfig.selectedCore))
         termux.emitLog("[install] 目录名：$dirName（显示名：$customName）")
         val jarPath = termux.serverJarFileFor(dirName).absolutePath
-        downloadCoreTo(jarPath, normalizedConfig, dirName, onProgress)
+        try {
+            downloadCoreTo(jarPath, normalizedConfig, dirName, onProgress)
+        } catch (t: Throwable) {
+            // 下载失败（含用户取消）必须把这个刚创建的空壳目录整个删掉：
+            // 多线程下载器失败时**故意保留**分片以便续传（server.jar.partmeta +
+            // server.jar.part<offset>），而启动扫描的判据是「目录里有文件就算核心」，
+            // 于是下次回前台它会被登记成一台点开就报「启动文件缺失」的幽灵服务器。
+            // 这里删的是本次自动生成的新目录，不含用户数据。
+            FileOps.deleteRecursively(termux.serverDirFor(dirName))
+            throw t
+        }
         // 新核心目录下创建 eula.txt 和 plugins/ 目录。
         // 这里显式建目录（serverDirFor 已改成纯解析，不再顺手 mkdirs）。
         val serverDir = termux.ensureServerDir(dirName)
@@ -1093,7 +1105,18 @@ class McServerController(
                     // isProotGuestRuntime：以前这里只认 `selectedJavaVersion == Java8`，
                     // 新增 Proot 来源后若不同步，会出现「启动走容器、installer 走宿主」
                     // 的错位 —— 而 Quilt 的 installer 恰恰依赖容器内的 java。
-                    val code = if (isProotGuestRuntime(
+                    //
+                    // 三条链路统一收成 InstallerOutcome：超时、输出尾部、失败归因都要有。
+                    // 之前宿主链路是裸 execOnce（`process.waitFor()` 无超时），Quilt installer
+                    // 卡在拉依赖时会永久停在「安装中」，而失败只回一句 exit=1 ——
+                    // a220c47 补归因时只覆盖了 Forge/NeoForge，漏了这一条。
+                    //
+                    // 时长用「总预算」而不是 Forge 的单次上限：Quilt 这条链路不重试，
+                    // 一次失败就得重下 installer 包，所以把 20 分钟整块给一次尝试，
+                    // 与 Forge 最坏情况（900s + 重试补足）对齐，慢网用户不至于 15 分钟被砍。
+                    val quiltTimeoutMs = INSTALLER_TOTAL_BUDGET_MS
+                    val timeoutMinutes = quiltTimeoutMs / 60_000
+                    val quiltOutcome: InstallerOutcome = if (isProotGuestRuntime(
                             normalizedConfig.selectedJavaVendor,
                             normalizedConfig.selectedJavaVersion
                         )
@@ -1103,7 +1126,10 @@ class McServerController(
                             normalizedConfig.selectedJavaVersion
                         )
                         val guestJar = "${TermuxRuntime.GUEST_SERVER_DIR}/${File(jarPath).relativeTo(serverDir).invariantSeparatorsPath}"
-                        termux.runProotCommand(
+                        // runProotInstaller 在 rootfs 修复失败时直接返回 126、根本没跑 installer，
+                        // 这时 lastExecTail 还停在上一条命令上，必须靠「尾部有没有变」来判定。
+                        val tailBefore = termux.lastExecTail()
+                        val code = termux.runProotCommand(
                             serverDir,
                             "export JAVA_HOME=${profile.javaHomeInGuest}; " +
                                 "export PATH=\"${profile.javaHomeInGuest}/bin:\$PATH\"; " +
@@ -1112,33 +1138,49 @@ class McServerController(
                                 "exec ${profile.guestJavaBinaryCandidates.first()} " +
                                 "-Djava.io.tmpdir=/tmp \$TSARGS -jar '$guestJar' " +
                                 "install server '${normalizedConfig.mcVersion}' --install-dir=${TermuxRuntime.GUEST_SERVER_DIR} --download-server",
+                            timeoutMs = quiltTimeoutMs,
                             profile = profile
+                        )
+                        val tailAfter = termux.lastExecTail()
+                        InstallerOutcome(
+                            code,
+                            if (tailAfter != tailBefore) tailAfter else "",
+                            timeoutMinutes
                         )
                     } else if (normalizedConfig.selectedJavaVendor == JavaVendor.Fcl) {
                         // FCL：java 不在 Termux PATH（filesDir/jvm-fcl），同 Forge/NeoForge
                         // 一样必须走 Fcl 专用命令；Quilt installer 参数与 Termux 路径一致。
                         // 自带 cacerts 可读时不注入（并集库可能缺新根证书，顶替反而更差）。
                         val injected = if (termux.fclHasUsableCacerts(normalizedConfig.selectedJavaVersion)) {
-                            emptyArray()
+                            emptyList()
                         } else {
-                            termux.installerTrustStoreProps(normalizedConfig.selectedJavaVersion)
+                            termux.installerTrustStoreProps(normalizedConfig.selectedJavaVersion).toList()
                         }
-                        termux.runFclJavaCommand(
+                        val result = termux.runFclJavaCommandCapturing(
                             normalizedConfig.selectedJavaVersion, serverDir,
-                            *injected,
-                            "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
-                            "--install-dir=${serverDir.absolutePath}", "--download-server"
+                            injected + listOf(
+                                "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
+                                "--install-dir=${serverDir.absolutePath}", "--download-server"
+                            ),
+                            timeoutMs = quiltTimeoutMs
                         )
+                        InstallerOutcome(result.code, result.tail, timeoutMinutes)
                     } else {
-                        termux.execOnce(
-                            "java", *termux.installerTrustStoreProps(normalizedConfig.selectedJavaVersion),
+                        val result = termux.execOnceWithTimeoutCapture(
+                            quiltTimeoutMs,
+                            "java", "-Djava.io.tmpdir=${installerTempDir.absolutePath}",
+                            *termux.installerTrustStoreProps(normalizedConfig.selectedJavaVersion),
                             "-jar", jarPath, "install", "server", normalizedConfig.mcVersion,
                             "--install-dir=${serverDir.absolutePath}", "--download-server"
                         )
+                        InstallerOutcome(result.code, result.tail, timeoutMinutes)
                     }
-                    if (code != 0) {
+                    if (quiltOutcome.code != 0) {
                         FileOps.deleteRecursively(serverDir)
-                        throw RuntimeException("Quilt installer 执行失败 (exit=$code)")
+                        throw RuntimeException(explainInstallerFailure(
+                            normalizedConfig.selectedCore.displayName, quiltOutcome.code,
+                            quiltOutcome.tail, quiltOutcome.timeoutMinutes
+                        ))
                     }
                 }
                 else -> {}
@@ -1645,22 +1687,18 @@ class McServerController(
         )
     }
 
-    // ── Velocity：PaperMC v3 API（取最新 build 的 application 下载） ──
+    // ── Velocity：PaperMC v3 API（取最优 build 的 server:default 下载） ──
 
+    /**
+     * 解析细节（数组 vs 对象、`server:default` vs `application`、倒序返回）见
+     * [parseVelocityBuilds]；那是纯函数，有单测钉住接口形状。
+     */
     private fun resolveVelocityUrl(version: String): CoreDownload {
         val buildsUrl = "https://fill.papermc.io/v3/projects/velocity/versions/$version/builds"
-        val builds = fetchJsonElement(buildsUrl).jsonObject["builds"]?.jsonArray
-            ?: throw RuntimeException("Velocity: no builds for version $version")
-        val best = builds.lastOrNull()?.jsonObject
-            ?: throw RuntimeException("Velocity: no build for version $version")
-        val download = best["downloads"]?.jsonObject?.get("application")?.jsonObject
-        val url = download?.get("url")?.jsonPrimitive?.content
-            ?: throw RuntimeException("Velocity: no application download for version $version")
-        // v3 的 application 对象里同样带 checksums.sha256
-        val sha256 = download["checksums"]?.jsonObject
-            ?.get("sha256")?.jsonPrimitive?.content
-            ?.takeIf { it.length == 64 }
-        return CoreDownload(url, sha256 = sha256)
+        val best = selectVelocityBuild(fetchJsonElement(buildsUrl))
+            ?: throw RuntimeException("Velocity: no downloadable build for version $version")
+        Log.i(TAG, "Velocity: selected build ${best.id} (channel=${best.channel}) for $version")
+        return best.download
     }
 
     // ── BungeeCord：md-5 Jenkins 直链（无版本概念，取最新构建） ──
@@ -2008,7 +2046,7 @@ class McServerController(
             .map(::CoreVersionOption)
     }.getOrElse {
         termux.emitLog("[download] PocketMine-MP 版本源失败: ${it.message ?: "unknown"}")
-        listOf(CoreVersionOption(PMMP_MAX_COMPAT_VERSION, "当前 PHP 运行时兼容的最新版本"))
+        listOf(CoreVersionOption(PMMP_MAX_COMPAT_VERSION, "当前 PHP 运行时兼容的最新版本", isFallback = true))
     }
 
     /** 版本号逐段数值比较：a 是否 ≤ b（如 "5.33.1" ≤ "5.33.1"，"5.9" ≤ "5.33"） */
@@ -2040,7 +2078,9 @@ class McServerController(
             }
     }.getOrElse {
         termux.emitLog("[download] Allay 版本源失败: ${it.message ?: "unknown"}")
-        listOf(CoreVersionOption("latest", "官方最新版"))
+        // 兜底项必须带 isFallback：否则列表看起来和官方全集一样，
+        // 用户选到一个不存在的版本，只会在下载阶段吃 404。
+        listOf(CoreVersionOption("latest", "官方最新版", isFallback = true))
     }
 
     private fun fetchPowerNukkitXVersionOptions(): List<CoreVersionOption> {

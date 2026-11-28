@@ -155,8 +155,16 @@ internal class InstalledCoresDelegate(
 
                 // 空目录：跳过登记。判据是「整棵子树里一个文件都没有」——
                 // 只要里面有 1 个文件（哪怕是不认识的 .dat），就按有效核心目录处理。
-                val (emptyDirs, realDirs) = withContext(Dispatchers.IO) {
+                val (emptyDirs, withFiles) = withContext(Dispatchers.IO) {
                     fresh.partition { dir -> !com.mineserve.mobile.data.ServerStorage.containsAnyFile(dir) }
+                }
+                // 下载中断残留（只有 server.jar.partmeta/.part、没有 jar）：同样跳过。
+                // 进程被杀时下载方的清理 catch 不会执行，这类空壳以前会被登记成
+                // 「未知核心」，点启动才报「启动文件缺失」。目录本身不动，留给文件管理页。
+                val (interruptedDirs, realDirs) = withContext(Dispatchers.IO) {
+                    withFiles.partition { dir ->
+                        com.mineserve.mobile.data.ServerStorage.looksLikeInterruptedDownload(dir)
+                    }
                 }
                 if (emptyDirs.isNotEmpty()) {
                     termux3Log(
@@ -164,10 +172,19 @@ internal class InstalledCoresDelegate(
                             emptyDirs.joinToString(", ") { it.name }
                     )
                 }
-                if (realDirs.isEmpty()) {
-                    reportMessage(
-                        str(R.string.msg_scan_skipped_empty, emptyDirs.size)
+                if (interruptedDirs.isNotEmpty()) {
+                    termux3Log(
+                        "扫描跳过 ${interruptedDirs.size} 个下载中断残留（未登记）: " +
+                            interruptedDirs.joinToString(", ") { it.name }
                     )
+                }
+                if (realDirs.isEmpty()) {
+                    // 只给「空目录」弹提示：文案写的是空文件夹，把下载残留算进同一个
+                    // 数字会自相矛盾。下载残留只写终端日志（用户查安装进度时能看到），
+                    // 不额外打扰。
+                    if (emptyDirs.isNotEmpty()) {
+                        reportMessage(str(R.string.msg_scan_skipped_empty, emptyDirs.size))
+                    }
                     return@launch
                 }
 

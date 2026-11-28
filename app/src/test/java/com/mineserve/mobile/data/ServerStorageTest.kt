@@ -105,4 +105,33 @@ class ServerStorageTest {
         assertEquals(StorageLocation.Internal, StorageLocation.of("SomethingElse"))
         assertEquals(StorageLocation.Legacy, StorageLocation.of("legacy"))
     }
+
+    @Test
+    fun interruptedDownloadShellIsRecognised() {
+        // 进程被杀后的现场：只有分片指纹 + 若干分片，没有 server.jar
+        val shell = temp.newFolder("server-20261128-velocity-ab12")
+        File(shell, "server.jar.partmeta").writeText("{}")
+        File(shell, "server.jar.part0").writeBytes(ByteArray(8))
+        assertTrue(ServerStorage.looksLikeInterruptedDownload(shell))
+    }
+
+    @Test
+    fun realCoreIsNotMistakenForInterruptedDownload() {
+        // 有 jar 就是核心（哪怕分片没清干净，也不能跳过登记）
+        val dir = temp.newFolder("server-paper")
+        File(dir, "server.jar").writeBytes(ByteArray(4))
+        File(dir, "server.jar.partmeta").writeText("{}")
+        assertFalse(ServerStorage.looksLikeInterruptedDownload(dir))
+    }
+
+    @Test
+    fun userPackWithoutPartMetaIsNotMistakenForInterruptedDownload() {
+        // 用户自己拖进来的整合包：没有 partmeta，必须照常登记
+        val pack = temp.newFolder("my-pack")
+        File(pack, "README.md").writeText("# pack")
+        File(pack, "mods").mkdirs()
+        File(pack, "mods/a.jar").writeBytes(ByteArray(4))
+        assertFalse(ServerStorage.looksLikeInterruptedDownload(pack))
+        assertFalse(ServerStorage.looksLikeInterruptedDownload(temp.root))
+    }
 }
