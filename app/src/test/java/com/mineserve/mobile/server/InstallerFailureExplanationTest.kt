@@ -91,6 +91,22 @@ class InstallerFailureExplanationTest {
     }
 
     @Test
+    fun `124 是总预算耗尽时仍带出尾部里的真实原因`() {
+        // 「重试总预算耗尽」被归成 exit=124，此时尾部往往写着真正的失败原因。
+        // 直接返回「超时，请换网络」等于把唯一的线索丢掉。
+        val tail = "Caused by: java.net.ConnectException: Connection refused"
+        val msg = explainInstallerFailure("NeoForge", 124, tail, timeoutMinutes = 22)
+        assertTrue(msg, msg.contains("22 分钟"))
+        assertTrue(msg, msg.contains("Connection refused"))
+    }
+
+    @Test
+    fun `124 没有尾部时不产生悬空括号`() {
+        val msg = explain(code = 124, tail = "   \n  ")
+        assertFalse(msg, msg.contains("原始信息"))
+    }
+
+    @Test
     fun `超时文案报真实时长而不是固定 15 分钟`() {
         assertTrue(explain(code = 124, tail = ""), explain(code = 124, tail = "").contains("15 分钟"))
         assertTrue(

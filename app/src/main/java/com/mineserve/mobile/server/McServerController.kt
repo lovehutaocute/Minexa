@@ -36,9 +36,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -117,9 +115,18 @@ internal fun explainInstallerFailure(
     timeoutMinutes: Long = 15
 ): String {
     val base = "$label installer 执行失败 (exit=$code)"
+    // 尾部最后一行常是 `Caused by: ...`，直接带给用户，省得他再翻控制台。
+    fun tailLastLine(): String? = tail.lineSequence()
+        .map { it.trim() }
+        .lastOrNull { it.isNotEmpty() && !it.startsWith("at ") && !it.startsWith("...") }
+        ?.take(180)
     if (code == 124) {
-        return "$base：安装超时（$timeoutMinutes 分钟内未完成），" +
+        val timeoutHint = "$base：安装超时（$timeoutMinutes 分钟内未完成），" +
             "多为依赖库下载卡住。请换网络后重试，或改用 PRoot / Pojav 运行环境。"
+        // 124 现在有两个来源：真的跑到单次超时，和「重试总预算耗尽」被归成超时。
+        // 后者的尾部里往往写着真正的失败原因（连接被拒、某个库 404），直接丢掉等于不给方向。
+        val line = tailLastLine()
+        return if (line.isNullOrBlank()) timeoutHint else "$timeoutHint（原始信息：$line）"
     }
     val text = tail.lowercase()
     fun hit(vararg keys: String) = keys.any { text.contains(it.lowercase()) }
@@ -154,11 +161,8 @@ internal fun explainInstallerFailure(
         else -> null
     }
     if (reason == null) return base
-    // 尾部最后一行常是 `Caused by: ...`，直接带给用户，省得他再翻控制台。
-    val lastLine = tail.lineSequence()
-        .map { it.trim() }
-        .lastOrNull { it.isNotEmpty() && !it.startsWith("at ") && !it.startsWith("...") }
-    return if (lastLine.isNullOrBlank()) "$base：$reason" else "$base：$reason（原始信息：${lastLine.take(180)}）"
+    val lastLine = tailLastLine()
+    return if (lastLine.isNullOrBlank()) "$base：$reason" else "$base：$reason（原始信息：$lastLine）"
 }
 
 /**
@@ -500,13 +504,15 @@ class McServerController(
             val remainingMs = INSTALLER_TOTAL_BUDGET_MS - (System.currentTimeMillis() - budgetStartMs)
             if (remainingMs <= 0L) {
                 termux.emitLog(
-                    "[install] $label 安装总时长已超过 ${INSTALLER_TOTAL_BUDGET_MS / 60_000} 分钟，" +
+                    "[install] $label 安装总时长已用满预算（最多 $INSTALLER_MAX_TOTAL_MINUTES 分钟），" +
                         "停止重试（最后一次 exit=$lastCode）"
                 )
                 return InstallerOutcome(
                     code = 124,
                     tail = lastTail,
-                    timeoutMinutes = INSTALLER_TOTAL_BUDGET_MS / 60_000
+                    // 报实际可能等到的上限（20 分钟预算 + 最后一次 2 分钟下限），
+                    // 写 20 会和用户掐表的结果对不上。
+                    timeoutMinutes = INSTALLER_MAX_TOTAL_MINUTES
                 )
             }
             // 最后一次尝试给足剩余时间；但每次都不少于 2 分钟，否则「剩余 10 秒」这种
@@ -523,6 +529,11 @@ class McServerController(
                 // 恰恰是 NeoForge 最容易「卡在拉库」的那条路。它内部已经用带捕获的
                 // exec，所以执行完把那条命令的尾部取回来即可。
                 prootGuest -> {
+                    // 先记下当前尾部。runProotInstaller 在 rootfs 修复失败时会直接返回 126、
+                    // 根本没跑 installer；这种情况下 executor.lastTail 还停在上一条命令
+                    // （甚至是上一次 attempt 的 installer 输出），拿它当归因会把方向指错。
+                    // 尾部没变 ⇒ 这次没真正执行过，就当没有尾部，让文案只报退出码。
+                    val tailBefore = termux.lastExecTail()
                     val code = termux.runProotInstaller(
                         jarPath,
                         serverDir,
@@ -530,7 +541,8 @@ class McServerController(
                         profile = termux.resolveProotProfile(javaVendor, javaVersion),
                         mirrorUrl = effectiveMirror
                     )
-                    lastTail = termux.lastExecTail()
+                    val tailAfter = termux.lastExecTail()
+                    lastTail = if (tailAfter != tailBefore) tailAfter else ""
                     code
                 }
                 // FCL 的 java 不在 Termux PATH 里（在 filesDir/jvm-fcl），execOnce("java")
@@ -1871,63 +1883,57 @@ class McServerController(
     }
 
     /**
-     * 本次版本列表加载是否回退到了内置列表。
+     * 一次版本列表加载的「是否回退到内置列表」记录器。
      *
-     * 用成员标记，而不是把 7 个 `fetch*Versions` 的返回类型全改成「列表 + 来源」：
-     * 这些函数只在 [fetchVersionOptions] 的 `when` 里各被调用一次。
-     *
-     * **读写必须串行**：版本列表不止一个入口（下载页、MCP 工具 `fetchVersions`），
-     * 两次请求不同核心时会交错执行 —— 不加锁的话，A 的「兜底」标记会被 B 的
+     * 以前这是个成员变量 + 一把互斥锁：版本列表不止一个入口（下载页、MCP 工具
+     * `fetchVersions`），两次请求不同核心会交错执行，A 的「兜底」标记会被 B 的
      * `false` 冲掉（提示不显示），或者把 B 的正常列表标成兜底（误报）。
-     * 那个锁就是下面的 [versionFetchMutex]，代价可忽略（一次网络请求量级的操作）。
+     *
+     * 但这件事本来就是**单次调用内**的状态，用锁把两次网络请求串起来代价太大
+     * （查一次 Paper 要等前面那次 BDS 查完）。改成随调用创建的记录器之后，
+     * 既没有共享状态、也不需要锁。
      */
-    @Volatile
-    private var lastVersionsWereFallback = false
+    private class FallbackTracker(var hit: Boolean = false)
 
-    /** 串行化版本列表加载：保证 [lastVersionsWereFallback] 的「置位 → 读取」不被穿插。 */
-    private val versionFetchMutex = Mutex()
-
-    /** 内置兜底版本列表：接口不可达 / 返回空时使用，并置位给 [CoreVersionOption.isFallback]。 */
-    private fun builtinFallbackVersions(): List<String> {
-        lastVersionsWereFallback = true
+    /** 内置兜底版本列表：接口不可达 / 返回空时使用，并在 [tracker] 上记一笔。 */
+    private fun builtinFallbackVersions(tracker: FallbackTracker): List<String> {
+        tracker.hit = true
         return DEFAULT_MC_VERSIONS
     }
 
     suspend fun fetchVersionOptions(core: ServerCore): List<CoreVersionOption> = withContext(Dispatchers.IO) {
-        versionFetchMutex.withLock {
-            lastVersionsWereFallback = false
-            val options = when (core) {
-                ServerCore.Paper -> fetchPaperVersions().map(::CoreVersionOption)
-                ServerCore.Purpur -> fetchPurpurVersions().map(::CoreVersionOption)
-                ServerCore.Leaves -> fetchLeavesVersions().map(::CoreVersionOption)
-                ServerCore.Leaf -> fetchLeafVersions().map(::CoreVersionOption)
-                ServerCore.Spigot, ServerCore.CraftBukkit -> DEFAULT_MC_VERSIONS.map(::CoreVersionOption)
-                ServerCore.Vanilla -> fetchVanillaVersions().map(::CoreVersionOption)
-                ServerCore.Fabric -> fetchFabricVersions().map(::CoreVersionOption)
-                ServerCore.Forge -> fetchForgeVersions().map(::CoreVersionOption)
-                ServerCore.NeoForge -> fetchNeoForgeVersions().map(::CoreVersionOption)
-                ServerCore.Quilt -> fetchQuiltVersions().map(::CoreVersionOption)
-                ServerCore.Velocity -> fetchVelocityVersions().map(::CoreVersionOption)
-                ServerCore.BungeeCord -> fetchBungeeVersions().map(::CoreVersionOption)
-                ServerCore.PowerNukkitX -> fetchPowerNukkitXVersionOptions()
-                ServerCore.PocketMine -> fetchPocketMineVersions()
-                ServerCore.Allay -> fetchAllayVersionOptions()
-                // BDS：列出**全部可选版本**（内置历史存档清单 + 官方接口 + 带摘要的远端清单），
-                // 用户在下拉里选哪个就下哪个。之前这里只返回「官方当前最新」一项，
-                // 想装旧版本只能自己找包、自己解压。
-                ServerCore.Bds -> fetchBdsVersionOptions()
-                ServerCore.Unknown -> emptyList()
-            }
-            if (!lastVersionsWereFallback) {
-                options
-            } else {
-                termux.emitLog("[version] ${core.displayName} 版本列表接口不可用，已回退到内置列表")
-                options.map { it.copy(isFallback = true) }
-            }
+        val fallback = FallbackTracker()
+        val options = when (core) {
+            ServerCore.Paper -> fetchPaperVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Purpur -> fetchPurpurVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Leaves -> fetchLeavesVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Leaf -> fetchLeafVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Spigot, ServerCore.CraftBukkit -> DEFAULT_MC_VERSIONS.map(::CoreVersionOption)
+            ServerCore.Vanilla -> fetchVanillaVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Fabric -> fetchFabricVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Forge -> fetchForgeVersions(fallback).map(::CoreVersionOption)
+            ServerCore.NeoForge -> fetchNeoForgeVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Quilt -> fetchQuiltVersions(fallback).map(::CoreVersionOption)
+            ServerCore.Velocity -> fetchVelocityVersions(fallback).map(::CoreVersionOption)
+            ServerCore.BungeeCord -> fetchBungeeVersions().map(::CoreVersionOption)
+            ServerCore.PowerNukkitX -> fetchPowerNukkitXVersionOptions()
+            ServerCore.PocketMine -> fetchPocketMineVersions()
+            ServerCore.Allay -> fetchAllayVersionOptions()
+            // BDS：列出**全部可选版本**（内置历史存档清单 + 官方接口 + 带摘要的远端清单），
+            // 用户在下拉里选哪个就下哪个。之前这里只返回「官方当前最新」一项，
+            // 想装旧版本只能自己找包、自己解压。
+            ServerCore.Bds -> fetchBdsVersionOptions()
+            ServerCore.Unknown -> emptyList()
+        }
+        if (!fallback.hit) {
+            options
+        } else {
+            termux.emitLog("[version] ${core.displayName} 版本列表接口不可用，已回退到内置列表")
+            options.map { it.copy(isFallback = true) }
         }
     }
 
-    private fun fetchPurpurVersions(): List<String> {
+    private fun fetchPurpurVersions(fallback: FallbackTracker): List<String> {
         // Purpur API：{versions: [...]}
         val resp = fetchJson("https://api.purpurmc.org/v2/purpur")
         return resp["versions"]?.jsonArray
@@ -1935,14 +1941,16 @@ class McServerController(
             ?.filter { !it.contains("rc") && !it.contains("pre") }
             // 必须语义排序：纯字符串 sortedDescending 会把 1.21.4 排在 1.21.10 前面，
             // 下拉列表顶部因此显示的未必是真正的最新版。
-            ?.sortedWith(mcVersionComparator) ?: builtinFallbackVersions()
+            ?.sortedWith(mcVersionComparator) ?: builtinFallbackVersions(fallback)
     }
 
-    private fun fetchLeavesVersions(): List<String> = fetchProjectVersions("https://api.leavesmc.org/v2/projects/leaves")
+    private fun fetchLeavesVersions(fallback: FallbackTracker): List<String> =
+        fetchProjectVersions("https://api.leavesmc.org/v2/projects/leaves", fallback)
 
-    private fun fetchLeafVersions(): List<String> = fetchProjectVersions("https://api.leafmc.one/v2/projects/leaf")
+    private fun fetchLeafVersions(fallback: FallbackTracker): List<String> =
+        fetchProjectVersions("https://api.leafmc.one/v2/projects/leaf", fallback)
 
-    private fun fetchProjectVersions(url: String): List<String> = runCatching {
+    private fun fetchProjectVersions(url: String, fallback: FallbackTracker): List<String> = runCatching {
         fetchJson(url)["versions"]?.jsonArray
             ?.map { it.jsonPrimitive.content }
             ?.filter { it.isNotBlank() }
@@ -1950,7 +1958,7 @@ class McServerController(
             ?.sortedWith(mcVersionComparator)
             ?.take(30)
             ?.takeIf { it.isNotEmpty() }
-    }.getOrNull() ?: builtinFallbackVersions()
+    }.getOrNull() ?: builtinFallbackVersions(fallback)
 
     /**
      * Velocity：PaperMC v3 的 `versions` 结构与 Paper 相同，是**两层对象**
@@ -1960,12 +1968,12 @@ class McServerController(
      * IllegalArgumentException，整条版本链断掉 —— 表现为切到 Velocity 后版本列表
      * 一直是空的并弹「版本获取失败」。这里按类型分支，两种结构都能读。
      */
-    private fun fetchVelocityVersions(): List<String> {
+    private fun fetchVelocityVersions(fallback: FallbackTracker): List<String> {
         val resp = fetchJson("https://fill.papermc.io/v3/projects/velocity")
         val all = parseVersionGroups(resp["versions"])
         // 快照版本（4.3.2-SNAPSHOT）不是可下载的发布版，留在列表里只会选到 404
         val stable = all.filter { it.isNotBlank() && !it.contains("SNAPSHOT", ignoreCase = true) }
-        return stable.sortedWith(mcVersionComparator).ifEmpty { builtinFallbackVersions() }
+        return stable.sortedWith(mcVersionComparator).ifEmpty { builtinFallbackVersions(fallback) }
     }
 
     private fun fetchBungeeVersions(): List<String> = listOf("latest")
@@ -2203,7 +2211,7 @@ class McServerController(
      *
      * 例如 `26.2.0.86` → `26.2.0`（去掉末段补丁号），`21.4.157` → `21.4` → 补回 `1.` 前缀 → `1.21.4`。
      */
-    private fun fetchNeoForgeVersions(): List<String> = runCatching {
+    private fun fetchNeoForgeVersions(fallback: FallbackTracker): List<String> = runCatching {
         val xml = fetchNeoForgeMavenMetadata()
         val all = Regex("<version>([^<]+)</version>").findAll(xml).map { it.groupValues[1] }.toList()
         val mcVersions = LinkedHashSet<String>()
@@ -2222,7 +2230,7 @@ class McServerController(
             }
             mcVersions.add(mc)
         }
-        if (mcVersions.isEmpty()) return@runCatching builtinFallbackVersions()
+        if (mcVersions.isEmpty()) return@runCatching builtinFallbackVersions(fallback)
         // 补回 MC 的 `1.` 前缀：NeoForge 的 21.4 对应 MC 1.21.4；26.x 属于新的版本编号体系，保持原样。
         mcVersions.map { mc ->
             if (mc.startsWith("21.") || mc.startsWith("20.") ||
@@ -2230,14 +2238,14 @@ class McServerController(
                 mc.startsWith("17.") || mc.startsWith("16.")
             ) "1.$mc" else mc
         }.sortedWith(mcVersionComparator)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions(fallback)
 
     /**
      * Quilt：从 meta API 获取官方支持的 MC 版本列表。
      *
      * Quilt 的 `/v3/versions/game` 返回按新→旧排序的 MC 版本数组，语义与 Fabric 一致。
      */
-    private fun fetchQuiltVersions(): List<String> = runCatching {
+    private fun fetchQuiltVersions(fallback: FallbackTracker): List<String> = runCatching {
         val resp = fetchJsonElement("https://meta.quiltmc.org/v3/versions/game")
         val versions = resp.jsonArray
             // 该数组同时包含 snapshot / pre 版本（436 条里大部分是快照），
@@ -2245,12 +2253,12 @@ class McServerController(
             .filter { it.jsonObject["stable"]?.jsonPrimitive?.content == "true" }
             .mapNotNull { it.jsonObject["version"]?.jsonPrimitive?.content }
             .filter { it.isNotBlank() }
-        if (versions.isEmpty()) return@runCatching builtinFallbackVersions()
+        if (versions.isEmpty()) return@runCatching builtinFallbackVersions(fallback)
         // 按语义排序后再截断，保证 60 条里包含的是真正最新的版本。
         versions.sortedWith(mcVersionComparator).take(60)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions(fallback)
 
-    private fun fetchPaperVersions(): List<String> {
+    private fun fetchPaperVersions(fallback: FallbackTracker): List<String> {
         // PaperMC v3 API：返回 {versions: {major: [subversions]}}，需平铺。
         // 结构若改回扁平数组，parseVersionGroups 同样能读，不至于整条版本链断掉。
         val resp = fetchJson("https://fill.papermc.io/v3/projects/paper")
@@ -2258,13 +2266,13 @@ class McServerController(
             // 过滤掉 rc/pre 等非正式版
             .filter { it.isNotBlank() && !it.contains("rc") && !it.contains("pre") }
             .sortedWith(mcVersionComparator)
-            .ifEmpty { builtinFallbackVersions() }
+            .ifEmpty { builtinFallbackVersions(fallback) }
     }
 
-    private fun fetchVanillaVersions(): List<String> {
+    private fun fetchVanillaVersions(fallback: FallbackTracker): List<String> {
         val manifest = fetchJson("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
         val versions = manifest["versions"]?.jsonArray
-            ?: return builtinFallbackVersions()
+            ?: return builtinFallbackVersions(fallback)
         // manifest 本身按新→旧排列，但过滤掉快照/pre/rc 后必须重新语义排序再截断，
         // 否则「只取前 30 个」会把 1.21.x 系列里的新版本切掉。
         // snapshot 也要过滤：26.x 起快照版本号是 `26.4-snapshot-6`，不带 pre/rc 字样，
@@ -2288,16 +2296,16 @@ class McServerController(
      * `https://meta.fabricmc.net/v2/versions/game` 返回 `[{version, stable}, ...]`，
      * 按新→旧排序。只保留 `stable == true` 的正式版，避免把快照混进列表。
      */
-    private fun fetchFabricVersions(): List<String> = runCatching {
+    private fun fetchFabricVersions(fallback: FallbackTracker): List<String> = runCatching {
         val resp = fetchJsonElement("https://meta.fabricmc.net/v2/versions/game")
         val versions = resp.jsonArray
             .filter { it.jsonObject["stable"]?.jsonPrimitive?.boolean ?: false }
             .mapNotNull { it.jsonObject["version"]?.jsonPrimitive?.content }
             .filter { it.isNotBlank() }
-        if (versions.isEmpty()) return@runCatching builtinFallbackVersions()
+        if (versions.isEmpty()) return@runCatching builtinFallbackVersions(fallback)
         // 按语义排序后再截断，保证 60 条里包含的是真正最新的版本。
         versions.sortedWith(mcVersionComparator).take(60)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions(fallback)
 
     /**
      * Forge：从 promotions_slim.json 提取所有可用的 MC 版本。
@@ -2305,16 +2313,16 @@ class McServerController(
      * 该接口返回 `{promos: {"1.21.4-recommended": "65.1.0", "1.21.4-latest": "65.1.3", ...}}`，
      * 键去掉 `-recommended` / `-latest` 后缀即为 MC 版本。共 76 个版本。
      */
-    private fun fetchForgeVersions(): List<String> = runCatching {
+    private fun fetchForgeVersions(fallback: FallbackTracker): List<String> = runCatching {
         val resp = fetchJson("https://files.minecraftforge.net/net/minecraftforge/forge/promotions_slim.json")
-        val promos = resp["promos"]?.jsonObject ?: return@runCatching builtinFallbackVersions()
+        val promos = resp["promos"]?.jsonObject ?: return@runCatching builtinFallbackVersions(fallback)
         val mcVersions = promos.keys
             .map { it.substringBeforeLast('-') }
             .filter { it.isNotBlank() && it.count { c -> c == '.' } >= 1 }
             .toSet()
-        if (mcVersions.isEmpty()) return@runCatching builtinFallbackVersions()
+        if (mcVersions.isEmpty()) return@runCatching builtinFallbackVersions(fallback)
         mcVersions.sortedWith(mcVersionComparator)
-    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions()
+    }.getOrNull()?.takeIf { it.isNotEmpty() } ?: builtinFallbackVersions(fallback)
 
     /**
      * 下载服务端核心到指定路径（独立方法，供 DownloadScreen 调用）。
@@ -3665,6 +3673,15 @@ class McServerController(
          * 掩盖成「installer 超时」。给个下限，让最后一次尝试至少有意义。
          */
         private const val INSTALLER_MIN_ATTEMPT_MS = 120_000L
+
+        /**
+         * 用户实际可能等到的上限（分钟）= 总预算 + 最后一次的最小时间窗。
+         *
+         * 预算只剩 10 秒时仍会给最后一次 2 分钟（见上），所以真实最坏值是 22 分钟。
+         * 超时文案必须报这个数：写 20 会和用户掐表的结果对不上。
+         */
+        private const val INSTALLER_MAX_TOTAL_MINUTES =
+            (INSTALLER_TOTAL_BUDGET_MS + INSTALLER_MIN_ATTEMPT_MS) / 60_000L
 
         /**
          * 依赖库预下载的并发路数。

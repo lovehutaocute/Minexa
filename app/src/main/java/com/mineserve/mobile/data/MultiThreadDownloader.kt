@@ -215,19 +215,26 @@ object MultiThreadDownloader {
                 checkCancelled(session)
                 if (!errors.isEmpty()) {
                     val mismatch = errors.firstOrNull { it is RangeMismatchException }
-                    // 已经有进展、且不是「协议层面不一致」→ 分片本身是好的，保留下来
-                    // 续传；回退单流会把已下的几 MB 全部作废。
+                    // 判据故意用「总进度 done>0」而不是「本遍增量」：done 从 resumeBytes 起算，
+                    // 续传场景下本遍零增量也算有进展 —— 这是对的，因为磁盘上那些字节是真实
+                    // 存在的，为了走「回退单流」把它们删掉重下，在移动网络下代价更大。
+                    // 真有协议层问题（Range 不被支持等）会走 mismatch 分支，「毫无进展」只
+                    // 在从零开始时才成立。
                     if (mismatch == null && done.get() > 0) {
                         lastResumeError = errors.peek()
                         // 只有「下次能真续传」才值得再来一遍：这个源不给 ETag 时，
                         // 第二遍会从 0 重新下，等于把同一份文件白下两次（移动流量很贵）。
                         // 这种情况直接把失败交回调用方，让它自己决定换源还是放弃。
                         retryPass = pass < MULTI_PART_PASSES && entity.etag != null
+                        val keptMb = done.get() / 1024 / 1024
                         onLog?.invoke(
-                            if (retryPass) {
-                                "分片下载中断，已保留 ${done.get() / 1024 / 1024}MB，正在续传重试"
-                            } else {
-                                "分片下载中断，已保留 ${done.get() / 1024 / 1024}MB，下次重试时继续"
+                            when {
+                                retryPass -> "分片下载中断，已保留 ${keptMb}MB，正在续传重试"
+                                entity.etag != null -> "分片下载中断，已保留 ${keptMb}MB，下次重试时继续"
+                                // 没有 ETag 就证明不了「下次下的是同一个实体」，
+                                // 下一次进来会先 clearParts 从 0 下 —— 不能说「继续」。
+                                else -> "分片下载中断（源未提供 ETag，无法续传），" +
+                                    "已下的 ${keptMb}MB 会在下次重试时丢弃"
                             }
                         )
                     } else {

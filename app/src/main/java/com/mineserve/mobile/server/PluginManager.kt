@@ -701,14 +701,18 @@ class PluginManager(
      * 而这里是插件/模组下载**唯一**的下载入口、没有外层重试循环。以前下载层会自己回退
      * 单流兜住，现在不兜了 —— 不在这一层补一次重试，就是「网络抖一下插件就装不上」。
      *
+     * 必须是 suspend（不能套 runBlocking）：套 runBlocking 之后这个函数跟调用方的协程
+     * 就断了联系，用户点取消 / 页面销毁时既不中断下载、也走不到下面的取消分支，
+     * 只能干等两轮重试跑完。
+     *
      * 两次都失败就清掉续传残留：plugins/ 和 mods/ 是用户会自己翻的目录，
      * 不该留一堆 `.part<偏移>` 的碎文件。
      */
-    private fun downloadTo(
+    private suspend fun downloadTo(
         url: String,
         target: File,
         onProgress: (Long, Long, Long) -> Unit
-    ) = kotlinx.coroutines.runBlocking {
+    ) {
         var last: Exception? = null
         for (attempt in 1..DOWNLOAD_ATTEMPTS) {
             try {
@@ -718,7 +722,7 @@ class PluginManager(
                     onProgress = onProgress,
                     onLog = { logMsg -> Log.i(TAG, "download: $logMsg") }
                 )
-                return@runBlocking
+                return
             } catch (e: kotlinx.coroutines.CancellationException) {
                 // 用户取消/页面销毁：不重试，也不清理（下次下载还能续传）。
                 throw e
