@@ -95,6 +95,7 @@ import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
 import com.mineserve.mobile.ui.vm.ModsDelegate
+import com.mineserve.mobile.ui.vm.McViewModelStartupDelegate
 import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
 import com.mineserve.mobile.ui.vm.ProotContainerDelegate
 import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
@@ -2493,75 +2494,29 @@ class McViewModel(
     /** 批量删除（多选模式）；部分失败时报出失败数量，不谎报全部成功 */
     fun deleteEntries(entries: List<java.io.File>) = fileBrowserDelegate.deleteEntries(entries)
 
-    /**
-     * init 块必须放在类体末尾：这里启动的协程（Dispatchers.IO/Default）会在
-     * 构造函数完成前抢先执行，若 init 在类体前部，会读到尚未赋值的字段
-     * （historyMutex/playerManager 等），导致启动时 NullPointerException 崩溃。
-     */
+    private val viewModelStartupDelegate by lazy {
+        McViewModelStartupDelegate(
+            scope = viewModelScope,
+            config = config,
+            serverState = serverState,
+            repo = repo,
+            controller = controller,
+            playerHistory = playerHistoryDelegate,
+            installedCores = installedCoresDelegate,
+            serverProperties = serverPropertiesDelegate,
+            serverResources = serverResourcesDelegate,
+            playerPresence = playerPresenceDelegate,
+            consoleLog = consoleLogDelegate,
+            terminalSessions = terminalSessionsDelegate,
+            parseConsoleLine = ::parseConsoleLine,
+            showStartupFailureReport = { showStartupFailureReport(it) },
+            setLastRunLog = { _lastRunLog.value = it }
+        )
+    }
+
+    /** Keep last: startup coroutines can execute immediately and access lazy members above. */
     init {
-        loadPlayerHistory()
-        scanUnregisteredServers()
-        viewModelScope.launch {
-            config.map { it.activeCoreName }.distinctUntilChanged().collect { loadPlayerHistory() }
-        }
-        // 把「当前 Java 来源 + PRoot 发行版」投影到运行时。
-        //
-        // 运行时是启动链路（含 MCP、桌面组件、定时任务等拿不到 McConfig 的调用方）
-        // 唯一的判定依据，因此这份同步必须跟着 config 走；只在这里写一次，
-        // 避免每个调用点各自从 config 里取一遍（那种分散读取正是「换个入口行为就变了」
-        // 的来源）。用 distinctUntilChanged 避免无谓写入。
-        viewModelScope.launch {
-            config
-                .map { it.selectedJavaVendor to it.prootDistro }
-                .distinctUntilChanged()
-                .collect { (vendor, distro) ->
-                    repo.termuxRuntime.selectedProotVendor = vendor
-                    repo.termuxRuntime.selectedProotDistro = distro
-                }
-        }
-        // 起动完成后先把端口真源读一次。
-        //
-        // 历史上这份真源只在进入「服务器配置」页时才被读 —— 于是用户在配置文件里
-        // 把端口改掉之后，只要没再进过那个页面，地址栏、复制出来的地址、以及 STUN 的
-        // 转发目标就全部停在旧端口上（默认 25565）。用户看到的「本地地址没跟着变」
-        // 就是这个时间差。
-        //
-        // 这里**不再等 Termux 初始化完成**：读的是 server.properties 这个纯文本文件，
-        // 与运行时毫无关系。等它只会让「没装环境就改过配置」的用户继续看到旧端口。
-        viewModelScope.launch { refreshServerPropertiesNow() }
-        viewModelScope.launch {
-            var wasRunning = false
-            serverState.collect { state ->
-                if (wasRunning && !state.isRunning) {
-                    // 服务端已停：在线名单与计数一起归零。只清一个会留下「列表 0 行、计数 3」，
-                    // 而两者下一次对齐要等到重启就绪后那次 list —— 期间界面上就是个假数字。
-                    playerPresenceDelegate.clearOnlinePlayerNames()
-                    repo.updateServerState { if (it.isRunning) it else it.copy(onlinePlayers = 0) }
-                    interruptPlayerSessions()
-                    _lastRunLog.value = withContext(Dispatchers.IO) {
-                        delay(150)
-                        repo.termuxRuntime.readLastMcRunLog()
-                    }
-                }
-                wasRunning = state.isRunning
-            }
-        }
-        startServerResourceCollection()
-        // 订阅 serverExitFailures 前先补弹最近的失败（覆盖 App 重启/ViewModel 重建时已错过的事件）
-        controller.recentStartupFailure()?.let { showStartupFailureReport(it) }
-        // 订阅 consoleFlow，使用环形缓冲 + 批量刷新，避免每行 O(n) 拷贝。
-        viewModelScope.launch(Dispatchers.Default) {
-            controller.startupFailures.collect { showStartupFailureReport(it) }
-        }
-        viewModelScope.launch(Dispatchers.Default) {
-            repo.termuxRuntime.consoleFlow.collect { line ->
-                consoleLogDelegate.appendLine(line)
-                parseConsoleLine(line)
-            }
-        }
-        consoleLogDelegate.startOutputFlush()
-        terminalSessionsDelegate.startLegacyOutputFlush()
-        terminalSessionsDelegate.startOutputFlush()
+        viewModelStartupDelegate.start()
     }
 
     // ── 后台保活（开机自启 / 周期保活） ─────────────────────────────
