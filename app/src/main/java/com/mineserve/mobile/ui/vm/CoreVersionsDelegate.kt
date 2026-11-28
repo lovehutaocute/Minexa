@@ -67,9 +67,13 @@ internal class CoreVersionsDelegate(
             return
         }
         val token = ++versionsLoadToken
-        _availableVersions.value = emptyList()
-        _versionsAreFallback.value = false
-        _versionHints.value = emptyMap()
+        // 同一核心刷新（重试 / force）时不要先清空：清空会让下拉框瞬间变成「版本列表为空」，
+        // 选中项也跟着消失，用户只会看到一次闪烁。只有换核心（旧列表已不属于当前核心）才清。
+        if (core != lastLoadedVersionsCore) {
+            _availableVersions.value = emptyList()
+            _versionsAreFallback.value = false
+            _versionHints.value = emptyMap()
+        }
         _isLoadingVersions.value = true
         scope.launch {
             try {
