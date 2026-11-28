@@ -1,5 +1,22 @@
 # 更新日志
 
+## 1.5.5（versionCode 66）
+
+修复了一些已知问题。
+
+- **Velocity 核心下载失败**：新增 `server/VelocityBuildSelection`，按版本号与构建号挑官方
+  PaperMC 构建（原来只取 latest，官方的 latest 构建常与所选版本不匹配 → 下载下来装不上）
+- **Quilt installer 卡死**：installer 进程原来没有超时，Quilt 官方源慢时会永久挂着；
+  改为总预算超时，超时直接判失败并给出原因
+- **下载失败残留目录**：安装失败后清掉半成品目录，进程被杀后残留的「下载壳」
+  也不再登记进核心列表（不会再出现点开就报错的核心）
+- `data/ServerStorage` 增加服务端目录校验，避免目录被删后仍返回陈旧登记
+- 新增 `VelocityBuildSelectionTest` 与 `ServerStorageTest`
+
+### 兼容性
+
+- 签名密钥不变，可直接覆盖安装；服务器、世界与设置不受影响
+
 ## 1.5.4（versionCode 65）
 
 修复了一些已知问题。
