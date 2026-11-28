@@ -19,4 +19,8 @@ internal class BackupSettingsDelegate(
     fun setMaxSnapshots(max: Int) {
         updateConfig { it.copy(maxSnapshots = max.coerceIn(1, 100)) }
     }
+
+    fun setStopAutoBackup(enabled: Boolean) {
+        updateConfig { it.copy(stopAutoBackup = enabled) }
+    }
 }

@@ -1086,7 +1086,7 @@ class McViewModel(
 
     fun setDailyStopTime(hour: Int, minute: Int) = scheduleSettingsDelegate.setDailyStopTime(hour, minute)
 
-    fun setStopAutoBackup(v: Boolean) = updateConfig { it.copy(stopAutoBackup = v) }
+    fun setStopAutoBackup(v: Boolean) = backupSettingsDelegate.setStopAutoBackup(v)
 
     // ── 自动化定时任务（更多 → 自动化） ──────────────────────────
 
