@@ -9,7 +9,6 @@ import com.mineserve.mobile.McApplication
 import android.net.Uri
 import com.mineserve.mobile.data.McConfig
 import com.mineserve.mobile.data.AutomationTask
-import com.mineserve.mobile.data.JavaVersion
 import com.mineserve.mobile.data.PhpVersion
 import com.mineserve.mobile.data.ProotDistro
 import com.mineserve.mobile.data.isProotGuestRuntime
@@ -27,15 +26,12 @@ import com.mineserve.mobile.data.InstalledCore
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.ServerState
 import com.mineserve.mobile.data.LegacyPrivateStore
-import com.mineserve.mobile.data.StartupPhase
-import com.mineserve.mobile.runtime.ConsoleLineParser
 import com.mineserve.mobile.data.TunnelState
 import com.mineserve.mobile.data.FrpProfile
 import com.mineserve.mobile.data.DiagnosticCheck
 import com.mineserve.mobile.data.DiagnosticReport
 import com.mineserve.mobile.data.DiagnosticStatus
 import com.mineserve.mobile.data.ServerResourceStats
-import com.mineserve.mobile.data.ServerEventNotifier
 import com.mineserve.mobile.data.AppRelease
 import com.mineserve.mobile.server.BackupManager
 import com.mineserve.mobile.server.CrashReportManager
@@ -72,6 +68,7 @@ import com.mineserve.mobile.ui.vm.BackupSettingsDelegate
 import com.mineserve.mobile.ui.vm.BootstrapDelegate
 import com.mineserve.mobile.ui.vm.ConsoleLogDelegate
 import com.mineserve.mobile.ui.vm.ConsoleEntryDelegate
+import com.mineserve.mobile.ui.vm.ConsoleLineDelegate
 import com.mineserve.mobile.ui.vm.CoreDownloadDelegate
 import com.mineserve.mobile.ui.vm.CoreVersionsDelegate
 import com.mineserve.mobile.ui.vm.CoreSelection
@@ -727,216 +724,20 @@ class McViewModel(
      * 解析 MC 控制台输出，提取 TPS / 玩家数 / 启动状态等运行时信息。
      * 使用快速前缀检查避免不必要的正则匹配。
      */
-    private var lastJavaCompatibilityWarning: String? = null
-
-    /**
-     * BDS `list` 多行响应的收集状态：头行声明人数，后续每行一个玩家名。
-     * 收到头行时把期望条数写进 [bdsListExpected]，收齐后一次性替换在线名单。
-     */
-    private var bdsListExpected = 0
-    private val bdsListBuffer = mutableListOf<String>()
-
-    private fun parseConsoleLine(line: String) {
-        try {
-            // 状态类信号统一由共享解析器提取（正则只跑一次，与前台服务共用同一份实现）。
-            val signals = ConsoleLineParser.parse(line)
-            val startupPhase = signals.startupPhase
-            updateStartupPhaseFromLog(startupPhase)
-            val requiredJava = signals.requiredJavaVersion
-            if (requiredJava != null) {
-                val selected = when (config.value.selectedJavaVersion) {
-                    JavaVersion.Java8 -> 8; JavaVersion.Java11 -> 11; JavaVersion.Java17 -> 17; JavaVersion.Java21 -> 21; JavaVersion.Java25 -> 25
-                }
-                if (selected < requiredJava) {
-                    val core = config.value.installedCores.firstOrNull { it.name == config.value.activeCoreName }?.core?.displayName ?: str(R.string.diag_core_unknown_name)
-                    val warning = str(R.string.msg_java_warning, core, selected, requiredJava)
-                    if (warning != lastJavaCompatibilityWarning) {
-                        lastJavaCompatibilityWarning = warning
-                        _errorFlow.tryEmit(str(R.string.err_java_unsupported, warning))
-                    }
-                }
-            }
-            // 玩家进出服需要副作用（名单、记录、通知），仍在本层处理；
-            // 但只在日志确实提到进出服时才做正则，避免每行都跑。
-            // 玩家事件与「服务端就绪」原本是互斥的 when 分支：某一行只要命中了玩家进出服，
-            // 就不会再去触发就绪。下面用 handled 标记维持这一语义，避免行为漂移。
-            var handled = false
-            // 官方 BDS 的进服/离服措辞与 Java 完全不同（Player connected / disconnected），
-            // 且不像 Java 那样在 "list" 响应里带名单，所以必须单独一条分支维护名单与计数。
-            val bdsEvent = playerManager.extractBedrockPlayerEvent(line)
-            when {
-                bdsEvent != null -> {
-                    val name = bdsEvent.name
-                    // 重连会先 disconnected 再 connected，可能重复打印；名单是否变化
-                    // 由 setPlayerOnline 判定，计数与名单同源，重复行不会让计数漂移
-                    setPlayerOnline(name, bdsEvent.joined)
-                    playerManager.noteBedrockPlayer(name, bdsEvent.xuid)
-                    recordPlayerEvent(name, if (bdsEvent.joined) "进服" else "离服")
-                    notifyPlayerEvent(name, bdsEvent.joined)
-                    handled = true
-                }
-                playerManager.extractPowerNukkitPlayerEvent(line) != null -> {
-                    val (name, joined) = playerManager.extractPowerNukkitPlayerEvent(line)!!
-                    setPlayerOnline(name, joined)
-                    recordPlayerEvent(name, if (joined) "进服" else "离服")
-                    notifyPlayerEvent(name, joined)
-                    handled = true
-                }
-                line.contains("joined the game") -> {
-                    // 仅当提取到真实玩家名（日志前缀 + 合法名字）时才计数与记录，避免聊天消息误报
-                    playerManager.extractPlayerName(line)?.let { name ->
-                        setPlayerOnline(name, true)
-                        recordPlayerEvent(name, "进服")
-                        notifyPlayerEvent(name, true)
-                    }
-                    handled = true
-                }
-                line.contains("left the game") -> {
-                    playerManager.extractPlayerName(line)?.let { name ->
-                        setPlayerOnline(name, false)
-                        recordPlayerEvent(name, "离服")
-                        notifyPlayerEvent(name, false)
-                    }
-                    handled = true
-                }
-            }
-            if (!handled && signals.players != null) {
-                val p = signals.players
-                repo.updateServerState { it.copy(onlinePlayers = p.online, maxPlayers = p.max) }
-                // A valid list response proves the server is already accepting commands.
-                markServerReady()
-                // 全量校正在线玩家名单（list 命令响应）。
-                // BDS 的名单在后续行、本行为空，此时传入人数让解析器自己判断该不该清空。
-                playerManager.parseOnlinePlayers(line, p.online)?.let { names ->
-                    playerPresenceDelegate.replaceOnlinePlayerNames(names)
-                }
-                // BDS 用 `There are N/M players online:` 开头，名字在后续几行里。
-                // 记下期望条数，后面的行交给下面的收集逻辑。
-                if (p.online > 0 && line.contains("players online:") && !line.contains(" of a max of ")) {
-                    bdsListExpected = p.online
-                    synchronized(bdsListBuffer) { bdsListBuffer.clear() }
-                }
-                handled = true
-            }
-            if (!handled && signals.tps != null) {
-                val value = signals.tps
-                val health = ((value / 20.0) * 100).toInt().coerceIn(0, 100)
-                repo.updateServerState {
-                    it.copy(tps = value, healthPercent = health,
-                        maxMemoryMb = config.value.maxHeapMb.toLong())
-                }
-                handled = true
-            }
-            // BDS 的 list 名单逐行到达：头行只声明人数，名字在随后的行里（`- Steve`）。
-            // 这里把它们收齐后再整体替换名单，这样重开 App / 前台服务重启后也能恢复在线列表。
-            if (!handled && bdsListExpected > 0) {
-                val entry = playerManager.parseBedrockListEntry(line)
-                if (entry == null) {
-                    bdsListExpected = 0
-                } else {
-                    val done = synchronized(bdsListBuffer) {
-                        bdsListBuffer.add(entry)
-                        if (bdsListBuffer.size >= bdsListExpected) bdsListBuffer.toList() else null
-                    }
-                    if (done != null) {
-                        bdsListExpected = 0
-                        playerPresenceDelegate.replaceOnlinePlayerNames(done)
-                        repo.updateServerState { it.copy(onlinePlayers = done.size) }
-                    }
-                }
-            }
-            if (!handled && startupPhase == StartupPhase.Ready) markServerReady()
-        } catch (e: Exception) {
-            // 解析失败不影响正常运行
-        }
-    }
-
-    /** 将控制台明确的就绪信号统一转换为运行中。 */
-    private fun markServerReady() {
-        var becameReady = false
-        repo.updateServerState { state ->
-            if (!state.isRunning) return@updateServerState state
-            becameReady = state.runningSinceMs == 0L
-            state.copy(
-                tps = 20.0,
-                healthPercent = 100,
-                maxMemoryMb = config.value.maxHeapMb.toLong(),
-                startupPhase = StartupPhase.Ready,
-                runningSinceMs = state.runningSinceMs.takeIf { it > 0L }
-                    ?: SystemClock.elapsedRealtime()
-            )
-        }
-        // 启动完成时主动请求一次 list，全量校正在线玩家名单。
-        if (becameReady && repo.termuxRuntime.isMcRunning()) playerManager.requestOnlineList()
-        if (becameReady) {
-            ServerEventNotifier.notify(
-                app,
-                str(R.string.notif_server_started_title),
-                str(R.string.notif_server_started_text),
-                ServerEventNotifier.ID_STARTED, 1
-            )
-        }
-    }
-
-    /** 玩家进出服系统通知（仅“全部”档发布）。 */
-    private fun notifyPlayerEvent(name: String, joined: Boolean) {
-        ServerEventNotifier.notify(
-            app,
-            if (joined) str(R.string.notif_player_joined_title, name) else str(R.string.notif_player_left_title, name),
-            if (joined) str(R.string.notif_player_joined_text) else str(R.string.notif_player_left_text),
-            ServerEventNotifier.ID_PLAYER, 2
+    private val consoleLineDelegate by lazy {
+        ConsoleLineDelegate(
+            app = app,
+            config = config,
+            repo = repo,
+            playerManager = playerManager,
+            replaceOnlinePlayerNames = { playerPresenceDelegate.replaceOnlinePlayerNames(it) },
+            setPlayerOnline = ::setPlayerOnline,
+            recordPlayerEvent = ::recordPlayerEvent,
+            reportError = { _errorFlow.tryEmit(it) }
         )
     }
 
-    /**
-     * 在后台日志解析线程推进启动阶段，UI 不扫描原始日志。
-     *
-     * ## 唯一的不变量：**进度只增不减**
-     *
-     * 这条规则是花了四个版本才收敛到的最简形式。前几版分别试过
-     * 「下载锁」「只许前进」「越档回退需连续证据」「下载单向」……
-     * 全都是**局部补丁**，每修一处又漏一处。用户真实日志把这一层彻底暴露了。
-     *
-     * 最典型的两个症状（用户原话）：
-     *   - **"下载核心与加载核心两个左右跳"**：日志里 `Loading Minecraft …`
-     *     这类核心探针行**夹在下载段中间**，随后下载又继续，于是进度条
-     *     在 40% ↔ 62% 之间反复横跳。任何"如实跟随每一行"的实现都必然这样。
-     *   - **"直接进度条完成"**：`Starting Minecraft server on *:25565`（启动网络）
-     *     与 `Preparing level`（创建世界）这类行**各自只出现一两次**。
-     *     之前用"连续 N 行才采纳"的防抖门槛去滤噪声，结果是把这两整档
-     *     直接吞掉，进度条从 62% 一步蹦到 100%。
-     *
-     * 所以这里反过来做：**噪声在判定源头就掐掉，阶段推进则不做防抖**。
-     *   - 源头：`McConfig.isStackFrameLine` 把异常堆栈行（形如
-     *     `at net.fabricmc.installer.ServerLauncher.main(...)`）判为"不参与阶段"。
-     *     这些行含 `server` / `libraries` / `minecraft` 之类的路径片段，
-     *     曾被误判成"下载依赖"，把进度从 82% 拖回 40%。
-     *   - 推进：只要算出来的阶段比当前**高**，立刻采纳；平级或倒退一律忽略。
-     *
-     * 至于 App 自身的引导日志（`[bootstrap] …` → 准备环境 7%）：它会在
-     * `[startMc] java 路径` 之后才打印，如实跟随同样会把进度条拽回 7%。
-     * "只增不减"顺手把这个问题一并解决了。
-     *
-     * 因此这里不再需要连续命中计数（PHASE_CONFIRM_HITS）与单步回退容差
-     * （DOUBLE_STEP_TOLERANCE），两者均已删除。
-     */
-    private fun updateStartupPhaseFromLog(phase: StartupPhase?) {
-        phase ?: return
-        repo.updateServerState { state ->
-            if (!state.isRunning || state.startupPhase == StartupPhase.Ready) return@updateServerState state
-
-            // ══════════════════════════════════════════════════════════════
-            // 唯一的不变量：**进度只增不减**。理由详见本函数的 KDoc。
-            // ══════════════════════════════════════════════════════════════
-            // - 低于或等于当前档位 → 忽略（这就是"不回退"，同时消灭 40%↔62% 横跳）
-            // - 高于当前档位       → 立即采纳（不设防抖，所以"只出现 1 行"的
-            //                       启动 Java / 启动网络 不会被吞，进度条不再
-            //                       从 62% 直接蹦到 100%）
-            if (phase.progress <= state.startupPhase.progress) return@updateServerState state
-
-            state.copy(startupPhase = phase)
-        }
-    }
+    private fun parseConsoleLine(line: String) = consoleLineDelegate.parseConsoleLine(line)
 
     /**
      * 修改配置。
@@ -1394,7 +1195,7 @@ class McViewModel(
             refreshServerPropertiesNow = ::refreshServerPropertiesNow,
             realServerPort = ::realServerPort,
             clearLastRunLog = { _lastRunLog.value = "" },
-            resetJavaCompatibilityWarning = { lastJavaCompatibilityWarning = null },
+            resetJavaCompatibilityWarning = { consoleLineDelegate.resetJavaCompatibilityWarning() },
             showStartupFailureReport = ::showStartupFailureReport,
             startKeepAliveService = ::startKeepAliveService,
             reportMessage = { _messageFlow.tryEmit(it) },
