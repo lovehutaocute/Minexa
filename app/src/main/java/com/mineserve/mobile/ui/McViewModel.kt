@@ -60,7 +60,6 @@ import com.mineserve.mobile.server.Worlds
 import com.mineserve.mobile.ui.vm.AppUpdateDelegate
 import com.mineserve.mobile.ui.vm.AptMirrorDelegate
 import com.mineserve.mobile.ui.vm.AutomationTasksDelegate
-import com.mineserve.mobile.ui.vm.BdsAddonsDelegate
 import com.mineserve.mobile.ui.vm.BdsCoreUpdateDelegate
 import com.mineserve.mobile.ui.vm.BdsEnvironmentDelegate
 import com.mineserve.mobile.ui.vm.BdsNetworkProbeDelegate
@@ -86,7 +85,6 @@ import com.mineserve.mobile.ui.vm.ExternalBackupsDelegate
 import com.mineserve.mobile.ui.vm.FileBrowserDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.InstalledCoresDelegate
-import com.mineserve.mobile.ui.vm.JavaAddonsDelegate
 import com.mineserve.mobile.ui.vm.LanAddressDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
@@ -112,13 +110,10 @@ import com.mineserve.mobile.ui.vm.TerminalSessionsDelegate
 import com.mineserve.mobile.ui.vm.TextEditorDelegate
 import com.mineserve.mobile.ui.vm.TrustStoreRepairDelegate
 import com.mineserve.mobile.ui.vm.TunnelControlsDelegate
+import com.mineserve.mobile.ui.vm.WorldDelegateGraph
 import com.mineserve.mobile.ui.vm.formatDiagnosticBytes
 import com.mineserve.mobile.ui.vm.modrinthLoader
 import com.mineserve.mobile.ui.vm.previewLayers as parsePreviewLayers
-import com.mineserve.mobile.ui.vm.WorldCreationDelegate
-import com.mineserve.mobile.ui.vm.WorldListDelegate
-import com.mineserve.mobile.ui.vm.WorldMaintenanceDelegate
-import com.mineserve.mobile.ui.vm.WorldTransferDelegate
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -1620,7 +1615,7 @@ class McViewModel(
     fun loadSnapshots() = snapshotsDelegate.loadSnapshots()
 
     /** 删除当前激活核心的世界文件夹（world / world_nether / world_the_end），不可恢复 */
-    fun deleteWorldDirs() = worldMaintenanceDelegate.deleteWorldDirs()
+    fun deleteWorldDirs() = worldDelegates.maintenance.deleteWorldDirs()
 
     /** 恢复快照（会先停止服务器） */
     fun restoreSnapshot(name: String) = snapshotsDelegate.restoreSnapshot(name)
@@ -1861,17 +1856,16 @@ class McViewModel(
 
     // ── 世界（存档）管理 ────────────────────────────────────────────
 
-    private val worldManager: WorldManager by lazy { WorldManager(repo.termuxRuntime) }
-
-    private val worldTransferDelegate by lazy {
-        WorldTransferDelegate(
+    private val worldDelegates by lazy {
+        WorldDelegateGraph(
             app = app,
             scope = viewModelScope,
-            worldManager = worldManager,
+            config = config,
+            serverState = serverState,
+            termuxRuntime = repo.termuxRuntime,
             activeDirName = ::activeDirName,
             requireServerStopped = ::requireServerStopped,
             exportPathToUri = ::exportPathToUri,
-            loadWorlds = ::loadWorlds,
             reportMessage = { _messageFlow.tryEmit(it) },
             reportError = { _errorFlow.tryEmit(it) }
         )
@@ -1891,32 +1885,18 @@ class McViewModel(
         return false
     }
 
-    private val worldListDelegate by lazy {
-        WorldListDelegate(
-            app = app,
-            scope = viewModelScope,
-            config = config,
-            serverState = repo.serverState,
-            worldManagerProvider = { worldManager },
-            activeDirName = ::activeDirName,
-            isMcRunningIn = { repo.termuxRuntime.isMcRunningIn(it) },
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
+    val worlds: StateFlow<List<Worlds.WorldInfo>> get() = worldDelegates.list.worlds
 
-    val worlds: StateFlow<List<Worlds.WorldInfo>> get() = worldListDelegate.worlds
-
-    val worldsLoading: StateFlow<Boolean> get() = worldListDelegate.worldsLoading
+    val worldsLoading: StateFlow<Boolean> get() = worldDelegates.list.worldsLoading
 
     /** 当前 level-name 指向的世界名（可能尚未生成对应目录）。 */
-    val activeWorldName: StateFlow<String> get() = worldListDelegate.activeWorldName
+    val activeWorldName: StateFlow<String> get() = worldDelegates.list.activeWorldName
 
     /** 当前世界的基岩版元信息（种子 / 生成类型）；Java 系或还没生成时为 null。 */
-    val activeWorldMeta: StateFlow<WorldManager.BedrockMeta?> get() = worldListDelegate.activeWorldMeta
+    val activeWorldMeta: StateFlow<WorldManager.BedrockMeta?> get() = worldDelegates.list.activeWorldMeta
 
     /** 当前世界的 Java 版元信息（种子 / 生成类型 / 难度 / 数据包数）；基岩系为 null。 */
-    val activeJavaWorldMeta: StateFlow<JavaWorlds.Meta?> get() = worldListDelegate.activeJavaWorldMeta
+    val activeJavaWorldMeta: StateFlow<JavaWorlds.Meta?> get() = worldDelegates.list.activeJavaWorldMeta
 
     /**
      * 当前世界的「建世界时的要求」（种子原文 + 生成方式）。
@@ -1925,37 +1905,22 @@ class McViewModel(
      * 这个是**用户当时的选择**。世界还没生成时只有后者有值，UI 必须分开展示，
      * 否则就会出现「种子：尚未生成 / 生成类型：未知」这种什么都没说的组合。
      */
-    val activeWorldPlan: StateFlow<WorldGenLedger.Record?> get() = worldListDelegate.activeWorldPlan
+    val activeWorldPlan: StateFlow<WorldGenLedger.Record?> get() = worldDelegates.list.activeWorldPlan
 
     /** 当前核心类型（UI 靠它决定显示基岩版还是 Java 版的世界/附加包界面）。 */
-    val activeCore: StateFlow<ServerCore?> get() = worldListDelegate.activeCore
-
-    private fun refreshActiveCore() = worldListDelegate.refreshActiveCore()
+    val activeCore: StateFlow<ServerCore?> get() = worldDelegates.list.activeCore
 
     /** 当前核心是否 Java 版（非 BDS / PNX / PocketMine / Allay）。 */
-    fun isJavaCore(): Boolean = worldListDelegate.isJavaCore()
+    fun isJavaCore(): Boolean = worldDelegates.list.isJavaCore()
 
     /** 加载世界列表（含各世界占用大小）。大小统计较慢，放在 IO 线程。 */
-    fun loadWorlds() = worldListDelegate.loadWorlds()
+    fun loadWorlds() = worldDelegates.list.loadWorlds()
 
     /** 切换当前使用的世界（写入 level-name）。 */
-    fun setActiveWorld(name: String) = worldListDelegate.setActiveWorld(name)
-
-    private val worldCreationDelegate by lazy {
-        WorldCreationDelegate(
-            app = app,
-            scope = viewModelScope,
-            worldManagerProvider = { worldManager },
-            activeDirName = ::activeDirName,
-            requireServerStopped = ::requireServerStopped,
-            loadWorlds = ::loadWorlds,
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
+    fun setActiveWorld(name: String) = worldDelegates.list.setActiveWorld(name)
 
     /** 清空 level-seed，让服务端下次生成地图时使用随机种子。 */
-    fun clearWorldSeed() = worldCreationDelegate.clearWorldSeed()
+    fun clearWorldSeed() = worldDelegates.creation.clearWorldSeed()
 
     /** 新建一个世界（基岩版）。 */
     fun createWorld(
@@ -1963,49 +1928,34 @@ class McViewModel(
         seed: String,
         generator: BdsWorldGen.Generator = BdsWorldGen.Generator.NORMAL,
         layers: List<BdsWorldGen.Layer> = BdsWorldGen.DEFAULT_FLAT
-    ) = worldCreationDelegate.createWorld(name, seed, generator, layers)
+    ) = worldDelegates.creation.createWorld(name, seed, generator, layers)
 
     /** 文本种子会被 BDS 存成这个整数；空输入返回 null（随机）。 */
-    fun previewSeed(raw: String): Long? = worldManager.resolveSeed(raw)
+    fun previewSeed(raw: String): Long? = worldDelegates.worldManager.resolveSeed(raw)
 
     /** 把用户输入的层配置解析成层列表；格式错误返回 null。 */
     fun previewLayers(text: String): List<BdsWorldGen.Layer>? = parsePreviewLayers(text)
 
     // ── Java 版：世界 / 数据包 / 资源包 ─────────────────────────
 
-    private val javaAddonsDelegate by lazy {
-        JavaAddonsDelegate(
-            app = app,
-            scope = viewModelScope,
-            worldManagerProvider = { worldManager },
-            activeDirName = ::activeDirName,
-            refreshActiveCore = ::refreshActiveCore,
-            isJavaCore = ::isJavaCore,
-            setJavaDimensions = { worldListDelegate.setJavaDimensions(it) },
-            requireServerStopped = ::requireServerStopped,
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
+    val javaDataPacks: StateFlow<List<JavaWorlds.DataPack>> get() = worldDelegates.javaAddons.javaDataPacks
 
-    val javaDataPacks: StateFlow<List<JavaWorlds.DataPack>> get() = javaAddonsDelegate.javaDataPacks
-
-    val javaAddonsLoading: StateFlow<Boolean> get() = javaAddonsDelegate.javaAddonsLoading
+    val javaAddonsLoading: StateFlow<Boolean> get() = worldDelegates.javaAddons.javaAddonsLoading
 
     /** 资源包配置（Java 侧单包模型）；基岩系或读不到时为 null。 */
-    val resourcePack: StateFlow<JavaResourcePack.Config?> get() = javaAddonsDelegate.resourcePack
+    val resourcePack: StateFlow<JavaResourcePack.Config?> get() = worldDelegates.javaAddons.resourcePack
 
     /** 资源包配置的静态校验问题（空 = 没有明显问题）。 */
-    val resourcePackIssues: StateFlow<List<String>> get() = javaAddonsDelegate.resourcePackIssues
+    val resourcePackIssues: StateFlow<List<String>> get() = worldDelegates.javaAddons.resourcePackIssues
 
     /** 当前世界可单独重置的维度。 */
-    val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> get() = worldListDelegate.javaDimensions
+    val javaDimensions: StateFlow<List<JavaWorlds.DimensionDir>> get() = worldDelegates.list.javaDimensions
 
     /** 只刷新「维度」这一块（数据包 / 资源包不动）。 */
-    fun refreshJavaDimensions() = javaAddonsDelegate.refreshJavaDimensions()
+    fun refreshJavaDimensions() = worldDelegates.javaAddons.refreshJavaDimensions()
 
     /** 读 Java 侧的世界附加内容（数据包 + 资源包 + 维度）。 */
-    fun loadJavaAddons() = javaAddonsDelegate.loadJavaAddons()
+    fun loadJavaAddons() = worldDelegates.javaAddons.loadJavaAddons()
 
     /**
      * 新建 Java 版世界：只写 `server.properties` 的四个键，服务端下次启动生成。
@@ -2018,61 +1968,33 @@ class McViewModel(
         type: JavaWorldGen.LevelType,
         layers: List<BdsWorldGen.Layer>,
         biome: String
-    ) = worldCreationDelegate.createJavaWorld(name, seed, type, layers, biome)
+    ) = worldDelegates.creation.createJavaWorld(name, seed, type, layers, biome)
 
     /** 启用 / 停用一个世界级数据包（改 `level.dat:DataPacks`）。 */
     fun setJavaDataPackEnabled(pack: JavaWorlds.DataPack, enabled: Boolean) =
-        javaAddonsDelegate.setJavaDataPackEnabled(pack, enabled)
+        worldDelegates.javaAddons.setJavaDataPackEnabled(pack, enabled)
 
     /** 从系统选择器导入数据包 zip（拷进 `world/datapacks/`）。 */
     fun importJavaDataPackFromUri(uri: Uri, displayName: String) =
-        javaAddonsDelegate.importJavaDataPackFromUri(uri, displayName)
+        worldDelegates.javaAddons.importJavaDataPackFromUri(uri, displayName)
 
     /** 保存资源包配置（URL / SHA-1 / ID / 提示语 / 是否强制）。 */
-    fun saveResourcePack(config: JavaResourcePack.Config) = javaAddonsDelegate.saveResourcePack(config)
+    fun saveResourcePack(config: JavaResourcePack.Config) = worldDelegates.javaAddons.saveResourcePack(config)
 
     /** 从用户选的文件算 SHA-1 并填进资源包配置。 */
-    fun fillResourcePackSha1(uri: Uri) = javaAddonsDelegate.fillResourcePackSha1(uri)
-
-    private val worldMaintenanceDelegate by lazy {
-        WorldMaintenanceDelegate(
-            app = app,
-            scope = viewModelScope,
-            worldManagerProvider = { worldManager },
-            serverDirFor = { repo.termuxRuntime.serverDirFor(it) },
-            activeDirName = ::activeDirName,
-            requireServerStopped = ::requireServerStopped,
-            loadWorlds = ::loadWorlds,
-            loadJavaAddons = ::loadJavaAddons,
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
+    fun fillResourcePackSha1(uri: Uri) = worldDelegates.javaAddons.fillResourcePackSha1(uri)
 
     /** 重命名世界（目录 + level.dat 的 LevelName 一起改）。 */
-    fun renameWorld(worldName: String, newName: String) = worldMaintenanceDelegate.renameWorld(worldName, newName)
+    fun renameWorld(worldName: String, newName: String) = worldDelegates.maintenance.renameWorld(worldName, newName)
 
     /** 只重置一个维度（下界 / 末地），先备份。 */
-    fun resetDimension(worldName: String, key: String) = worldMaintenanceDelegate.resetDimension(worldName, key)
+    fun resetDimension(worldName: String, key: String) = worldDelegates.maintenance.resetDimension(worldName, key)
 
     // ── 附加包（行为包 / 资源包） ────────────────────────────────
 
-    private val bdsAddonsDelegate by lazy {
-        BdsAddonsDelegate(
-            app = app,
-            scope = viewModelScope,
-            worldManagerProvider = { worldManager },
-            activeDirName = ::activeDirName,
-            refreshActiveCore = ::refreshActiveCore,
-            requireServerStopped = ::requireServerStopped,
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
+    val addons: StateFlow<BdsPacks.Scan?> get() = worldDelegates.bdsAddons.addons
 
-    val addons: StateFlow<BdsPacks.Scan?> get() = bdsAddonsDelegate.addons
-
-    val addonsLoading: StateFlow<Boolean> get() = bdsAddonsDelegate.addonsLoading
+    val addonsLoading: StateFlow<Boolean> get() = worldDelegates.bdsAddons.addonsLoading
 
     /**
      * `texturepack-required` 的当前值；null = 当前核心不支持（PNX 走 pnx.yml）。
@@ -2080,22 +2002,22 @@ class McViewModel(
      * 它是 `server.properties` 里唯一与资源包有关的键，语义是"进服前必须下载本服登记的
      * 全部资源包"。UI 上必须与资源包清单一起看：开着它却一个资源包都没登记，等于什么都没做。
      */
-    val texturePackRequired: StateFlow<Boolean?> get() = bdsAddonsDelegate.texturePackRequired
+    val texturePackRequired: StateFlow<Boolean?> get() = worldDelegates.bdsAddons.texturePackRequired
 
     /** 重新扫描附加包。 */
-    fun loadAddons() = bdsAddonsDelegate.loadAddons()
+    fun loadAddons() = worldDelegates.bdsAddons.loadAddons()
 
     /** 启用 / 停用某个包：只改当前世界的 `world_*_packs.json`。 */
-    fun setAddonEnabled(pack: BdsPacks.Pack, enabled: Boolean) = bdsAddonsDelegate.setAddonEnabled(pack, enabled)
+    fun setAddonEnabled(pack: BdsPacks.Pack, enabled: Boolean) = worldDelegates.bdsAddons.setAddonEnabled(pack, enabled)
 
     /** 切换「强制客户端下载资源包」（`texturepack-required`）。 */
-    fun setTexturePackRequired(required: Boolean) = bdsAddonsDelegate.setTexturePackRequired(required)
+    fun setTexturePackRequired(required: Boolean) = worldDelegates.bdsAddons.setTexturePackRequired(required)
 
     /** 安装包目录中的压缩包（`.mcpack` / `.mcaddon`）。 */
-    fun installAddonArchive(archive: BdsPacks.Archive) = bdsAddonsDelegate.installAddonArchive(archive)
+    fun installAddonArchive(archive: BdsPacks.Archive) = worldDelegates.bdsAddons.installAddonArchive(archive)
 
     /** 从系统文件选择器导入 `.mcpack` / `.mcaddon`。 */
-    fun importAddonFromUri(uri: Uri, displayName: String) = bdsAddonsDelegate.importAddonFromUri(uri, displayName)
+    fun importAddonFromUri(uri: Uri, displayName: String) = worldDelegates.bdsAddons.importAddonFromUri(uri, displayName)
 
     /**
      * 世界导出的前置检查，**必须在拉起系统保存框之前调用**。
@@ -2107,13 +2029,13 @@ class McViewModel(
     fun canExportWorldNow(): Boolean = requireServerStopped("导出世界")
 
     /** 导出世界到用户选择的位置（先打包到导出目录，再复制到 SAF 目标）。 */
-    fun exportWorldToUri(worldName: String, uri: Uri) = worldTransferDelegate.exportWorldToUri(worldName, uri)
+    fun exportWorldToUri(worldName: String, uri: Uri) = worldDelegates.transfer.exportWorldToUri(worldName, uri)
 
     /** 从用户选择的压缩包导入世界。 */
-    fun importWorldFromUri(uri: Uri, preferredName: String) = worldTransferDelegate.importWorldFromUri(uri, preferredName)
+    fun importWorldFromUri(uri: Uri, preferredName: String) = worldDelegates.transfer.importWorldFromUri(uri, preferredName)
 
     /** 重置世界：先自动导出一份安全备份，再删除目录，让服务端下次启动重新生成。 */
-    fun resetWorld(worldName: String) = worldMaintenanceDelegate.resetWorld(worldName)
+    fun resetWorld(worldName: String) = worldDelegates.maintenance.resetWorld(worldName)
 
     // ── 崩溃报告 ────────────────────────────────────────────────────
 
