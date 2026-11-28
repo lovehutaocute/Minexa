@@ -107,6 +107,7 @@ import com.mineserve.mobile.ui.vm.RuntimeEnvironmentDelegate
 import com.mineserve.mobile.ui.vm.ScheduleSettingsDelegate
 import com.mineserve.mobile.ui.vm.RuntimeKinds
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
+import com.mineserve.mobile.ui.vm.ServerExportDelegate
 import com.mineserve.mobile.ui.vm.ServerImportDelegate
 import com.mineserve.mobile.ui.vm.ServerPropertiesDelegate
 import com.mineserve.mobile.ui.vm.ServerResourcesDelegate
@@ -2862,16 +2863,18 @@ class McViewModel(
     /** 导出文件/文件夹到用户选择的 Uri（文件夹打包为 zip） */
     fun exportPathToUri(source: java.io.File, uri: android.net.Uri) = fileBrowserDelegate.exportPathToUri(source, uri)
 
-    /** 导出整个服务器核心目录（打包 zip）；目录按当前活动核心的实际位置解析 */
-    fun exportServerToUri(uri: android.net.Uri) {
-        val dirName = activeDirName() ?: return
-        val dir = repo.termuxRuntime.serverDirFor(dirName)
-        if (!dir.exists()) {
-            _errorFlow.tryEmit(str(R.string.s310))
-            return
-        }
-        exportPathToUri(dir, uri)
+    private val serverExportDelegate by lazy {
+        ServerExportDelegate(
+            app = app,
+            activeDirName = ::activeDirName,
+            serverDirFor = repo.termuxRuntime::serverDirFor,
+            exportPathToUri = ::exportPathToUri,
+            reportError = { _errorFlow.tryEmit(it) }
+        )
     }
+
+    /** 导出整个服务器核心目录（打包 zip）；目录按当前活动核心的实际位置解析 */
+    fun exportServerToUri(uri: android.net.Uri) = serverExportDelegate.exportServerToUri(uri)
 
     /** 创建新目录 */
     fun createDirectory(parent: java.io.File, name: String) = fileBrowserDelegate.createDirectory(parent, name)
