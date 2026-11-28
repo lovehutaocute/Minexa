@@ -89,23 +89,19 @@ import com.mineserve.mobile.ui.vm.FileBrowserDelegate
 import com.mineserve.mobile.ui.vm.FrpcEngineDelegate
 import com.mineserve.mobile.ui.vm.InstalledCoresDelegate
 import com.mineserve.mobile.ui.vm.JavaAddonsDelegate
-import com.mineserve.mobile.ui.vm.JavaRuntimeDelegate
 import com.mineserve.mobile.ui.vm.LanAddressDelegate
 import com.mineserve.mobile.ui.vm.KeepAliveDelegate
 import com.mineserve.mobile.ui.vm.LegacyMigrationDelegate
 import com.mineserve.mobile.ui.vm.ModrinthDiscoveryDelegate
 import com.mineserve.mobile.ui.vm.ModsDelegate
 import com.mineserve.mobile.ui.vm.McViewModelStartupDelegate
-import com.mineserve.mobile.ui.vm.PhpRuntimeDelegate
-import com.mineserve.mobile.ui.vm.ProotContainerDelegate
 import com.mineserve.mobile.ui.vm.PlayerHistoryDelegate
 import com.mineserve.mobile.ui.vm.PlayerListsDelegate
 import com.mineserve.mobile.ui.vm.PlayerPresenceDelegate
 import com.mineserve.mobile.ui.vm.PluginDownloadsDelegate
 import com.mineserve.mobile.ui.vm.PluginManagementDelegate
-import com.mineserve.mobile.ui.vm.RuntimeEnvironmentDelegate
 import com.mineserve.mobile.ui.vm.ScheduleSettingsDelegate
-import com.mineserve.mobile.ui.vm.RuntimeSelectionDelegate
+import com.mineserve.mobile.ui.vm.RuntimeDelegateGraph
 import com.mineserve.mobile.ui.vm.ServerIconDelegate
 import com.mineserve.mobile.ui.vm.ServerExportDelegate
 import com.mineserve.mobile.ui.vm.ServerCommandDelegate
@@ -452,10 +448,6 @@ class McViewModel(
     /** 图标变更信号（UI 用于重载预览） */
     val serverIconVersion: StateFlow<Int> get() = serverIconDelegate.serverIconVersion
 
-    private val runtimeEnvironmentDelegate by lazy {
-        RuntimeEnvironmentDelegate(app = app)
-    }
-
     /** 当前核心的 server-icon.png 文件（不存在返回 null） */
     fun serverIconFile(): File? = serverIconDelegate.serverIconFile()
 
@@ -477,9 +469,26 @@ class McViewModel(
     private val _isInstalling = MutableStateFlow(false)
     val isInstalling: StateFlow<Boolean> = _isInstalling.asStateFlow()
 
-    val javaOperation: StateFlow<String?> get() = javaRuntimeDelegate.javaOperation
-    val javaInFlight: StateFlow<JavaRuntime?> get() = javaRuntimeDelegate.javaInFlight
-    val installedJava: StateFlow<Set<JavaRuntime>> get() = javaRuntimeDelegate.installedJava
+    private val runtimeDelegates by lazy {
+        RuntimeDelegateGraph(
+            app = app,
+            scope = viewModelScope,
+            termuxRuntime = repo.termuxRuntime,
+            config = config,
+            isBootstrapped = isBootstrapped,
+            isInstalling = isInstalling,
+            setInstalling = { _isInstalling.value = it },
+            updateConfig = ::updateConfig,
+            updateAndSaveConfig = { transform -> repo.updateAndSaveConfig(transform) },
+            formatMessage = { id, args -> str(id, *args.toTypedArray()) },
+            reportMessage = { _messageFlow.tryEmit(it) },
+            reportError = { _errorFlow.tryEmit(it) }
+        )
+    }
+
+    val javaOperation: StateFlow<String?> get() = runtimeDelegates.java.javaOperation
+    val javaInFlight: StateFlow<JavaRuntime?> get() = runtimeDelegates.java.javaInFlight
+    val installedJava: StateFlow<Set<JavaRuntime>> get() = runtimeDelegates.java.installedJava
 
     private val lanAddressDelegate by lazy {
         LanAddressDelegate(
@@ -837,7 +846,7 @@ class McViewModel(
     fun runLegacyMigration(skipUnreadable: Boolean = false) =
         legacyMigrationDelegate.runLegacyMigration(skipUnreadable)
 
-    fun refreshJava() = javaRuntimeDelegate.refreshJava()
+    fun refreshJava() = runtimeDelegates.java.refreshJava()
 
     private val baseDependenciesDelegate by lazy {
         BaseDependenciesDelegate(
@@ -862,67 +871,29 @@ class McViewModel(
     // 不再提供「只改版本、来源沿用」的入口 —— 那会写出「FCL 来源 + Java 8」
     // 这种上游根本不存在的组合。
 
-    private val javaRuntimeDelegate by lazy {
-        JavaRuntimeDelegate(
-            app = app,
-            scope = viewModelScope,
-            termuxRuntime = repo.termuxRuntime,
-            config = config,
-            isBootstrapped = isBootstrapped,
-            isInstalling = isInstalling,
-            setInstalling = { _isInstalling.value = it },
-            updateAndSaveConfig = { transform -> repo.updateAndSaveConfig(transform) },
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
-
     // ── PocketMine-MP 专用 PHP 运行时 ─────────────────────────────
     //
     // PMMP 用 PHP 运行（不是 Java），首次启动时按需下载。
     // 依赖管理页的「PHP 版本选择」与启动控制卡片的运行环境列表共用这一份状态。
 
-    private val phpRuntimeDelegate by lazy {
-        PhpRuntimeDelegate(
-            app = app,
-            scope = viewModelScope,
-            termuxRuntime = repo.termuxRuntime,
-            config = config,
-            isBootstrapped = isBootstrapped,
-            isInstalling = isInstalling,
-            setInstalling = { _isInstalling.value = it },
-            setJavaOperation = { javaRuntimeDelegate.setJavaOperation(it) },
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
-
-    val installedPhp: StateFlow<Set<PhpVersion>> = phpRuntimeDelegate.installedPhp
+    val installedPhp: StateFlow<Set<PhpVersion>> = runtimeDelegates.php.installedPhp
 
     /** 当前所选 PHP 版本（来自 config，配置未加载时回退默认） */
-    val selectedPhpVersion: StateFlow<PhpVersion> = phpRuntimeDelegate.selectedPhpVersion
+    val selectedPhpVersion: StateFlow<PhpVersion> = runtimeDelegates.php.selectedPhpVersion
 
     /** 当前 PHP 版本是否已安装 */
-    val phpInstalled: StateFlow<Boolean> = phpRuntimeDelegate.phpInstalled
+    val phpInstalled: StateFlow<Boolean> = runtimeDelegates.php.phpInstalled
 
-    fun refreshPhp() = phpRuntimeDelegate.refreshPhp()
-
-    private val runtimeSelectionDelegate by lazy {
-        RuntimeSelectionDelegate(
-            config = config,
-            updateConfig = ::updateConfig,
-            formatMessage = { id, args -> str(id, *args.toTypedArray()) }
-        )
-    }
+    fun refreshPhp() = runtimeDelegates.php.refreshPhp()
 
     /** 选择 PHP 版本（依赖管理页与启动控制卡片共用） */
-    fun setPhpVersion(version: PhpVersion) = runtimeSelectionDelegate.setPhpVersion(version)
+    fun setPhpVersion(version: PhpVersion) = runtimeDelegates.selection.setPhpVersion(version)
 
     /** 安装指定 PHP 运行环境（~10MB，含 PMMP 必需扩展） */
-    fun installPhp(version: PhpVersion = config.value.selectedPhpVersion) = phpRuntimeDelegate.installPhp(version)
+    fun installPhp(version: PhpVersion = config.value.selectedPhpVersion) = runtimeDelegates.php.installPhp(version)
 
     /** 卸载指定 PHP 运行环境（直接删除对应目录，PocketMine 下次启动会重新下载） */
-    fun deletePhp(version: PhpVersion = config.value.selectedPhpVersion) = phpRuntimeDelegate.deletePhp(version)
+    fun deletePhp(version: PhpVersion = config.value.selectedPhpVersion) = runtimeDelegates.php.deletePhp(version)
 
     // ── 运行模式（Java / PHP）─────────────────────────────────────
     //
@@ -937,7 +908,7 @@ class McViewModel(
      * 立即写入 config（UI 会自动重组刷新运行环境按钮与版本列表，无需刷新页面），
      * 并确保当前所选版本属于该模式 —— 不属于时回退到该模式的默认版本。
      */
-    fun setRuntimeKind(kind: RuntimeKind) = runtimeSelectionDelegate.setRuntimeKind(kind)
+    fun setRuntimeKind(kind: RuntimeKind) = runtimeDelegates.selection.setRuntimeKind(kind)
 
     /**
      * 切换运行环境（来源 + 版本），见 [JavaRuntime]。
@@ -949,7 +920,7 @@ class McViewModel(
      * 来源与版本必须一次写入：分两次 set 会因为 config 落盘的 300ms debounce 撞在一起，
      * 第二次读到的还是旧快照（与 [applyRuntimeSelection] 注释里那个竞态同源）。
      */
-    fun setJavaRuntime(runtime: JavaRuntime) = runtimeSelectionDelegate.setJavaRuntime(runtime)
+    fun setJavaRuntime(runtime: JavaRuntime) = runtimeDelegates.selection.setJavaRuntime(runtime)
 
     /**
      * 兼容层依赖的 `libipv6fix.so` 是否真的随 APK 打包。
@@ -959,7 +930,7 @@ class McViewModel(
      * 与这里的判断是同一件事，缺库时不会静默变成「什么都没发生」。
      */
     val ipv6CompatReady: Boolean
-        get() = runtimeEnvironmentDelegate.ipv6CompatReady
+        get() = runtimeDelegates.environment.ipv6CompatReady
 
     /**
      * 一次性写入运行模式与对应版本。
@@ -978,50 +949,37 @@ class McViewModel(
         javaRuntime: JavaRuntime,
         phpVersion: PhpVersion,
         prootDistro: ProotDistro? = null
-    ) = runtimeSelectionDelegate.applyRuntimeSelection(kind, javaRuntime, phpVersion, prootDistro)
+    ) = runtimeDelegates.selection.applyRuntimeSelection(kind, javaRuntime, phpVersion, prootDistro)
 
     /**
      * 校验运行模式与当前核心是否匹配，返回不匹配时的提示文案，匹配则返回 null。
      *
      * 只用于启动前提醒，**不修改**用户的任何选择 —— 用户选择优先。
      */
-    fun runtimeKindMismatchMessage(): String? = runtimeSelectionDelegate.runtimeKindMismatchMessage()
+    fun runtimeKindMismatchMessage(): String? = runtimeDelegates.selection.runtimeKindMismatchMessage()
 
     fun setJavaCardAtBottom(atBottom: Boolean) =
         updateConfig { it.copy(javaCardAtBottom = atBottom) }
 
-    fun installJava(runtime: JavaRuntime) = javaRuntimeDelegate.installJava(runtime)
+    fun installJava(runtime: JavaRuntime) = runtimeDelegates.java.installJava(runtime)
 
-    fun reinstallJava(runtime: JavaRuntime) = javaRuntimeDelegate.reinstallJava(runtime)
+    fun reinstallJava(runtime: JavaRuntime) = runtimeDelegates.java.reinstallJava(runtime)
 
     /** FTP 文件管理根目录（含全部服务器与快照） */
     fun ftpRootDir(): java.io.File = repo.termuxRuntime.serversDir.parentFile
         ?: java.io.File(app.filesDir, "home")
 
-    fun deleteJava(runtime: JavaRuntime) = javaRuntimeDelegate.deleteJava(runtime)
-
-    private val prootContainerDelegate by lazy {
-        ProotContainerDelegate(
-            app = app,
-            scope = viewModelScope,
-            termuxRuntime = repo.termuxRuntime,
-            isInstalling = isInstalling,
-            setJavaOperation = javaRuntimeDelegate::setJavaOperation,
-            refreshJava = ::refreshJava,
-            reportMessage = { _messageFlow.tryEmit(it) },
-            reportError = { _errorFlow.tryEmit(it) }
-        )
-    }
+    fun deleteJava(runtime: JavaRuntime) = runtimeDelegates.java.deleteJava(runtime)
 
     fun prootContainerSizeBytes(distro: ProotDistro): Long =
-        prootContainerDelegate.prootContainerSizeBytes(distro)
+        runtimeDelegates.prootContainer.prootContainerSizeBytes(distro)
 
     val prootContainerSizes: StateFlow<Map<ProotDistro, Long>>
-        get() = prootContainerDelegate.prootContainerSizes
+        get() = runtimeDelegates.prootContainer.prootContainerSizes
 
-    fun refreshProotContainerSizes() = prootContainerDelegate.refreshProotContainerSizes()
+    fun refreshProotContainerSizes() = runtimeDelegates.prootContainer.refreshProotContainerSizes()
 
-    fun deleteProotContainer(distro: ProotDistro) = prootContainerDelegate.deleteProotContainer(distro)
+    fun deleteProotContainer(distro: ProotDistro) = runtimeDelegates.prootContainer.deleteProotContainer(distro)
 
     /** 卸载依赖（直接删除 wget/frpc/rclone/proot 文件，不动 Termux 环境） */
     fun deleteDependencies() = baseDependenciesDelegate.deleteDependencies()
