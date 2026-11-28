@@ -763,26 +763,8 @@ class McViewModel(
     }
 
     /** 修改服务器信息。名称/版本号仅影响显示；核心类型会改变应用对该服务器的处理方式。返回 null 表示成功。 */
-    fun updateServerDisplayInfo(oldName: String, newName: String, newVersion: String, newCore: com.mineserve.mobile.data.ServerCore? = null): String? {
-        val name = newName.trim()
-        val version = newVersion.trim()
-        if (name.isEmpty()) return str(R.string.vm_name_empty)
-        val current = config.value
-        val target = current.installedCores.firstOrNull { it.name == oldName }
-            ?: return str(R.string.vm_server_not_found, oldName)
-        if (current.installedCores.any { it.name == name && it.name != oldName }) {
-            return str(R.string.vm_server_duplicate, name)
-        }
-        updateConfig { cfg ->
-            cfg.copy(
-                installedCores = cfg.installedCores.map {
-                    if (it.name == oldName) it.copy(name = name, version = version, core = newCore ?: it.core) else it
-                },
-                activeCoreName = if (cfg.activeCoreName == oldName) name else cfg.activeCoreName
-            )
-        }
-        return null
-    }
+    fun updateServerDisplayInfo(oldName: String, newName: String, newVersion: String, newCore: com.mineserve.mobile.data.ServerCore? = null): String? =
+        installedCoresDelegate.updateServerDisplayInfo(oldName, newName, newVersion, newCore)
 
     /** 扫描 servers 目录，自动登记未注册的服务器文件夹。 */
     fun scanUnregisteredServers() = installedCoresDelegate.scanUnregisteredServers()
@@ -2382,6 +2364,8 @@ class McViewModel(
             app = app,
             scope = viewModelScope,
             repo = repo,
+            config = config,
+            updateConfig = ::updateConfig,
             requireServerStopped = ::requireServerStopped,
             termux3Log = ::termux3Log,
             reportMessage = { _messageFlow.tryEmit(it) },

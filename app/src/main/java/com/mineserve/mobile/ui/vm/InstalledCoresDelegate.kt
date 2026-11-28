@@ -3,10 +3,13 @@ package com.mineserve.mobile.ui.vm
 import android.content.Context
 import com.mineserve.mobile.R
 import com.mineserve.mobile.data.FileOps
+import com.mineserve.mobile.data.McConfig
+import com.mineserve.mobile.data.ServerCore
 import com.mineserve.mobile.data.ServerRepository
 import com.mineserve.mobile.data.StorageLocation
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -14,11 +17,39 @@ internal class InstalledCoresDelegate(
     private val app: Context,
     private val scope: CoroutineScope,
     private val repo: ServerRepository,
+    private val config: StateFlow<McConfig>,
+    private val updateConfig: ((McConfig) -> McConfig) -> Unit,
     private val requireServerStopped: (String) -> Boolean,
     private val termux3Log: (String) -> Unit,
     private val reportMessage: (String) -> Unit,
     private val reportError: (String) -> Unit
 ) {
+    fun updateServerDisplayInfo(
+        oldName: String,
+        newName: String,
+        newVersion: String,
+        newCore: ServerCore? = null
+    ): String? {
+        val name = newName.trim()
+        val version = newVersion.trim()
+        if (name.isEmpty()) return str(R.string.vm_name_empty)
+        val current = config.value
+        current.installedCores.firstOrNull { it.name == oldName }
+            ?: return str(R.string.vm_server_not_found, oldName)
+        if (current.installedCores.any { it.name == name && it.name != oldName }) {
+            return str(R.string.vm_server_duplicate, name)
+        }
+        updateConfig { cfg ->
+            cfg.copy(
+                installedCores = cfg.installedCores.map {
+                    if (it.name == oldName) it.copy(name = name, version = version, core = newCore ?: it.core) else it
+                },
+                activeCoreName = if (cfg.activeCoreName == oldName) name else cfg.activeCoreName
+            )
+        }
+        return null
+    }
+
     /**
      * 删除一个已安装核心（磁盘目录 + 配置登记）。
      *
